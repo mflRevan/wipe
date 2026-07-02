@@ -94,4 +94,4 @@ docs: update quickstart in README
 
 ## Questions
 
-Open an issue, or reach out to the maintainer at bilal@bigitec.com.
+Open an issue, or reach out to the maintainer at aiman@shabib.net.

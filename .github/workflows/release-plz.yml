@@ -8,7 +8,7 @@
 # - `release-plz-pr` opens/updates a "Release PR" that bumps versions and
 #   updates CHANGELOG.md files for unreleased Conventional Commits.
 #
-# One-time manual setup (see RELEASE-SETUP.md):
+# One-time manual setup (see docs/RELEASE.md):
 # - Allow GitHub Actions to create/approve pull requests
 #   (Settings -> Actions -> General -> Workflow permissions).
 # - Add the `CARGO_REGISTRY_TOKEN` repository secret.

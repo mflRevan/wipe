@@ -12,7 +12,7 @@ before reporting an issue, and be prepared to upgrade as part of any fix.
 If you discover a security vulnerability in `wipe`, please report it
 responsibly and **do not open a public GitHub issue**.
 
-Instead, email **bilal@bigitec.com** with:
+Instead, email **aiman@shabib.net** with:
 
 - A description of the vulnerability and its potential impact.
 - Steps to reproduce it (proof-of-concept code or commands are very helpful).

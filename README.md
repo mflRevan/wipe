@@ -65,7 +65,7 @@ npm install -g @mflrevan/wipe
 **Cargo** (builds from source):
 
 ```sh
-cargo install wipe
+cargo install wipe-cli
 ```
 
 **Manual** (clone and build):
@@ -87,22 +87,22 @@ wipe init .
 Create a ticket:
 
 ```sh
-wipe ticket create "Write onboarding docs" --list Todo
+wipe ticket create --title "Write onboarding docs" --list todo
 ```
 
 Move it as work progresses:
 
 ```sh
-wipe ticket move T-001 --list "In Progress"
+wipe ticket move T-1 --to in-progress
 ```
 
 Leave a comment for whoever (or whatever) picks it up next:
 
 ```sh
-wipe comment add T-001 "Blocked on the API design ticket."
+wipe comment add T-1 --body "Blocked on the API design ticket."
 ```
 
-Check the board at a glance:
+Check the board at a glance (add `--json` for machine-readable output):
 
 ```sh
 wipe status
@@ -125,8 +125,8 @@ project — this is the board:
 ├── definitions.json    # labels, ticket schema, custom fields
 ├── settings.json       # local/project board settings
 ├── tickets/
-│   ├── T-001.json
-│   ├── T-002.json
+│   ├── T-1.json
+│   ├── T-2.json
 │   └── ...
 ├── media/               # attachments referenced by tickets, version-controlled
 └── .cache/              # local derived/cache data, gitignored
@@ -145,6 +145,22 @@ accepts a `--json` flag for structured, machine-parseable output, and the
 CLI's built-in help (`wipe help`) is written to be sufficient documentation
 on its own. Repositories using `wipe` may also ship a `SKILL.md` describing
 project-specific conventions for how agents should use the board.
+
+## Repository layout
+
+New to Rust/Cargo? [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) explains how
+the pieces fit together and what **every** file and folder in the repo is for
+(including the release tooling). In short:
+
+```
+crates/       Rust code: wipe-core (library), wipe-cli (the `wipe` binary), wipe-daemon (local server)
+apps/         Frontends: desktop/ (the board UI) and web/ (this project's docs site)
+scripts/      Helpers, e.g. embed-ui (bakes the UI into the binary)
+skills/       SKILL.md — teaches AI agents how to use the CLI
+tests/        Demo boards + the agent-to-agent test harness
+docs/         Architecture guide and release setup
+.github/      CI / release automation and issue templates
+```
 
 ## Project status
 

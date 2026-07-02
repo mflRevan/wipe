@@ -35,7 +35,7 @@ targets = [
 
 # Publish jobs to run in CI after a GitHub Release is created.
 # "npm" publishes the generated wrapper package to the npm registry using
-# the NPM_TOKEN secret (see RELEASE-SETUP.md).
+# the NPM_TOKEN secret (see docs/RELEASE.md).
 publish-jobs = ["npm"]
 
 # Scope/name for the generated npm installer package. Together these publish
