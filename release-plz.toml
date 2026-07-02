@@ -1,0 +1,65 @@
+# Configuration for release-plz: https://release-plz.dev/docs/config
+#
+# release-plz watches `main`, groups Conventional Commits since the last
+# release, opens/updates a "Release PR" that bumps crate versions and
+# updates CHANGELOG.md files, and (once merged) tags + publishes to
+# crates.io.
+
+[workspace]
+# Treat all workspace crates as part of one release train (wipe-core and
+# wipe-cli are versioned/released together via workspace.package.version).
+release = true
+publish = true
+publish_allow_dirty = false
+git_release_enable = true
+git_tag_enable = true
+# release-plz's own tag/release naming; cargo-dist's release.yml triggers
+# on the same `v*` pattern, so tags created here (e.g. "v0.2.0") kick off
+# the cargo-dist build/publish workflow automatically.
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+semver_check = true
+changelog_update = true
+dependencies_update = false
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+body = """
+## [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }} ({{ commit.id | truncate(length=7, end="") }})
+{% endfor %}
+{% endfor %}
+"""
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^style", group = "Style" },
+  { message = "^test", group = "Testing" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "Miscellaneous" },
+  { body = ".*security", group = "Security" },
+]
+protect_breaking_commits = true
+sort_commits = "oldest"
+
+[[package]]
+name = "wipe-core"
+changelog_update = true
+publish = true
+
+[[package]]
+name = "wipe-cli"
+changelog_update = true
+publish = true

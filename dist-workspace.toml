@@ -1,0 +1,61 @@
+# Config for cargo-dist. This is the modern `dist-workspace.toml` config
+# format (cargo-dist >= 0.28). It intentionally lives in its own file
+# instead of `[workspace.metadata.dist]` in the root Cargo.toml.
+#
+# This file was authored by hand as a starting point. Run `cargo dist init`
+# (or `dist init` if you have the standalone `dist` binary installed) from
+# the repo root to let cargo-dist validate/regenerate it interactively, and
+# `cargo dist generate-ci` (or `dist generate-ci`) afterwards to regenerate
+# `.github/workflows/release.yml` from this config so the two stay in sync.
+#
+# See: https://opensource.axo.dev/cargo-dist/book/reference/config.html
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax).
+# Bump this after upgrading your local `cargo-dist`/`dist` install.
+cargo-dist-version = "0.32.0"
+
+# CI backends to support.
+ci = ["github"]
+
+# The installers to generate for each app.
+installers = ["shell", "powershell", "npm"]
+
+# Target platforms to build apps for (Rust target-triple syntax).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+# Publish jobs to run in CI after a GitHub Release is created.
+# "npm" publishes the generated wrapper package to the npm registry using
+# the NPM_TOKEN secret (see RELEASE-SETUP.md).
+publish-jobs = ["npm"]
+
+# Scope/name for the generated npm installer package. Together these
+# publish as "@mflrevan/wipe" so the name doesn't collide with unrelated
+# packages already on the npm registry. The hand-written `npm/` wrapper in
+# this repo is a *separate*, unscoped `wipe` package maintained manually
+# (see npm/README.md) -- don't confuse the two.
+npm-scope = "@mflrevan"
+npm-package = "wipe"
+
+# Whether to install an updater program alongside the binary.
+install-updater = false
+
+# Archive formats. cargo-dist defaults to .tar.xz on unix, which Node's
+# built-in `zlib` module cannot decompress (no LZMA support). We pin unix
+# archives to .tar.gz instead so `npm/install.js` can extract them using
+# only Node built-ins (zlib gunzip + a minimal tar reader). Windows already
+# defaults to .zip, which is handled the same way.
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+
+# Path that installers should place binaries in.
+install-path = "CARGO_HOME"

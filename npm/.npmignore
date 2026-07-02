@@ -1,0 +1,21 @@
+# package.json's "files" allowlist is what actually controls `npm publish`
+# contents, but keep this as a belt-and-suspenders guard for `npm pack` runs
+# from a dirty local tree (e.g. right after testing `node install.js`).
+
+# Binaries downloaded by install.js during local testing/postinstall --
+# never ship a binary for the publishing machine's platform by accident.
+bin/wipe
+bin/wipe.exe
+
+# Local scratch space used while downloading/extracting archives.
+*.tar.gz
+*.zip
+*.tmp
+
+# Editor/OS noise.
+.DS_Store
+Thumbs.db
+
+# Never publish local env/secret files from this directory.
+.env
+.env.*
