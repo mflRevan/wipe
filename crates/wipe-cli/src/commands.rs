@@ -467,21 +467,32 @@ pub fn media(out: &Out, cmd: MediaCmd) -> Result<()> {
     let s = store()?;
     match cmd {
         MediaCmd::Add { ticket, path } => {
-            let mut t = s.load_ticket(&ticket)?;
-            let file_name = path
+            let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| anyhow!("invalid file name: {}", path.display()))?
                 .to_string();
-            std::fs::create_dir_all(s.media_dir())?;
-            std::fs::copy(&path, s.media_dir().join(&file_name))
-                .with_context(|| format!("copying {}", path.display()))?;
-            if !t.attachments.contains(&file_name) {
-                t.attachments.push(file_name.clone());
-                t.updated = Utc::now();
-                s.save_ticket(&t)?;
+            let bytes =
+                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let limit = s.load_settings()?.max_attachment_mb * 1024 * 1024;
+            if bytes.len() as u64 > limit {
+                bail!(
+                    "{} is {:.1} MB, over the {} MB attachment limit",
+                    name,
+                    bytes.len() as f64 / 1_048_576.0,
+                    limit / 1024 / 1024
+                );
             }
-            out.ok(format!("attached {file_name} to {ticket}"), to_value(&t));
+            let att =
+                ops::add_attachment(&s, &ticket, &name, &bytes, guess_mime(&name), Utc::now())?;
+            let where_ = match att.source {
+                wipe_core::model::AttachmentSource::Repo => "referenced from repo",
+                wipe_core::model::AttachmentSource::Media => "stored in .wipe/media",
+            };
+            out.ok(
+                format!("attached {} to {ticket} ({where_})", att.name),
+                to_value(&att),
+            );
         }
         MediaCmd::List { ticket } => {
             let t = s.load_ticket(&ticket)?;
@@ -489,20 +500,49 @@ pub fn media(out: &Out, cmd: MediaCmd) -> Result<()> {
                 out.json_value(&json!({ "ticket": ticket, "attachments": t.attachments }));
             } else {
                 for a in &t.attachments {
-                    println!("{a}");
+                    println!("{}  {}  {}", id_style(&a.name), dim(&a.path), dim(&a.mime));
                 }
             }
         }
         MediaCmd::Remove { ticket, name } => {
-            let mut t = s.load_ticket(&ticket)?;
-            t.attachments.retain(|a| a != &name);
-            t.updated = Utc::now();
-            s.save_ticket(&t)?;
-            // Leave the file in media/ (it may be shared); just detach.
-            out.ok(format!("detached {name} from {ticket}"), to_value(&t));
+            let t = s.load_ticket(&ticket)?;
+            let path = t
+                .attachments
+                .iter()
+                .find(|a| a.name == name || a.path == name)
+                .map(|a| a.path.clone())
+                .ok_or_else(|| anyhow!("no attachment `{name}` on {ticket}"))?;
+            ops::remove_attachment(&s, &ticket, &path, Utc::now())?;
+            out.ok(
+                format!("detached {name} from {ticket}"),
+                json!({ "ok": true, "ticket": ticket }),
+            );
         }
     }
     Ok(())
+}
+
+/// Best-effort MIME type from a file extension.
+fn guess_mime(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "md" => "text/markdown",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
 }
 
 /// `wipe config ...`

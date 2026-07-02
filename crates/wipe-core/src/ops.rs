@@ -3,11 +3,14 @@
 //! mutates the in-memory model, and writes it back deterministically. Keeping
 //! these here means the mutation rules live in exactly one place.
 
+use std::fs;
+
 use chrono::{DateTime, Utc};
 
 use crate::error::{Error, Result};
+use crate::git;
 use crate::id::{slug, ticket_id};
-use crate::model::{Board, List, Ticket};
+use crate::model::{Attachment, AttachmentSource, Board, Identity, IdentityKind, List, Ticket};
 use crate::store::Store;
 
 /// Specification for a new ticket. Only `title` is required.
@@ -232,6 +235,200 @@ pub fn board_view(store: &Store) -> Result<(Board, Vec<ListView>)> {
     Ok((board, out))
 }
 
+/// A partial update to a ticket. `None` fields are left unchanged. For `kind` and
+/// `priority`, an inner `Some(None)` clears the value.
+#[derive(Debug, Default, Clone)]
+pub struct TicketPatch {
+    /// New title.
+    pub title: Option<String>,
+    /// New body.
+    pub body: Option<String>,
+    /// Set/clear the ticket type.
+    pub kind: Option<Option<String>>,
+    /// Set/clear the priority.
+    pub priority: Option<Option<String>>,
+    /// Replace the label set.
+    pub labels: Option<Vec<String>>,
+    /// Replace the tag set.
+    pub tags: Option<Vec<String>>,
+    /// Replace the assignee set.
+    pub assignees: Option<Vec<String>>,
+}
+
+/// Apply a [`TicketPatch`] and persist. Returns the updated ticket.
+pub fn update_ticket(
+    store: &Store,
+    id: &str,
+    patch: TicketPatch,
+    now: DateTime<Utc>,
+) -> Result<Ticket> {
+    let mut t = store.load_ticket(id)?;
+    if let Some(v) = patch.title {
+        t.title = v;
+    }
+    if let Some(v) = patch.body {
+        t.body = v;
+    }
+    if let Some(v) = patch.kind {
+        t.kind = v;
+    }
+    if let Some(v) = patch.priority {
+        t.priority = v;
+    }
+    if let Some(v) = patch.labels {
+        t.labels = v;
+    }
+    if let Some(v) = patch.tags {
+        t.tags = v;
+    }
+    if let Some(v) = patch.assignees {
+        t.assignees = v;
+    }
+    t.updated = now;
+    store.save_ticket(&t)?;
+    Ok(t)
+}
+
+/// List identities: the saved registry merged with human authors discovered from
+/// git (so contributors show up without manual setup).
+pub fn list_identities(store: &Store) -> Result<Vec<Identity>> {
+    let mut registry = store.load_identities()?;
+    if git::is_repo(store.root()) {
+        if let Ok(authors) = git::authors(store.root()) {
+            for (name, email) in authors {
+                if !registry.iter().any(|i| i.id == email) {
+                    registry.push(Identity {
+                        id: email,
+                        display_name: name,
+                        kind: IdentityKind::Human,
+                    });
+                }
+            }
+        }
+    }
+    Ok(registry)
+}
+
+/// Create or update an identity's display name (and optionally its kind).
+pub fn upsert_identity(
+    store: &Store,
+    id: &str,
+    display_name: &str,
+    kind: Option<IdentityKind>,
+) -> Result<Identity> {
+    let mut registry = store.load_identities()?;
+    if let Some(existing) = registry.iter_mut().find(|i| i.id == id) {
+        existing.display_name = display_name.to_string();
+        if let Some(k) = kind {
+            existing.kind = k;
+        }
+        let out = existing.clone();
+        store.save_identities(&registry)?;
+        Ok(out)
+    } else {
+        let ident = Identity {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            kind: kind.unwrap_or_default(),
+        };
+        registry.push(ident.clone());
+        store.save_identities(&registry)?;
+        Ok(ident)
+    }
+}
+
+/// Attach a file to a ticket. If a file with identical content is already tracked
+/// in the repo, it is referenced in place (no copy); otherwise the bytes are
+/// stored under `.wipe/media/`. Returns the created [`Attachment`].
+pub fn add_attachment(
+    store: &Store,
+    ticket_id: &str,
+    name: &str,
+    bytes: &[u8],
+    mime: &str,
+    now: DateTime<Utc>,
+) -> Result<Attachment> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let root = store.root();
+    let hash = git::blob_hash(bytes);
+
+    // Prefer referencing an already-tracked file with identical content.
+    let existing = if git::is_repo(root) {
+        git::tracked_blobs(root)
+            .ok()
+            .and_then(|blobs| blobs.into_iter().find(|(h, _)| *h == hash).map(|(_, p)| p))
+    } else {
+        None
+    };
+
+    let attachment = if let Some(path) = existing {
+        Attachment {
+            name: name.to_string(),
+            path,
+            source: AttachmentSource::Repo,
+            size: bytes.len() as u64,
+            mime: mime.to_string(),
+        }
+    } else {
+        let file_name = format!("{}-{}", &hash[..8.min(hash.len())], sanitize(name));
+        fs::create_dir_all(store.media_dir())?;
+        fs::write(store.media_dir().join(&file_name), bytes)?;
+        Attachment {
+            name: name.to_string(),
+            path: format!(".wipe/media/{file_name}"),
+            source: AttachmentSource::Media,
+            size: bytes.len() as u64,
+            mime: mime.to_string(),
+        }
+    };
+
+    if !ticket.attachments.iter().any(|a| a.path == attachment.path) {
+        ticket.attachments.push(attachment.clone());
+        ticket.updated = now;
+        store.save_ticket(&ticket)?;
+    }
+    Ok(attachment)
+}
+
+/// Detach a file from a ticket by its `path`. The underlying file is left in place
+/// (it may be shared or tracked in the repo).
+pub fn remove_attachment(
+    store: &Store,
+    ticket_id: &str,
+    path: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    ticket.attachments.retain(|a| a.path != path);
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
+}
+
+/// Sanitize a file name to a safe, stable form for on-disk storage.
+fn sanitize(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches('-');
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +561,96 @@ mod tests {
             s.load_ticket("T-1"),
             Err(Error::TicketNotFound(_))
         ));
+    }
+
+    #[test]
+    fn update_ticket_applies_patch() {
+        let (_d, s) = project();
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "A".into(),
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap();
+        let patch = TicketPatch {
+            title: Some("A2".into()),
+            priority: Some(Some("high".into())),
+            labels: Some(vec!["blocked".into()]),
+            assignees: Some(vec!["ada@example.com".into()]),
+            ..Default::default()
+        };
+        let t = update_ticket(&s, "T-1", patch, now()).unwrap();
+        assert_eq!(t.title, "A2");
+        assert_eq!(t.priority.as_deref(), Some("high"));
+        assert_eq!(t.labels, vec!["blocked"]);
+        let cleared = update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                priority: Some(None),
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap();
+        assert_eq!(cleared.priority, None);
+    }
+
+    #[test]
+    fn identity_upsert_and_list() {
+        let (_d, s) = project();
+        upsert_identity(&s, "claude", "Claude", Some(IdentityKind::Agent)).unwrap();
+        let ids = list_identities(&s).unwrap();
+        let agent = ids.iter().find(|i| i.id == "claude").unwrap();
+        assert_eq!(agent.display_name, "Claude");
+        assert_eq!(agent.kind, IdentityKind::Agent);
+    }
+
+    #[test]
+    fn attachment_prefers_repo_reference_over_copy() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success());
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "Tester"]);
+        let s = Store::init(root, "Att", now()).unwrap();
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "A".into(),
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap();
+
+        std::fs::write(root.join("logo.png"), b"PNGDATA").unwrap();
+        git(&["add", "logo.png"]);
+        git(&["commit", "-q", "-m", "add logo"]);
+
+        // Identical bytes -> reference the tracked repo file (no copy).
+        let a = add_attachment(&s, "T-1", "logo.png", b"PNGDATA", "image/png", now()).unwrap();
+        assert_eq!(a.source, AttachmentSource::Repo);
+        assert_eq!(a.path, "logo.png");
+
+        // Novel bytes -> copied into .wipe/media/.
+        let b = add_attachment(&s, "T-1", "new.txt", b"hello world", "text/plain", now()).unwrap();
+        assert_eq!(b.source, AttachmentSource::Media);
+        assert!(b.path.starts_with(".wipe/media/"));
+        assert!(root.join(&b.path).exists());
     }
 }

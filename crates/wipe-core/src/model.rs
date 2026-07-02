@@ -156,9 +156,9 @@ pub struct Ticket {
     /// Relations to other tickets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<Relation>,
-    /// Referenced media/attachment file names under `.wipe/media/`.
+    /// Attached media/files (stored under `.wipe/media/` or referenced in-repo).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<String>,
+    pub attachments: Vec<Attachment>,
     /// Inline comment thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
@@ -259,6 +259,61 @@ pub struct Comment {
     pub edited: Option<DateTime<Utc>>,
 }
 
+/// A file attached to a ticket.
+///
+/// `path` is always **repo-relative**. Depending on `source` it either points at a
+/// file already tracked in the repository (no copy is made) or at a file copied
+/// into `.wipe/media/`. This avoids duplicating files that already live in the repo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    /// Display file name.
+    pub name: String,
+    /// Repo-relative path to the file.
+    pub path: String,
+    /// Where the file lives.
+    pub source: AttachmentSource,
+    /// File size in bytes.
+    pub size: u64,
+    /// MIME type (best-effort, from the file extension).
+    pub mime: String,
+}
+
+/// Where an [`Attachment`]'s bytes live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentSource {
+    /// Copied into `.wipe/media/`.
+    Media,
+    /// References a file already tracked in the repository.
+    Repo,
+}
+
+// ---------------------------------------------------------------------------
+// identities.json
+// ---------------------------------------------------------------------------
+
+/// A person or agent that can be assigned to tickets and author comments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    /// Stable identity key (e.g. a git email, or an agent slug like `claude`).
+    pub id: String,
+    /// Editable display name.
+    pub display_name: String,
+    /// Whether this identity is a human or an agent.
+    pub kind: IdentityKind,
+}
+
+/// Kind of an [`Identity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityKind {
+    /// A human contributor (typically discovered from git).
+    #[default]
+    Human,
+    /// An AI agent.
+    Agent,
+}
+
 // ---------------------------------------------------------------------------
 // definitions.json
 // ---------------------------------------------------------------------------
@@ -345,6 +400,14 @@ pub struct Settings {
     /// Local daemon settings.
     #[serde(default)]
     pub daemon: DaemonSettings,
+    /// Maximum size, in MB, for a single attachment upload. Defaults to 50 MB to
+    /// match git/GitHub's soft warning threshold; larger uploads are rejected.
+    #[serde(default = "default_max_attachment_mb")]
+    pub max_attachment_mb: u64,
+}
+
+fn default_max_attachment_mb() -> u64 {
+    50
 }
 
 impl Default for Settings {
@@ -352,6 +415,7 @@ impl Default for Settings {
         Settings {
             version: FORMAT_VERSION,
             daemon: DaemonSettings::default(),
+            max_attachment_mb: default_max_attachment_mb(),
         }
     }
 }

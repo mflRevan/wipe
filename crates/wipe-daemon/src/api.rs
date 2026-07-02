@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Multipart, Path, Query, State};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Utc;
@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use wipe_core::model::{Board, Ticket};
-use wipe_core::ops::{self, NewTicket};
+use wipe_core::model::{Board, IdentityKind, LabelDef, Ticket};
+use wipe_core::ops::{self, NewTicket, TicketPatch};
 use wipe_core::{git, Store};
 
 /// Shared server state.
@@ -219,6 +219,213 @@ pub async fn add_comment(
     let cid = ops::add_comment(&store, &id, &author, &b.body, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
+}
+
+/// `GET /api/definitions` — types, labels, tags, priorities.
+pub async fn definitions(
+    State(state): State<AppState>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    Ok(Json(serde_json::to_value(store.load_definitions()?)?))
+}
+
+/// Body for creating a label definition.
+#[derive(Debug, Deserialize)]
+pub struct LabelBody {
+    project: Option<String>,
+    name: String,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// `POST /api/labels` — define a new label.
+pub async fn create_label(State(state): State<AppState>, Json(b): Json<LabelBody>) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let mut defs = store.load_definitions()?;
+    if defs.labels.iter().any(|l| l.name == b.name) {
+        return Err(ApiError(anyhow::anyhow!(
+            "label `{}` already exists",
+            b.name
+        )));
+    }
+    defs.labels.push(LabelDef {
+        name: b.name.clone(),
+        color: b.color,
+        description: b.description.unwrap_or_default(),
+    });
+    store.save_definitions(&defs)?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "name": b.name })))
+}
+
+/// Body for patching a ticket. Absent fields are left unchanged; an explicit
+/// `null` for `type`/`priority` clears them.
+#[derive(Debug, Deserialize)]
+pub struct PatchBody {
+    project: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default, rename = "type")]
+    kind: Option<Option<String>>,
+    #[serde(default)]
+    priority: Option<Option<String>>,
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    assignees: Option<Vec<String>>,
+}
+
+/// `PATCH /api/tickets/{id}` — update ticket fields.
+pub async fn patch_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<PatchBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let patch = TicketPatch {
+        title: b.title,
+        body: b.body,
+        kind: b.kind,
+        priority: b.priority,
+        labels: b.labels,
+        tags: b.tags,
+        assignees: b.assignees,
+    };
+    let ticket = ops::update_ticket(&store, &id, patch, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(ticket)?))
+}
+
+/// `GET /api/identities` — humans (from git) + agents (registry).
+pub async fn identities(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    Ok(Json(json!({ "identities": ops::list_identities(&store)? })))
+}
+
+/// Body for creating/updating an identity.
+#[derive(Debug, Deserialize)]
+pub struct IdentityBody {
+    project: Option<String>,
+    display_name: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// `PUT /api/identities/{id}` — set an identity's display name / kind.
+pub async fn put_identity(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<IdentityBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let kind = match b.kind.as_deref() {
+        Some("agent") => Some(IdentityKind::Agent),
+        Some("human") => Some(IdentityKind::Human),
+        _ => None,
+    };
+    let ident = ops::upsert_identity(&store, &id, &b.display_name, kind)?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(ident)?))
+}
+
+/// `POST /api/tickets/{id}/attachments` — multipart file upload (field `file`).
+pub async fn upload_attachment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<ProjectQuery>,
+    mut multipart: Multipart,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    let max = store.load_settings()?.max_attachment_mb * 1024 * 1024;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError(anyhow::anyhow!("bad upload: {e}")))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let name = field.file_name().unwrap_or("file").to_string();
+        let mime = field
+            .content_type()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|e| ApiError(anyhow::anyhow!("read upload: {e}")))?;
+        if bytes.len() as u64 > max {
+            return Err(ApiError(anyhow::anyhow!(
+                "attachment is {:.1} MB, over the {} MB limit",
+                bytes.len() as f64 / 1_048_576.0,
+                max / 1024 / 1024
+            )));
+        }
+        let att = ops::add_attachment(&store, &id, &name, &bytes, &mime, Utc::now())?;
+        notify(&state);
+        return Ok(Json(serde_json::to_value(att)?));
+    }
+    Err(ApiError(anyhow::anyhow!("no `file` field in upload")))
+}
+
+/// Body for detaching an attachment.
+#[derive(Debug, Deserialize)]
+pub struct DetachBody {
+    project: Option<String>,
+    path: String,
+}
+
+/// `DELETE /api/tickets/{id}/attachments` — detach by repo-relative path.
+pub async fn delete_attachment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<DetachBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    ops::remove_attachment(&store, &id, &b.path, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /api/media/{*path}` — serve an attachment for preview/download.
+pub async fn serve_media(
+    State(state): State<AppState>,
+    Query(q): Query<ProjectQuery>,
+    Path(path): Path<String>,
+) -> Response {
+    let store = match store_for(&state, q.project) {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let rel = path.replace('\\', "/");
+    if rel.contains("..") {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
+    let full = store.root().join(&rel);
+    // Confine reads to within the project root.
+    let within = std::fs::canonicalize(store.root())
+        .ok()
+        .zip(std::fs::canonicalize(&full).ok())
+        .map(|(root, target)| target.starts_with(root))
+        .unwrap_or(false);
+    if !within {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    match std::fs::read(&full) {
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&full).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
 }
 
 // --- websocket -------------------------------------------------------------

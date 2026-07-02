@@ -81,6 +81,50 @@ pub fn last_change(root: &Path, relpath: &str) -> Result<Option<CommitInfo>> {
     Ok(log(root, Some(relpath), Some(1))?.into_iter().next())
 }
 
+/// Compute the git blob hash of `bytes` (identical to `git hash-object`).
+pub fn blob_hash(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut h = Sha1::new();
+    h.update(format!("blob {}\0", bytes.len()).as_bytes());
+    h.update(bytes);
+    format!("{:x}", h.finalize())
+}
+
+/// All tracked files as `(blob_hash, repo-relative path)` pairs.
+pub fn tracked_blobs(root: &Path) -> Result<Vec<(String, String)>> {
+    let out = run(root, &["ls-files", "-s"])?;
+    let mut blobs = Vec::new();
+    for line in out.lines() {
+        // Format: "<mode> <hash> <stage>\t<path>"
+        if let Some((meta, path)) = line.split_once('\t') {
+            let mut cols = meta.split_whitespace();
+            let _mode = cols.next();
+            if let Some(hash) = cols.next() {
+                blobs.push((hash.to_string(), path.to_string()));
+            }
+        }
+    }
+    Ok(blobs)
+}
+
+/// Distinct commit authors as `(name, email)`, most-recent first.
+pub fn authors(root: &Path) -> Result<Vec<(String, String)>> {
+    let out = run(
+        root,
+        &["--no-pager", "log", &format!("--format=%an{FS}%ae")],
+    )?;
+    let mut seen = std::collections::HashSet::new();
+    let mut authors = Vec::new();
+    for line in out.lines() {
+        if let Some((name, email)) = line.split_once(FS) {
+            if seen.insert(email.to_string()) {
+                authors.push((name.to_string(), email.to_string()));
+            }
+        }
+    }
+    Ok(authors)
+}
+
 fn parse_log(out: &str) -> Vec<CommitInfo> {
     out.split(RS)
         .map(str::trim)

@@ -16,7 +16,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 notify = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }

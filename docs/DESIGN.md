@@ -104,24 +104,30 @@ On dark: chip `bg = color @ 22% alpha`, `text = color lightened`, `border = colo
 On light: chip `bg = color @ 14% alpha`, `text = color darkened`, `border = color @ 30%`.
 No solid-fill chips (too loud), no gradients.
 
-## 5. Typography — Geist
+## 5. Typography — Space Grotesk + Geist
 
-Self-hosted (no CDN), so it works offline and inside the embedded binary.
+Three self-hosted families (no CDN, so it works offline and inside the embedded
+binary). Space Grotesk gives the brand its distinctive voice; Geist keeps dense
+content crisp and legible.
 
-- **UI:** `Geist` → `@fontsource-variable/geist`. Fallback: `ui-sans-serif, system-ui, sans-serif`.
-- **Mono:** `Geist Mono` → `@fontsource-variable/geist-mono`. Used for ticket IDs,
-  timestamps, code, and the `.wipe` paths. Fallback: `ui-monospace, SFMono-Regular, Menlo, monospace`.
+- **Display / headings / wordmark:** `Space Grotesk` → `@fontsource-variable/space-grotesk`.
+  Fallback: `ui-sans-serif, system-ui, sans-serif`.
+- **Body / UI:** `Geist Sans` → `@fontsource-variable/geist`. Fallback:
+  `ui-sans-serif, system-ui, sans-serif`.
+- **Mono:** `Geist Mono` → `@fontsource-variable/geist-mono`. Ticket IDs, timestamps,
+  code, `.wipe` paths. Fallback: `ui-monospace, SFMono-Regular, Menlo, monospace`.
 
-Weights: 400 (body), 500 (labels, buttons, card titles), 600 (headings, wordmark).
+Weights: Geist 400 (body) / 500 (emphasis); Space Grotesk 500 / 600 (headings).
 
-| Role | Size | Weight | Notes |
-| --- | --- | --- | --- |
-| Wordmark `wipe` | 18px | 600 | mono, tracking `-0.02em`, lowercase |
-| Column header | 12px | 600 | uppercase, tracking `0.06em`, `--wp-text-muted` |
-| Card title | 14px | 500 | tracking `-0.005em`, max 3 lines then ellipsis |
-| Body / drawer | 14px | 400 | line-height 1.55 |
-| Meta (id, time) | 12px | 400 | **mono**, `--wp-text-subtle` |
-| Micro (badges) | 11px | 500 | |
+| Role | Family | Size | Weight | Notes |
+| --- | --- | --- | --- | --- |
+| Wordmark `wipe` | Space Grotesk | 18px | 600 | lowercase, tracking `-0.02em` |
+| Column header | Space Grotesk | 12px | 600 | uppercase, tracking `0.06em`, `--wp-text-muted` |
+| Section / drawer heading | Space Grotesk | 16px | 600 | tracking `-0.01em` |
+| Card title | Geist Sans | 14px | 500 | tracking `-0.005em`, max 3 lines then ellipsis |
+| Body / drawer | Geist Sans | 14px | 400 | line-height 1.55 |
+| Meta (id, time, path) | Geist Mono | 12px | 400 | `--wp-text-subtle` |
+| Micro (badges) | Geist Sans | 11px | 500 | |
 
 ## 6. Spacing, radius, elevation
 

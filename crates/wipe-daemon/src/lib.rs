@@ -13,7 +13,7 @@ mod watch;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
@@ -44,9 +44,19 @@ fn router(state: AppState) -> Router {
         .route("/api/board", get(api::board))
         .route("/api/history", get(api::history))
         .route("/api/board/at", get(api::board_at))
+        .route("/api/definitions", get(api::definitions))
+        .route("/api/labels", post(api::create_label))
+        .route("/api/identities", get(api::identities))
+        .route("/api/identities/{id}", put(api::put_identity))
         .route("/api/tickets", post(api::create_ticket))
+        .route("/api/tickets/{id}", patch(api::patch_ticket))
         .route("/api/tickets/{id}/move", post(api::move_ticket))
         .route("/api/tickets/{id}/comments", post(api::add_comment))
+        .route(
+            "/api/tickets/{id}/attachments",
+            post(api::upload_attachment).delete(api::delete_attachment),
+        )
+        .route("/api/media/{*path}", get(api::serve_media))
         .route("/ws", get(api::ws_handler))
         .fallback(assets::static_handler)
         .layer(CorsLayer::permissive())

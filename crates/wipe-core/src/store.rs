@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::model::{Board, Definitions, Settings, Ticket};
+use crate::model::{Board, Definitions, Identity, Settings, Ticket};
 
 /// Name of the per-project board directory.
 pub const WIPE_DIR: &str = ".wipe";
@@ -161,6 +161,26 @@ impl Store {
         write_json_atomic(&self.settings_path(), settings)
     }
 
+    // --- identities --------------------------------------------------------
+
+    fn identities_path(&self) -> PathBuf {
+        self.wipe_dir().join("identities.json")
+    }
+
+    /// Load `identities.json` (empty if the file doesn't exist yet).
+    pub fn load_identities(&self) -> Result<Vec<Identity>> {
+        let path = self.identities_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        read_json(&path)
+    }
+
+    /// Write `identities.json`.
+    pub fn save_identities(&self, identities: &[Identity]) -> Result<()> {
+        write_json_atomic(&self.identities_path(), identities)
+    }
+
     // --- tickets -----------------------------------------------------------
 
     /// Load a single ticket by ID.
@@ -235,7 +255,7 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     let mut s = serde_json::to_string_pretty(value)?;
     s.push('\n');
     write_bytes_atomic(path, s.as_bytes())
