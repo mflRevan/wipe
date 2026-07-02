@@ -3,12 +3,14 @@ import { browser } from '$app/environment';
 import type {
   Attachment,
   Board,
-  CommitInfo,
   CreateTicketInput,
   Definitions,
+  GraphCommit,
   Health,
   Identity,
   IdentityKind,
+  LabelDef,
+  List,
   Project,
   Ticket,
   TicketPatch
@@ -77,7 +79,6 @@ function fillTicket(t: Ticket): Ticket {
     ...t,
     body: t.body ?? '',
     labels: t.labels ?? [],
-    tags: t.tags ?? [],
     assignees: t.assignees ?? [],
     comments: t.comments ?? [],
     attachments: t.attachments ?? []
@@ -114,9 +115,13 @@ export const api = {
     return fillBoard(await req<Board>(`/api/board${qs({ project })}`));
   },
 
-  async history(project?: string): Promise<CommitInfo[]> {
-    const r = await req<{ commits: CommitInfo[] }>(`/api/history${qs({ project })}`);
-    return r.commits ?? [];
+  async graph(project?: string): Promise<GraphCommit[]> {
+    const r = await req<{ commits: GraphCommit[] }>(`/api/graph${qs({ project })}`);
+    return (r.commits ?? []).map((c) => ({
+      ...c,
+      parents: c.parents ?? [],
+      refs: c.refs ?? []
+    }));
   },
 
   async boardAt(commit: string, project?: string): Promise<Board> {
@@ -144,16 +149,52 @@ export const api = {
     });
   },
 
-  createLabel(
-    name: string,
-    color?: string,
-    description?: string,
-    project?: string
-  ): Promise<{ ok: boolean }> {
-    return req<{ ok: boolean }>(`/api/labels${qs({ project })}`, {
+  createLabel(name: string, color?: string, project?: string): Promise<LabelDef> {
+    return req<LabelDef>(`/api/labels${qs({ project })}`, {
       method: 'POST',
-      body: JSON.stringify({ name, color, description })
+      body: JSON.stringify({ name, color })
     });
+  },
+
+  recolorLabel(name: string, color: string, project?: string): Promise<LabelDef> {
+    return req<LabelDef>(`/api/labels/${encodeURIComponent(name)}${qs({ project })}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ color })
+    });
+  },
+
+  deleteLabel(name: string, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/labels/${encodeURIComponent(name)}${qs({ project })}`, {
+      method: 'DELETE'
+    });
+  },
+
+  createList(name: string, project?: string): Promise<List> {
+    return req<List>(`/api/lists${qs({ project })}`, {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+  },
+
+  renameList(id: string, name: string, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/lists/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name })
+    });
+  },
+
+  moveList(id: string, index: number, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/lists/${encodeURIComponent(id)}/move${qs({ project })}`, {
+      method: 'POST',
+      body: JSON.stringify({ index })
+    });
+  },
+
+  deleteList(id: string, force = false, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(
+      `/api/lists/${encodeURIComponent(id)}${qs({ project, force: force ? 'true' : undefined })}`,
+      { method: 'DELETE' }
+    );
   },
 
   async createTicket(input: CreateTicketInput, project?: string): Promise<Ticket> {

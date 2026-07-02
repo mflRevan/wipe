@@ -23,10 +23,8 @@ export interface Ticket {
   id: string;
   title: string;
   body?: string;
-  type?: string;
   priority?: string;
   labels: string[];
-  tags: string[];
   assignees: string[];
   attachments: Attachment[];
   comments: Comment[];
@@ -66,6 +64,19 @@ export interface CommitInfo {
   subject: string;
 }
 
+/** A node in the repository-wide commit graph (`GET /api/graph`). */
+export interface GraphCommit {
+  hash: string;
+  short: string;
+  parents: string[];
+  refs: string[];
+  author_name: string;
+  date: string;
+  subject: string;
+  /** True when this commit changed `.wipe/` — i.e. a board checkpoint. */
+  board: boolean;
+}
+
 export interface LabelDef {
   name: string;
   color?: string;
@@ -73,9 +84,8 @@ export interface LabelDef {
 }
 
 export interface Definitions {
-  types: string[];
+  version?: number;
   labels: LabelDef[];
-  tags: string[];
   priorities: string[];
 }
 
@@ -89,26 +99,22 @@ export interface Identity {
 
 export interface CreateTicketInput {
   title: string;
-  type?: string;
   priority?: string;
   list?: string;
   body?: string;
   labels?: string[];
-  tags?: string[];
   assignees?: string[];
 }
 
 /**
- * Partial ticket update. Omit a key to leave it unchanged. For `type` and
- * `priority`, pass `null` to CLEAR the value (JSON.stringify keeps null, drops
- * undefined — which is exactly the daemon's Option<Option<String>> semantics).
+ * Partial ticket update. Omit a key to leave it unchanged. For `priority`,
+ * pass `null` to CLEAR the value (JSON.stringify keeps null, drops undefined —
+ * which is exactly the daemon's Option<Option<String>> semantics).
  */
 export interface TicketPatch {
   title?: string;
   body?: string;
-  type?: string | null;
   priority?: string | null;
   labels?: string[];
-  tags?: string[];
   assignees?: string[];
 }

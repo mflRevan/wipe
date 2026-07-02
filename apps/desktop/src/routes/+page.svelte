@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { fade, scale } from 'svelte/transition';
-  import { RefreshCw, Settings, X, WifiOff } from 'lucide-svelte';
+  import { RefreshCw, Settings, History, RotateCcw, WifiOff } from 'lucide-svelte';
   import {
     board,
     boardError,
@@ -9,34 +8,37 @@
     healthError,
     currentProject,
     rewinding,
+    rewindCommit,
     loading,
     bootstrap,
     checkHealth,
     loadBoard,
     loadProjects,
     reloadProject,
+    returnToNow,
     stopLiveUpdates
   } from '$lib/stores/board';
-  import { getApiBase, setApiBase } from '$lib/api';
+  import { getApiBase } from '$lib/api';
+  import { formatDate } from '$lib/utils';
   import Board from '$lib/components/Board.svelte';
-  import TimeMachine from '$lib/components/TimeMachine.svelte';
   import ProjectSwitcher from '$lib/components/ProjectSwitcher.svelte';
-  import TicketDrawer from '$lib/components/TicketDrawer.svelte';
+  import TicketModal from '$lib/components/TicketModal.svelte';
   import NewTicketDialog from '$lib/components/NewTicketDialog.svelte';
+  import GitGraph from '$lib/components/GitGraph.svelte';
+  import BoardSettings from '$lib/components/BoardSettings.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import type { Ticket } from '$lib/types';
 
-  let drawerTicketId = $state<string | null>(null);
+  let modalTicketId = $state<string | null>(null);
   let newTicketOpen = $state(false);
   let newTicketList = $state('');
   let newTicketName = $state('');
 
   let settingsOpen = $state(false);
-  let apiBaseInput = $state('');
+  let historyOpen = $state(false);
 
   onMount(() => {
-    apiBaseInput = getApiBase();
     void bootstrap();
   });
   onDestroy(() => stopLiveUpdates());
@@ -47,19 +49,12 @@
   }
 
   function openTicket(t: Ticket) {
-    drawerTicketId = t.id;
+    modalTicketId = t.id;
   }
   function addToList(listId: string, listName: string) {
     newTicketList = listId;
     newTicketName = listName;
     newTicketOpen = true;
-  }
-
-  async function saveSettings() {
-    setApiBase(apiBaseInput);
-    settingsOpen = false;
-    stopLiveUpdates();
-    await bootstrap();
   }
 
   async function refresh() {
@@ -88,19 +83,14 @@
         <span class="status off"><span class="dot"></span><span class="stxt">offline</span></span>
       {/if}
 
+      <button class="ib" aria-label="History" title="History" onclick={() => (historyOpen = true)}>
+        <History size={16} />
+      </button>
       <button class="ib" aria-label="Refresh" title="Refresh" onclick={refresh}>
         <RefreshCw size={16} class={$loading ? 'spin' : ''} />
       </button>
       <ThemeToggle />
-      <button
-        class="ib"
-        aria-label="Settings"
-        title="Settings"
-        onclick={() => {
-          apiBaseInput = getApiBase();
-          settingsOpen = true;
-        }}
-      >
+      <button class="ib" aria-label="Settings" title="Board settings" onclick={() => (settingsOpen = true)}>
         <Settings size={16} />
       </button>
     </div>
@@ -121,17 +111,20 @@
           {#if $healthError}<p class="dim">({$healthError})</p>{/if}
           <div class="offactions">
             <Button variant="primary" onclick={refresh}>Retry connection</Button>
-            <Button
-              onclick={() => {
-                apiBaseInput = getApiBase();
-                settingsOpen = true;
-              }}>Change API URL</Button
-            >
+            <Button onclick={() => (settingsOpen = true)}>Change API URL</Button>
           </div>
         </div>
       </div>
     {:else}
-      <div class="tmwrap"><TimeMachine /></div>
+      {#if $rewinding && $rewindCommit}
+        <div class="banner rewind">
+          <span class="rw-tag"><History size={13} /> Viewing snapshot</span>
+          <span class="rw-hash">{$rewindCommit.short}</span>
+          <span class="rw-subj">{$rewindCommit.subject}</span>
+          <span class="rw-meta">· {$rewindCommit.author_name} · {formatDate($rewindCommit.date)}</span>
+          <button class="rw-now" onclick={returnToNow}><RotateCcw size={13} /> Return to now</button>
+        </div>
+      {/if}
 
       {#if $boardError}
         <div class="banner err">{$boardError}</div>
@@ -148,30 +141,10 @@
   </main>
 </div>
 
-<TicketDrawer bind:ticketId={drawerTicketId} />
+<TicketModal bind:ticketId={modalTicketId} />
 <NewTicketDialog bind:open={newTicketOpen} listId={newTicketList} listName={newTicketName} />
-
-{#if settingsOpen}
-  <div class="scrim" transition:fade={{ duration: 160 }} onclick={() => (settingsOpen = false)} role="presentation"></div>
-  <div class="modal-wrap">
-    <div class="modal" transition:scale={{ duration: 160, start: 0.96 }} role="dialog" aria-modal="true">
-      <header class="m-head">
-        <h3>Settings</h3>
-        <button class="close" aria-label="Close" onclick={() => (settingsOpen = false)}><X size={18} /></button>
-      </header>
-      <label class="fl" for="api-base">API base URL</label>
-      <input id="api-base" class="in" bind:value={apiBaseInput} placeholder="http://localhost:6737" />
-      <p class="hint">
-        Overrides <code>VITE_WIPE_API</code>. Stored locally in this browser. Leave blank to use the
-        serving origin.
-      </p>
-      <div class="actions">
-        <Button variant="ghost" onclick={() => (settingsOpen = false)}>Cancel</Button>
-        <Button variant="primary" onclick={saveSettings}>Save &amp; reconnect</Button>
-      </div>
-    </div>
-  </div>
-{/if}
+<GitGraph bind:open={historyOpen} />
+<BoardSettings bind:open={settingsOpen} />
 
 <style>
   .app {
@@ -258,9 +231,6 @@
     padding: 14px 16px 16px;
     gap: 12px;
   }
-  .tmwrap:empty {
-    display: none;
-  }
   .boardwrap {
     flex: 1;
     min-height: 0;
@@ -279,6 +249,58 @@
     background: color-mix(in srgb, var(--wp-error) 12%, transparent);
     color: var(--wp-error);
     font-size: 13px;
+  }
+  .banner.rewind {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--wp-r-md);
+    border: 1px solid var(--wp-accent);
+    background: color-mix(in srgb, var(--wp-accent) 10%, transparent);
+    font-size: 13px;
+    min-width: 0;
+  }
+  .rw-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: none;
+    font-weight: 500;
+    color: var(--wp-accent);
+  }
+  .rw-hash {
+    font-family: var(--wp-font-mono);
+    color: var(--wp-accent);
+    flex: none;
+  }
+  .rw-subj {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--wp-text);
+  }
+  .rw-meta {
+    color: var(--wp-text-subtle);
+    white-space: nowrap;
+    flex: none;
+  }
+  .rw-now {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    padding: 4px 10px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-card);
+    color: var(--wp-text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .rw-now:hover {
+    background: var(--wp-elevated);
   }
   .offline {
     flex: 1;
@@ -337,87 +359,6 @@
   .offactions {
     display: flex;
     justify-content: center;
-    gap: 8px;
-    margin-top: 16px;
-  }
-
-  /* settings modal */
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    z-index: 90;
-  }
-  .modal-wrap {
-    position: fixed;
-    inset: 0;
-    z-index: 91;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: 14vh;
-    pointer-events: none;
-  }
-  .modal {
-    pointer-events: auto;
-    width: min(440px, 92vw);
-    background: var(--wp-card);
-    border: 1px solid var(--wp-border);
-    border-radius: var(--wp-r-lg);
-    box-shadow: var(--wp-shadow-lift);
-    padding: 18px;
-  }
-  .m-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-  }
-  .m-head h3 {
-    font-family: var(--wp-font-display);
-    font-size: 16px;
-    font-weight: 600;
-  }
-  .close {
-    display: inline-flex;
-    padding: 6px;
-    border: none;
-    background: none;
-    color: var(--wp-text-muted);
-    cursor: pointer;
-    border-radius: var(--wp-r-sm);
-  }
-  .close:hover {
-    background: var(--wp-elevated);
-    color: var(--wp-text);
-  }
-  .fl {
-    display: block;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--wp-text-muted);
-    margin-bottom: 6px;
-  }
-  .in {
-    height: 34px;
-    padding: 0 10px;
-    border-radius: var(--wp-r-sm);
-    border: 1px solid var(--wp-border);
-    background: var(--wp-canvas);
-    color: var(--wp-text);
-    width: 100%;
-  }
-  .hint {
-    font-size: 12px;
-    color: var(--wp-text-subtle);
-    margin: 8px 0 0;
-  }
-  .hint code {
-    font-family: var(--wp-font-mono);
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
     gap: 8px;
     margin-top: 16px;
   }

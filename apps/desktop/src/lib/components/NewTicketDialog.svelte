@@ -17,7 +17,6 @@
   const dur = reduced ? 0 : 160;
 
   let title = $state('');
-  let type = $state('');
   let priority = $state('');
   let body = $state('');
   let error = $state<string | null>(null);
@@ -25,7 +24,6 @@
 
   function reset() {
     title = '';
-    type = '';
     priority = '';
     body = '';
     error = null;
@@ -41,7 +39,6 @@
         {
           title: t,
           list: listId,
-          type: type || undefined,
           priority: priority || undefined,
           body: body || undefined
         },
@@ -77,22 +74,11 @@
         placeholder="What needs doing?"
       />
 
-      <div class="two">
-        <div>
-          <label class="fl" for="nt-type">Type</label>
-          <select id="nt-type" class="in" bind:value={type}>
-            <option value="">— none —</option>
-            {#each $definitions.types as t (t)}<option value={t}>{t}</option>{/each}
-          </select>
-        </div>
-        <div>
-          <label class="fl" for="nt-prio">Priority</label>
-          <select id="nt-prio" class="in" bind:value={priority}>
-            <option value="">— none —</option>
-            {#each $definitions.priorities as p (p)}<option value={p}>{p}</option>{/each}
-          </select>
-        </div>
-      </div>
+      <label class="fl" for="nt-prio">Priority</label>
+      <select id="nt-prio" class="in" bind:value={priority}>
+        <option value="">— none —</option>
+        {#each $definitions.priorities as p (p)}<option value={p}>{p}</option>{/each}
+      </select>
 
       <label class="fl" for="nt-body">Description</label>
       <textarea id="nt-body" class="in ta" rows="4" bind:value={body} placeholder="Markdown supported…"></textarea>
@@ -185,11 +171,6 @@
     padding: 8px 10px;
     resize: vertical;
     font-family: var(--wp-font-sans);
-  }
-  .two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
   }
   .err {
     font-size: 12px;

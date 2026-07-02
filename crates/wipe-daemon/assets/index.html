@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wipe</title>
+    <script>
+      // Apply persisted theme/accent before first paint to avoid a flash.
+      try {
+        var t = localStorage.getItem('wipe.theme') || 'system';
+        var a = localStorage.getItem('wipe.accent') || 'book-cloth';
+        var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        var r = document.documentElement;
+        r.setAttribute('data-theme', dark ? 'dark' : 'light');
+        if (a && a !== 'book-cloth') r.setAttribute('data-accent', a);
+      } catch (e) {}
+    </script>
+    <link href="/_app/immutable/entry/start.Bvsg26EF.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/MFdNDx1s.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DY8m9pRb.js" rel="modulepreload">
+		<link href="/_app/immutable/entry/app.BeRL2216.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DxYDIOys.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DH2gk7cq.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/B8GaMJIh.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DcOrAw1s.js" rel="modulepreload">
+		<link href="/_app/immutable/nodes/0.P78VUpEK.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DaWPTlGa.js" rel="modulepreload">
+		
+		<link href="/_app/immutable/assets/0.2XT1PxHk.css" rel="stylesheet">
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">
+			<script>
+				{
+					__sveltekit_y2tp0f = {
+						base: ""
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("/_app/immutable/entry/start.Bvsg26EF.js"),
+						import("/_app/immutable/entry/app.BeRL2216.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element);
+					});
+				}
+			</script>
+		</div>
+  </body>
+</html>

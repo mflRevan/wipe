@@ -14,6 +14,8 @@
   let newName = $state('');
   let newColor = $state<string>('terracotta');
   let error = $state<string | null>(null);
+  // Which label's color palette is currently open (ad-hoc recolor).
+  let recoloring = $state<string | null>(null);
 
   function toggle(name: string) {
     const next = selected.includes(name)
@@ -27,11 +29,22 @@
     if (!name) return;
     error = null;
     try {
-      await api.createLabel(name, newColor, undefined, get(currentProject) ?? undefined);
+      await api.createLabel(name, newColor, get(currentProject) ?? undefined);
       await loadDefinitions();
       if (!selected.includes(name)) onchange([...selected, name]);
       newName = '';
       creating = false;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function recolor(name: string, color: string) {
+    error = null;
+    try {
+      await api.recolorLabel(name, color, get(currentProject) ?? undefined);
+      await loadDefinitions();
+      recoloring = null;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -55,11 +68,34 @@
       {#snippet children()}
         <div class="head">Labels</div>
         {#each $definitions.labels as label (label.name)}
-          <button class="row" onclick={() => toggle(label.name)}>
-            <span class="sw" style="background:{labelColor(label.name, label.color)}"></span>
-            <span class="rname">{label.name}</span>
-            {#if selected.includes(label.name)}<Check size={14} />{/if}
-          </button>
+          <div class="lrow">
+            <button
+              class="sw"
+              type="button"
+              title="Change color"
+              aria-label="Change color for {label.name}"
+              style="background:{labelColor(label.name, label.color)}"
+              onclick={() => (recoloring = recoloring === label.name ? null : label.name)}
+            ></button>
+            <button class="row" onclick={() => toggle(label.name)}>
+              <span class="rname">{label.name}</span>
+              {#if selected.includes(label.name)}<Check size={14} />{/if}
+            </button>
+          </div>
+          {#if recoloring === label.name}
+            <div class="palette">
+              {#each LABEL_KEYS as key (key)}
+                <button
+                  class="csw"
+                  class:on={label.color === key}
+                  style="background:{LABEL_COLORS[key]}"
+                  title={key}
+                  aria-label={key}
+                  onclick={() => recolor(label.name, key)}
+                ></button>
+              {/each}
+            </div>
+          {/if}
         {/each}
         {#if $definitions.labels.length === 0}
           <div class="none">No labels yet</div>
@@ -154,11 +190,33 @@
     flex: 1;
     text-align: left;
   }
+  .lrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 8px;
+  }
+  .lrow .row {
+    flex: 1;
+    padding-left: 0;
+  }
   .sw {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
     border-radius: var(--wp-r-sm);
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    padding: 0;
     flex: none;
+    cursor: pointer;
+  }
+  .sw:hover {
+    box-shadow: 0 0 0 2px var(--wp-border-strong);
+  }
+  .palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 8px 8px 28px;
   }
   .add {
     color: var(--wp-text-muted);

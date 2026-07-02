@@ -1,7 +1,16 @@
 <script lang="ts">
   import { browser } from '$app/environment';
+  import { Plus } from 'lucide-svelte';
   import Column from './Column.svelte';
-  import { board, rewinding, moveTicket } from '$lib/stores/board';
+  import {
+    board,
+    rewinding,
+    moveTicket,
+    createList,
+    renameList,
+    moveList,
+    deleteList
+  } from '$lib/stores/board';
   import type { List, Ticket } from '$lib/types';
 
   let { onopen, onadd }: { onopen: (t: Ticket) => void; onadd: (id: string, name: string) => void } =
@@ -12,6 +21,25 @@
 
   let cols = $state<List[]>([]);
   let dragging = false;
+
+  // Inline "+ Add list" affordance.
+  let addingList = $state(false);
+  let newListName = $state('');
+
+  function submitList() {
+    const v = newListName.trim();
+    if (v) void createList(v);
+    newListName = '';
+    addingList = false;
+  }
+
+  function handleMove(listId: string, dir: -1 | 1) {
+    const idx = cols.findIndex((c) => c.list === listId);
+    if (idx === -1) return;
+    const target = idx + dir;
+    if (target < 0 || target >= cols.length) return;
+    void moveList(listId, target);
+  }
 
   // Sync local columns from the store whenever the board changes (not mid-drag).
   $effect(() => {
@@ -47,20 +75,52 @@
 </script>
 
 <div class="board wp-scroll">
-  {#each cols as col (col.list)}
+  {#each cols as col, i (col.list)}
     <Column
       listId={col.list}
       name={col.name}
       tickets={col.tickets}
       {flipMs}
       dragDisabled={$rewinding}
+      canMoveLeft={i > 0}
+      canMoveRight={i < cols.length - 1}
       {onopen}
       {onadd}
+      onmove={handleMove}
+      onrename={(id, name) => renameList(id, name)}
+      ondelete={(id) => deleteList(id)}
       onconsider={handleConsider}
       onfinalize={handleFinalize}
     />
   {/each}
-  {#if cols.length === 0}
+
+  {#if !$rewinding}
+    <div class="addcol">
+      {#if addingList}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="addcol-input"
+          autofocus
+          placeholder="List name"
+          bind:value={newListName}
+          onblur={submitList}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') submitList();
+            else if (e.key === 'Escape') {
+              newListName = '';
+              addingList = false;
+            }
+          }}
+        />
+      {:else}
+        <button class="addcol-btn" onclick={() => (addingList = true)}>
+          <Plus size={16} /> Add list
+        </button>
+      {/if}
+    </div>
+  {/if}
+
+  {#if cols.length === 0 && $rewinding}
     <div class="empty">This board has no lists.</div>
   {/if}
 </div>
@@ -78,5 +138,39 @@
     color: var(--wp-text-muted);
     font-size: 14px;
     padding: 24px;
+  }
+  .addcol {
+    width: 280px;
+    flex: none;
+  }
+  .addcol-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 12px;
+    border: 1px dashed var(--wp-border-strong);
+    border-radius: var(--wp-r-lg);
+    background: none;
+    color: var(--wp-text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .addcol-btn:hover {
+    background: var(--wp-surface);
+    color: var(--wp-text);
+    border-color: var(--wp-accent);
+  }
+  .addcol-input {
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: var(--wp-r-lg);
+    border: 1px solid var(--wp-border-strong);
+    background: var(--wp-card);
+    color: var(--wp-text);
+    font-size: 13px;
   }
 </style>

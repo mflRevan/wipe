@@ -30,14 +30,10 @@
 
   <div class="title">{ticket.title}</div>
 
-  {#if ticket.labels.length || ticket.type || ticket.tags.length}
+  {#if ticket.labels.length}
     <div class="chips">
-      {#if ticket.type}<Chip>{ticket.type}</Chip>{/if}
       {#each ticket.labels as label (label)}
         <Chip color={labelColorFor(label, $definitions.labels)}>{label}</Chip>
-      {/each}
-      {#each ticket.tags as tag (tag)}
-        <Chip mono>#{tag}</Chip>
       {/each}
     </div>
   {/if}
