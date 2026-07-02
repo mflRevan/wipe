@@ -1,0 +1,18 @@
+[package]
+name = "wipe-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core storage engine and domain model for wipe."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tempfile.workspace = true

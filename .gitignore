@@ -1,0 +1,28 @@
+# Rust
+/target
+**/target
+
+# Node / frontend
+**/node_modules
+**/dist
+**/build
+**/.svelte-kit
+**/.vite
+**/.turbo
+
+# Tauri
+apps/desktop/src-tauri/target
+
+# Local, user-specific caches inside any wipe board
+**/.wipe/.cache/
+
+# Working build log (per project convention)
+/PLAN.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json

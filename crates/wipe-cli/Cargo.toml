@@ -1,0 +1,30 @@
+[package]
+name = "wipe-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "wipe — CLI-first, git-native collaboration for humans and agents."
+
+[[bin]]
+name = "wipe"
+path = "src/main.rs"
+
+[dependencies]
+wipe-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+clap = { version = "4", features = ["derive", "wrap_help"] }
+owo-colors = { version = "4", features = ["supports-colors"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile.workspace = true
