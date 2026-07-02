@@ -1,76 +1,172 @@
 <script lang="ts">
-  import { dndzone, type DndEvent } from 'svelte-dnd-action';
-  import type { Ticket } from '$lib/types';
-  import TicketCard from './TicketCard.svelte';
-  import Button from './ui/Button.svelte';
+  import { dndzone, SHADOW_ITEM_MARKER_PROPERTY_NAME, type DndEvent } from 'svelte-dnd-action';
   import { Plus } from 'lucide-svelte';
-
-  interface Props {
-    listId: string;
-    name: string;
-    tickets: Ticket[];
-    dragDisabled?: boolean;
-    onconsider?: (listId: string, e: CustomEvent<DndEvent<Ticket>>) => void;
-    onfinalize?: (listId: string, e: CustomEvent<DndEvent<Ticket>>) => void;
-    onadd?: (listId: string) => void;
-    onopen?: (t: Ticket) => void;
-  }
+  import Card from './Card.svelte';
+  import type { Ticket } from '$lib/types';
 
   let {
     listId,
     name,
     tickets,
-    dragDisabled = false,
-    onconsider,
-    onfinalize,
+    flipMs,
+    dragDisabled,
+    onopen,
     onadd,
-    onopen
-  }: Props = $props();
+    onconsider,
+    onfinalize
+  }: {
+    listId: string;
+    name: string;
+    tickets: Ticket[];
+    flipMs: number;
+    dragDisabled: boolean;
+    onopen: (t: Ticket) => void;
+    onadd: (listId: string, name: string) => void;
+    onconsider: (listId: string, items: Ticket[]) => void;
+    onfinalize: (listId: string, items: Ticket[], info: { id: string; trigger: string }) => void;
+  } = $props();
 
-  const flipDurationMs = 160;
+  const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
 </script>
 
-<div class="flex h-full w-72 shrink-0 flex-col rounded-xl border border-border bg-muted/30">
-  <div class="flex items-center justify-between px-3 pb-2 pt-3">
-    <div class="flex items-center gap-2">
-      <h3 class="text-sm font-semibold tracking-tight">{name}</h3>
-      <span
-        class="rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
-      >
-        {tickets.length}
-      </span>
-    </div>
+<section class="column">
+  <header class="col-head">
+    <span class="col-name">{name}</span>
+    <span class="count">{tickets.length}</span>
     {#if !dragDisabled}
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-7 w-7"
-        aria-label={`Add ticket to ${name}`}
-        onclick={() => onadd?.(listId)}
-      >
-        <Plus class="h-4 w-4" />
-      </Button>
+      <button class="add" aria-label="Add card" onclick={() => onadd(listId, name)}>
+        <Plus size={15} />
+      </button>
     {/if}
-  </div>
+  </header>
 
-  <section
-    class="scrollbar-thin flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2"
-    use:dndzone={{ items: tickets, dragDisabled, flipDurationMs, dropTargetStyle: {} }}
-    onconsider={(e) => onconsider?.(listId, e)}
-    onfinalize={(e) => onfinalize?.(listId, e)}
+  <div
+    class="col-body wp-scroll"
+    use:dndzone={{
+      items: tickets,
+      flipDurationMs: flipMs,
+      dragDisabled,
+      dropTargetStyle: {},
+      transformDraggedElement: (el?: HTMLElement) => {
+        if (el) {
+          el.style.boxShadow = 'var(--wp-shadow-lift)';
+          el.style.borderRadius = 'var(--wp-r-md)';
+          el.style.cursor = 'grabbing';
+        }
+      }
+    }}
+    onconsider={(e: CustomEvent<DndEvent<Ticket>>) => onconsider(listId, e.detail.items)}
+    onfinalize={(e: CustomEvent<DndEvent<Ticket>>) =>
+      onfinalize(listId, e.detail.items, e.detail.info)}
   >
     {#each tickets as ticket (ticket.id)}
-      <div>
-        <TicketCard {ticket} {onopen} />
+      <div class="item">
+        {#if marker in ticket}
+          <div class="placeholder"></div>
+        {:else}
+          <Card {ticket} {onopen} />
+        {/if}
       </div>
     {/each}
 
-    {#if tickets.length === 0}
-      <div
-        class="mx-1 mt-1 rounded-lg border border-dashed border-border/70 py-8 text-center text-xs text-muted-foreground"
-      >
-        No tickets
-      </div>
+    {#if tickets.length === 0 && !dragDisabled}
+      <button class="empty-add" onclick={() => onadd(listId, name)}>
+        <Plus size={14} /> Add a card
+      </button>
     {/if}
-  </section>
-</div>
+  </div>
+</section>
+
+<style>
+  .column {
+    display: flex;
+    flex-direction: column;
+    width: 300px;
+    flex: none;
+    max-height: 100%;
+    background: var(--wp-surface);
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-lg);
+  }
+  .col-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 8px;
+  }
+  .col-name {
+    font-family: var(--wp-font-display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--wp-text-muted);
+  }
+  .count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: var(--wp-r-pill);
+    background: var(--wp-card);
+    border: 1px solid var(--wp-border);
+    font-size: 11px;
+    font-family: var(--wp-font-mono);
+    color: var(--wp-text-subtle);
+  }
+  .add {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--wp-r-sm);
+    border: none;
+    background: none;
+    color: var(--wp-text-muted);
+    cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .add:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+  .col-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 8px 12px;
+    overflow-y: auto;
+    min-height: 40px;
+    flex: 1;
+  }
+  .item {
+    position: relative;
+  }
+  .placeholder {
+    height: 64px;
+    border: 1px dashed var(--wp-border-strong);
+    border-radius: var(--wp-r-md);
+    background: color-mix(in srgb, var(--wp-accent) 6%, transparent);
+  }
+  .empty-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px;
+    border: 1px dashed var(--wp-border);
+    border-radius: var(--wp-r-md);
+    background: none;
+    color: var(--wp-text-subtle);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .empty-add:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+</style>

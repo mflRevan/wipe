@@ -1,204 +1,590 @@
 <script lang="ts">
-  import { api } from '$lib/api';
-  import { board, currentProject, loadBoard, rewinding } from '$lib/stores/board';
-  import type { Ticket } from '$lib/types';
+  import { fly, fade } from 'svelte/transition';
+  import { browser } from '$app/environment';
   import { get } from 'svelte/store';
-  import Badge from './ui/Badge.svelte';
-  import Button from './ui/Button.svelte';
-  import Textarea from './ui/Textarea.svelte';
-  import { chipColor, formatDate, priorityColor } from '$lib/utils';
-  import { X } from 'lucide-svelte';
+  import { X, Eye, Pencil, Plus, Send } from 'lucide-svelte';
+  import Chip from './ui/Chip.svelte';
+  import Avatar from './Avatar.svelte';
+  import Markdown from './Markdown.svelte';
+  import LabelPicker from './LabelPicker.svelte';
+  import AssigneePicker from './AssigneePicker.svelte';
+  import Attachments from './Attachments.svelte';
+  import { api } from '$lib/api';
+  import {
+    board,
+    definitions,
+    identities,
+    currentProject,
+    rewinding,
+    moveTicket
+  } from '$lib/stores/board';
+  import { formatDate } from '$lib/utils';
+  import type { Ticket, TicketPatch } from '$lib/types';
 
-  interface Props {
-    ticketId?: string | null;
-  }
+  let { ticketId = $bindable(null) }: { ticketId: string | null } = $props();
 
-  let { ticketId = $bindable(null) }: Props = $props();
+  const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const dur = reduced ? 0 : 220;
 
-  // Resolve the live ticket from the board store so comments stay fresh.
-  let ticket = $derived.by<Ticket | null>(() => {
-    if (!ticketId || !$board) return null;
-    for (const l of $board.lists) {
-      const t = l.tickets.find((x) => x.id === ticketId);
-      if (t) return t;
-    }
-    return null;
+  let ticket = $derived<Ticket | undefined>(
+    $board?.lists.flatMap((l) => l.tickets).find((t) => t.id === ticketId)
+  );
+  let currentList = $derived(
+    $board?.lists.find((l) => l.tickets.some((t) => t.id === ticketId))
+  );
+  let readOnly = $derived($rewinding);
+
+  let saveError = $state<string | null>(null);
+
+  // --- title ---
+  let titleDraft = $state('');
+  let titleFocused = $state(false);
+  $effect(() => {
+    if (!titleFocused && ticket) titleDraft = ticket.title;
   });
 
-  let listName = $derived.by<string>(() => {
-    if (!ticketId || !$board) return '';
-    for (const l of $board.lists) {
-      if (l.tickets.some((x) => x.id === ticketId)) return l.name;
-    }
-    return '';
-  });
+  // --- body ---
+  let editingBody = $state(false);
+  let bodyDraft = $state('');
 
-  let comment = $state('');
-  let submitting = $state(false);
-  let error = $state<string | null>(null);
+  // --- tags ---
+  let tagInput = $state('');
 
-  function close() {
-    ticketId = null;
+  // --- comments ---
+  let commentDraft = $state('');
+
+  function proj() {
+    return get(currentProject) ?? undefined;
   }
 
-  function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') close();
+  async function patch(p: TicketPatch) {
+    if (!ticket) return;
+    saveError = null;
+    try {
+      await api.patchTicket(ticket.id, p, proj());
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function saveTitle() {
+    titleFocused = false;
+    const v = titleDraft.trim();
+    if (ticket && v && v !== ticket.title) await patch({ title: v });
+  }
+
+  function startBody() {
+    bodyDraft = ticket?.body ?? '';
+    editingBody = true;
+  }
+  async function saveBody() {
+    editingBody = false;
+    if (ticket && bodyDraft !== (ticket.body ?? '')) await patch({ body: bodyDraft });
+  }
+
+  async function changeStatus(to: string) {
+    if (!ticket || !to || to === currentList?.list) return;
+    const dest = $board?.lists.find((l) => l.list === to);
+    await moveTicket(ticket.id, to, dest ? dest.tickets.length : 0);
+  }
+
+  async function addTag() {
+    const t = tagInput.trim();
+    if (!ticket || !t || ticket.tags.includes(t)) {
+      tagInput = '';
+      return;
+    }
+    tagInput = '';
+    await patch({ tags: [...ticket.tags, t] });
+  }
+  async function removeTag(tag: string) {
+    if (!ticket) return;
+    await patch({ tags: ticket.tags.filter((x) => x !== tag) });
   }
 
   async function addComment() {
-    if (!ticket || !comment.trim() || submitting) return;
-    submitting = true;
-    error = null;
+    const b = commentDraft.trim();
+    if (!ticket || !b) return;
+    commentDraft = '';
+    saveError = null;
     try {
-      await api.addComment(ticket.id, comment.trim(), undefined, get(currentProject) ?? undefined);
-      comment = '';
-      await loadBoard();
+      await api.addComment(ticket.id, b, undefined, proj());
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      submitting = false;
+      saveError = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  function identityFor(id: string) {
+    return $identities.find((i) => i.id === id);
+  }
+  function close() {
+    ticketId = null;
   }
 </script>
 
-<svelte:window onkeydown={ticketId ? onkeydown : undefined} />
-
-{#if ticketId}
-  <div class="fixed inset-0 z-40 flex justify-end">
-    <button class="absolute inset-0 bg-black/50" aria-label="Close" onclick={close}></button>
-
-    <aside
-      class="animate-slide relative z-10 flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl"
-    >
-      {#if ticket}
-        <header class="flex items-start justify-between gap-3 border-b border-border p-5">
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="font-mono text-xs text-muted-foreground">{ticket.id}</span>
-              {#if listName}
-                <span class="text-xs text-muted-foreground">· {listName}</span>
-              {/if}
-            </div>
-            <h2 class="mt-1 text-lg font-semibold leading-snug">{ticket.title}</h2>
-          </div>
-          <button
-            class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-label="Close"
-            onclick={close}
-          >
-            <X class="h-4 w-4" />
-          </button>
-        </header>
-
-        <div class="scrollbar-thin flex-1 space-y-6 overflow-y-auto p-5">
-          <!-- metadata -->
-          <div class="flex flex-wrap gap-1.5">
-            {#if ticket.type}
-              <Badge class="border-primary/25 bg-primary/10 text-primary">{ticket.type}</Badge>
-            {/if}
-            {#if ticket.priority}
-              <Badge class={priorityColor(ticket.priority)}>{ticket.priority}</Badge>
-            {/if}
-            {#each ticket.labels ?? [] as label (label)}
-              <Badge class={chipColor(label)}>{label}</Badge>
-            {/each}
-            {#each ticket.tags ?? [] as tag (tag)}
-              <Badge class="border-border bg-muted text-muted-foreground">#{tag}</Badge>
-            {/each}
-          </div>
-
-          {#if ticket.assignees?.length}
-            <div class="text-sm">
-              <span class="text-muted-foreground">Assignees:</span>
-              {ticket.assignees.join(', ')}
-            </div>
-          {/if}
-
-          {#if ticket.body}
-            <div>
-              <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Description
-              </h3>
-              <p class="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-                {ticket.body}
-              </p>
-            </div>
-          {/if}
-
-          <div class="text-xs text-muted-foreground">
-            Created {formatDate(ticket.created)} · Updated {formatDate(ticket.updated)}
-          </div>
-
-          <!-- comments -->
-          <div>
-            <h3 class="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Comments ({ticket.comments?.length ?? 0})
-            </h3>
-            <div class="space-y-3">
-              {#each ticket.comments ?? [] as c (c.id)}
-                <div class="rounded-lg border border-border bg-background/50 p-3">
-                  <div class="mb-1 flex items-center justify-between text-xs">
-                    <span class="font-medium text-foreground/80">{c.author}</span>
-                    <span class="text-muted-foreground">{formatDate(c.created)}</span>
-                  </div>
-                  <p class="whitespace-pre-wrap text-sm text-foreground/90">{c.body}</p>
-                </div>
-              {/each}
-              {#if !ticket.comments?.length}
-                <p class="text-sm text-muted-foreground">No comments yet.</p>
-              {/if}
-            </div>
-          </div>
+{#if ticketId && ticket}
+  <div class="scrim" transition:fade={{ duration: dur }} onclick={close} role="presentation"></div>
+  <aside
+    class="drawer"
+    transition:fly={{ x: 420, duration: dur, opacity: 1 }}
+    aria-label="Ticket details"
+  >
+    <div class="inner wp-scroll">
+      <header class="d-head">
+        <div class="idrow">
+          <span class="tid">{ticket.id}</span>
+          {#if readOnly}<span class="ro">read-only</span>{/if}
         </div>
+        <button class="close" aria-label="Close" onclick={close}><X size={18} /></button>
+      </header>
 
-        {#if !$rewinding}
-          <footer class="border-t border-border p-4">
-            <form
-              class="space-y-2"
-              onsubmit={(e) => {
-                e.preventDefault();
-                void addComment();
-              }}
-            >
-              <Textarea
-                bind:value={comment}
-                placeholder="Add a comment…"
-                class="min-h-[60px]"
-              />
-              {#if error}
-                <p class="text-xs text-destructive">{error}</p>
-              {/if}
-              <div class="flex justify-end">
-                <Button type="submit" size="sm" disabled={!comment.trim() || submitting}>
-                  {submitting ? 'Posting…' : 'Comment'}
-                </Button>
-              </div>
-            </form>
-          </footer>
-        {:else}
-          <footer class="border-t border-border p-4 text-center text-xs text-muted-foreground">
-            Read-only historical snapshot
-          </footer>
-        {/if}
+      <!-- title -->
+      {#if readOnly}
+        <h2 class="title-ro">{ticket.title}</h2>
       {:else}
-        <div class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-          Ticket not found.
-        </div>
+        <input
+          class="title-input"
+          bind:value={titleDraft}
+          onfocus={() => (titleFocused = true)}
+          onblur={saveTitle}
+          onkeydown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        />
       {/if}
-    </aside>
-  </div>
+
+      <!-- meta grid -->
+      <div class="grid">
+        <div class="field">
+          <span class="flabel">Status</span>
+          <select
+            class="sel"
+            disabled={readOnly}
+            value={currentList?.list ?? ''}
+            onchange={(e) => changeStatus(e.currentTarget.value)}
+          >
+            {#each $board?.lists ?? [] as l (l.list)}
+              <option value={l.list}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="field">
+          <span class="flabel">Type</span>
+          <select
+            class="sel"
+            disabled={readOnly}
+            value={ticket.type ?? ''}
+            onchange={(e) =>
+              patch({ type: e.currentTarget.value === '' ? null : e.currentTarget.value })}
+          >
+            <option value="">— none —</option>
+            {#each $definitions.types as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+          </select>
+        </div>
+
+        <div class="field">
+          <span class="flabel">Priority</span>
+          <select
+            class="sel"
+            disabled={readOnly}
+            value={ticket.priority ?? ''}
+            onchange={(e) =>
+              patch({ priority: e.currentTarget.value === '' ? null : e.currentTarget.value })}
+          >
+            <option value="">— none —</option>
+            {#each $definitions.priorities as p (p)}
+              <option value={p}>{p}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+
+      <!-- labels -->
+      <div class="field">
+        <span class="flabel">Labels</span>
+        {#if readOnly}
+          <div class="chips-ro">
+            {#each ticket.labels as l (l)}<Chip>{l}</Chip>{:else}<span class="dim">—</span>{/each}
+          </div>
+        {:else}
+          <LabelPicker selected={ticket.labels} onchange={(labels) => patch({ labels })} />
+        {/if}
+      </div>
+
+      <!-- tags -->
+      <div class="field">
+        <span class="flabel">Tags</span>
+        <div class="tags">
+          {#each ticket.tags as tag (tag)}
+            <Chip mono onremove={readOnly ? undefined : () => removeTag(tag)}>#{tag}</Chip>
+          {/each}
+          {#if !readOnly}
+            <input
+              class="taginput"
+              placeholder="add tag"
+              bind:value={tagInput}
+              onkeydown={(e) => e.key === 'Enter' && addTag()}
+              onblur={addTag}
+            />
+          {:else if ticket.tags.length === 0}
+            <span class="dim">—</span>
+          {/if}
+        </div>
+      </div>
+
+      <!-- assignees -->
+      <div class="field">
+        <span class="flabel">Assignees</span>
+        {#if readOnly}
+          <div class="chips-ro">
+            {#each ticket.assignees as a (a)}
+              <span class="pill-ro"
+                ><Avatar id={a} identity={identityFor(a)} size={20} />{identityFor(a)?.display_name ??
+                  a}</span
+              >
+            {:else}
+              <span class="dim">—</span>
+            {/each}
+          </div>
+        {:else}
+          <AssigneePicker
+            selected={ticket.assignees}
+            onchange={(assignees) => patch({ assignees })}
+          />
+        {/if}
+      </div>
+
+      <!-- body -->
+      <div class="field">
+        <div class="flabel-row">
+          <span class="flabel">Description</span>
+          {#if !readOnly}
+            {#if editingBody}
+              <button class="linkbtn" onclick={saveBody}><Eye size={12} /> Preview</button>
+            {:else}
+              <button class="linkbtn" onclick={startBody}><Pencil size={12} /> Edit</button>
+            {/if}
+          {/if}
+        </div>
+        {#if editingBody && !readOnly}
+          <textarea
+            class="body-edit wp-scroll"
+            bind:value={bodyDraft}
+            placeholder="Markdown supported…"
+          ></textarea>
+        {:else if ticket.body}
+          <Markdown source={ticket.body} />
+        {:else}
+          <span class="dim">No description.</span>
+        {/if}
+      </div>
+
+      <!-- attachments -->
+      <div class="field">
+        <span class="flabel">Attachments</span>
+        <Attachments ticketId={ticket.id} attachments={ticket.attachments} {readOnly} />
+      </div>
+
+      <!-- comments -->
+      <div class="field">
+        <span class="flabel">Comments ({ticket.comments.length})</span>
+        <div class="comments">
+          {#each ticket.comments as c (c.id)}
+            <div class="comment">
+              <div class="c-head">
+                <Avatar id={c.author} identity={identityFor(c.author)} size={20} />
+                <span class="c-author">{identityFor(c.author)?.display_name ?? c.author}</span>
+                <span class="c-time">{formatDate(c.created)}{c.edited ? ' · edited' : ''}</span>
+              </div>
+              <div class="c-body"><Markdown source={c.body} /></div>
+            </div>
+          {/each}
+          {#if ticket.comments.length === 0}
+            <span class="dim">No comments yet.</span>
+          {/if}
+        </div>
+        {#if !readOnly}
+          <div class="c-add">
+            <textarea
+              class="c-input"
+              rows="2"
+              placeholder="Write a comment…"
+              bind:value={commentDraft}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addComment();
+              }}
+            ></textarea>
+            <button class="c-send" aria-label="Send comment" onclick={addComment}>
+              <Send size={15} />
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      {#if saveError}<div class="err">{saveError}</div>{/if}
+
+      <footer class="d-foot">
+        <span class="ts">Created {formatDate(ticket.created)} · Updated {formatDate(ticket.updated)}</span>
+      </footer>
+    </div>
+  </aside>
 {/if}
 
 <style>
-  .animate-slide {
-    animation: slide-in 0.18s ease-out both;
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 80;
   }
-  @keyframes slide-in {
-    from {
-      transform: translateX(100%);
-    }
-    to {
-      transform: translateX(0);
-    }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(480px, 100vw);
+    z-index: 81;
+    padding: 10px;
+  }
+  .inner {
+    height: 100%;
+    overflow-y: auto;
+    background: var(--wp-card);
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-lg);
+    box-shadow: var(--wp-shadow-lift);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .d-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .idrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tid {
+    font-family: var(--wp-font-mono);
+    font-size: 13px;
+    color: var(--wp-text-subtle);
+  }
+  .ro {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border-strong);
+    color: var(--wp-text-muted);
+  }
+  .close {
+    display: inline-flex;
+    padding: 6px;
+    border-radius: var(--wp-r-sm);
+    border: none;
+    background: none;
+    color: var(--wp-text-muted);
+    cursor: pointer;
+  }
+  .close:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+  .title-input {
+    font-family: var(--wp-font-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    width: 100%;
+    padding: 6px 8px;
+    margin: -6px -8px;
+    border: 1px solid transparent;
+    border-radius: var(--wp-r-sm);
+    background: transparent;
+    color: var(--wp-text);
+  }
+  .title-input:hover {
+    border-color: var(--wp-border);
+  }
+  .title-input:focus {
+    background: var(--wp-canvas);
+    border-color: var(--wp-border-strong);
+  }
+  .title-ro {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .flabel {
+    font-family: var(--wp-font-display);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--wp-text-muted);
+  }
+  .flabel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sel {
+    height: 32px;
+    padding: 0 8px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-card);
+    color: var(--wp-text);
+    cursor: pointer;
+  }
+  .sel:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .taginput {
+    height: 22px;
+    width: 90px;
+    padding: 0 8px;
+    border-radius: var(--wp-r-sm);
+    border: 1px dashed var(--wp-border-strong);
+    background: transparent;
+    font-size: 11px;
+    color: var(--wp-text);
+  }
+  .chips-ro {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .pill-ro {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 8px 2px 3px;
+    border-radius: var(--wp-r-pill);
+    background: var(--wp-surface);
+    border: 1px solid var(--wp-border);
+  }
+  .linkbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: var(--wp-text-muted);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .linkbtn:hover {
+    color: var(--wp-accent);
+  }
+  .body-edit {
+    min-height: 140px;
+    resize: vertical;
+    padding: 10px;
+    border-radius: var(--wp-r-md);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-canvas);
+    color: var(--wp-text);
+    font-family: var(--wp-font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .dim {
+    color: var(--wp-text-subtle);
+    font-size: 13px;
+  }
+  .comments {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .comment {
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-md);
+    padding: 8px 10px;
+    background: var(--wp-surface);
+  }
+  .c-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .c-author {
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .c-time {
+    margin-left: auto;
+    font-family: var(--wp-font-mono);
+    font-size: 11px;
+    color: var(--wp-text-subtle);
+  }
+  .c-add {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .c-input {
+    flex: 1;
+    resize: vertical;
+    padding: 8px 10px;
+    border-radius: var(--wp-r-md);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-canvas);
+    color: var(--wp-text);
+    font-size: 13px;
+  }
+  .c-send {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    width: 36px;
+    flex: none;
+    border-radius: var(--wp-r-sm);
+    border: none;
+    background: var(--wp-accent);
+    color: var(--wp-on-accent);
+    cursor: pointer;
+  }
+  .c-send:hover {
+    background: var(--wp-accent-hover);
+  }
+  .err {
+    font-size: 12px;
+    color: var(--wp-error);
+  }
+  .d-foot {
+    border-top: 1px solid var(--wp-border);
+    padding-top: 12px;
+  }
+  .ts {
+    font-family: var(--wp-font-mono);
+    font-size: 11px;
+    color: var(--wp-text-subtle);
   }
 </style>

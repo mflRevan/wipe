@@ -1,62 +1,117 @@
 <script lang="ts">
-  import { projects, currentProject, health } from '$lib/stores/board';
-  import { ChevronsUpDown, Check, FolderGit2 } from 'lucide-svelte';
+  import { ChevronsUpDown, Check, Folder } from 'lucide-svelte';
+  import Popover from './ui/Popover.svelte';
+  import { projects, currentProject } from '$lib/stores/board';
 
-  interface Props {
-    onselect?: (path: string) => void;
-  }
+  let { onselect }: { onselect: (path: string) => void } = $props();
 
-  let { onselect }: Props = $props();
-
-  let open = $state(false);
-
-  let currentName = $derived.by(() => {
-    const p = $projects.find((x) => x.path === $currentProject);
-    return p?.name ?? ($currentProject ? $currentProject : 'No project');
-  });
-
-  function pick(path: string) {
-    open = false;
-    if (path !== $currentProject) onselect?.(path);
-  }
+  let current = $derived($projects.find((p) => p.path === $currentProject));
 </script>
 
-<div class="relative">
-  <button
-    class="flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium transition-colors hover:bg-accent"
-    onclick={() => (open = !open)}
-    disabled={!$health}
-  >
-    <FolderGit2 class="h-4 w-4 text-primary" />
-    <span class="max-w-[180px] truncate">{currentName}</span>
-    <ChevronsUpDown class="h-3.5 w-3.5 text-muted-foreground" />
-  </button>
-
-  {#if open}
-    <button class="fixed inset-0 z-10 cursor-default" aria-label="Close menu" onclick={() => (open = false)}
-    ></button>
-    <div
-      class="absolute left-0 top-full z-20 mt-1.5 max-h-80 w-72 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-xl"
-    >
-      {#if $projects.length === 0}
-        <p class="px-3 py-4 text-center text-xs text-muted-foreground">No projects found</p>
-      {/if}
+<Popover width="280px">
+  {#snippet trigger({ toggle })}
+    <button class="ps-trigger" onclick={toggle} title="Switch project">
+      <Folder size={14} />
+      <span class="name">{current?.name ?? 'No project'}</span>
+      <ChevronsUpDown size={14} class="chev" />
+    </button>
+  {/snippet}
+  {#snippet children({ close })}
+    {#if $projects.length === 0}
+      <div class="empty">No projects registered</div>
+    {:else}
       {#each $projects as p (p.path)}
         <button
-          class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent"
-          onclick={() => pick(p.path)}
+          class="item"
+          class:active={p.path === $currentProject}
+          onclick={() => {
+            onselect(p.path);
+            close();
+          }}
         >
-          <Check
-            class="h-3.5 w-3.5 shrink-0 {p.path === $currentProject
-              ? 'text-primary'
-              : 'text-transparent'}"
-          />
-          <span class="min-w-0 flex-1">
-            <span class="block truncate font-medium">{p.name}</span>
-            <span class="block truncate text-[11px] text-muted-foreground">{p.path}</span>
+          <span class="col">
+            <span class="pname">{p.name}</span>
+            <span class="ppath">{p.path}</span>
           </span>
+          {#if p.path === $currentProject}<Check size={15} />{/if}
         </button>
       {/each}
-    </div>
-  {/if}
-</div>
+    {/if}
+  {/snippet}
+</Popover>
+
+<style>
+  .ps-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-card);
+    color: var(--wp-text);
+    cursor: pointer;
+    max-width: 260px;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .ps-trigger:hover {
+    background: var(--wp-elevated);
+    border-color: var(--wp-border-strong);
+  }
+  .name {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :global(.ps-trigger .chev) {
+    color: var(--wp-text-subtle);
+    flex: none;
+  }
+  .item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    color: var(--wp-text);
+    border-radius: var(--wp-r-sm);
+    cursor: pointer;
+    text-align: left;
+  }
+  .item:hover {
+    background: var(--wp-elevated);
+  }
+  .item.active {
+    color: var(--wp-accent);
+  }
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+  }
+  .pname {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .ppath {
+    font-family: var(--wp-font-mono);
+    font-size: 11px;
+    color: var(--wp-text-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .empty {
+    padding: 12px;
+    font-size: 13px;
+    color: var(--wp-text-muted);
+    text-align: center;
+  }
+</style>

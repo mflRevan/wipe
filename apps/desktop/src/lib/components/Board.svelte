@@ -1,83 +1,82 @@
 <script lang="ts">
-  import type { DndEvent } from 'svelte-dnd-action';
+  import { browser } from '$app/environment';
   import Column from './Column.svelte';
+  import { board, rewinding, moveTicket } from '$lib/stores/board';
   import type { List, Ticket } from '$lib/types';
-  import { api } from '$lib/api';
-  import { board, currentProject, loadBoard, rewinding } from '$lib/stores/board';
-  import { get } from 'svelte/store';
 
-  interface Props {
-    onopen?: (t: Ticket) => void;
-    onadd?: (listId: string, listName: string) => void;
-  }
+  let { onopen, onadd }: { onopen: (t: Ticket) => void; onadd: (id: string, name: string) => void } =
+    $props();
 
-  let { onopen, onadd }: Props = $props();
+  const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const flipMs = reduced ? 0 : 180;
 
-  // Local, mutable copy the dnd zones operate on. Re-synced whenever the
-  // upstream board changes (WS refetch, project switch, rewind).
-  let columns = $state<List[]>([]);
+  let cols = $state<List[]>([]);
+  let dragging = false;
 
-  let signature = $derived(
-    $board
-      ? $board.lists.map((l) => `${l.list}:${l.tickets.map((t) => t.id).join(',')}`).join('|')
-      : ''
-  );
-
-  // Deep-clone board lists into local state on every meaningful change.
-  let lastSig = '';
+  // Sync local columns from the store whenever the board changes (not mid-drag).
   $effect(() => {
-    const sig = signature;
-    if (sig === lastSig) return;
-    lastSig = sig;
-    columns = $board ? $board.lists.map((l) => ({ ...l, tickets: [...l.tickets] })) : [];
+    const b = $board;
+    if (!b || dragging) return;
+    cols = b.lists.map((l) => ({ ...l, tickets: [...l.tickets] }));
   });
 
-  function setColumn(listId: string, items: Ticket[]) {
-    columns = columns.map((c) => (c.list === listId ? { ...c, tickets: items } : c));
+  function colById(id: string): List | undefined {
+    return cols.find((c) => c.list === id);
   }
 
-  function handleConsider(listId: string, e: CustomEvent<DndEvent<Ticket>>) {
-    setColumn(listId, e.detail.items);
+  function handleConsider(listId: string, items: Ticket[]) {
+    dragging = true;
+    const col = colById(listId);
+    if (col) col.tickets = items;
   }
 
-  async function handleFinalize(listId: string, e: CustomEvent<DndEvent<Ticket>>) {
-    const items = e.detail.items;
-    setColumn(listId, items);
-
-    // Only the destination zone drives the move API call.
-    if (e.detail.info.trigger !== 'droppedIntoZone') return;
-    const movedId = e.detail.info.id;
-    const pos = items.findIndex((t) => t.id === movedId);
-    if (pos < 0) return;
-
-    try {
-      await api.moveTicket(movedId, listId, pos, get(currentProject) ?? undefined);
-      // WS will refetch; also reload to reconcile in case WS is unavailable.
-      await loadBoard();
-    } catch {
-      // Revert optimistic change on failure.
-      await loadBoard();
+  async function handleFinalize(
+    listId: string,
+    items: Ticket[],
+    info: { id: string; trigger: string }
+  ) {
+    const col = colById(listId);
+    if (col) col.tickets = items;
+    dragging = false;
+    // Persist only from the destination zone (covers same-list reorders too).
+    if (info.trigger === 'droppedIntoZone') {
+      const pos = items.findIndex((t) => t.id === info.id);
+      if (pos !== -1) await moveTicket(info.id, listId, pos);
     }
   }
 </script>
 
-<div class="scrollbar-thin flex h-full gap-4 overflow-x-auto pb-4">
-  {#each columns as col (col.list)}
+<div class="board wp-scroll">
+  {#each cols as col (col.list)}
     <Column
       listId={col.list}
       name={col.name}
       tickets={col.tickets}
+      {flipMs}
       dragDisabled={$rewinding}
+      {onopen}
+      {onadd}
       onconsider={handleConsider}
       onfinalize={handleFinalize}
-      {onopen}
-      onadd={(id) => onadd?.(id, col.name)}
     />
   {/each}
-
-  {#if columns.length === 0}
-    <div class="flex w-full items-center justify-center text-sm text-muted-foreground">
-      This board has no lists.
-    </div>
+  {#if cols.length === 0}
+    <div class="empty">This board has no lists.</div>
   {/if}
 </div>
+
+<style>
+  .board {
+    display: flex;
+    gap: 12px;
+    height: 100%;
+    padding-bottom: 8px;
+    overflow-x: auto;
+    align-items: flex-start;
+  }
+  .empty {
+    color: var(--wp-text-muted);
+    font-size: 14px;
+    padding: 24px;
+  }
+</style>

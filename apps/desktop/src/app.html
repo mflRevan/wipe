@@ -1,10 +1,21 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>wipe</title>
+    <script>
+      // Apply persisted theme/accent before first paint to avoid a flash.
+      try {
+        var t = localStorage.getItem('wipe.theme') || 'system';
+        var a = localStorage.getItem('wipe.accent') || 'book-cloth';
+        var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        var r = document.documentElement;
+        r.setAttribute('data-theme', dark ? 'dark' : 'light');
+        if (a && a !== 'book-cloth') r.setAttribute('data-accent', a);
+      } catch (e) {}
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

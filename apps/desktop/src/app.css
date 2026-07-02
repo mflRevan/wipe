@@ -1,70 +1,156 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* ------------------------------------------------------------------ *
+ * wipe design system — tokens + base. Every color/motion/radius here
+ * comes from docs/DESIGN.md. Components reference only --wp-* tokens.
+ * ------------------------------------------------------------------ */
 
-@layer base {
-  :root {
-    /* Dark, minimal theme with a violet/indigo accent. */
-    --background: 240 10% 6%;
-    --foreground: 240 5% 96%;
+/* Self-hosted variable fonts are imported from +layout.svelte (no CDN). */
 
-    --card: 240 8% 9%;
-    --card-foreground: 240 5% 96%;
+/* ---------- Light (default :root) ---------- */
+:root,
+[data-theme='light'] {
+  --wp-canvas: #fafaf7;
+  --wp-surface: #f0f0eb;
+  --wp-card: #ffffff;
+  --wp-elevated: #ffffff;
+  --wp-border: #e5e4df;
+  --wp-border-strong: #d6d5ce;
+  --wp-text: #191919;
+  --wp-text-muted: #666663;
+  --wp-text-subtle: #91918d;
+  --wp-accent: #cc785c;
+  --wp-accent-hover: #b96a4f;
+  --wp-on-accent: #ffffff;
+  --wp-focus: #61aaf2;
+  --wp-error: #bf4d43;
+  --wp-shadow: 0 1px 2px rgba(25, 25, 25, 0.06);
+  --wp-shadow-lift: 0 10px 30px rgba(25, 25, 25, 0.14);
+  color-scheme: light;
+}
 
-    --muted: 240 6% 14%;
-    --muted-foreground: 240 5% 60%;
+/* ---------- Dark ---------- */
+[data-theme='dark'] {
+  --wp-canvas: #191919;
+  --wp-surface: #1e1e1d;
+  --wp-card: #262625;
+  --wp-elevated: #2e2e2c;
+  --wp-border: #302f2d;
+  --wp-border-strong: #40403e;
+  --wp-text: #fafaf7;
+  --wp-text-muted: #91918d;
+  --wp-text-subtle: #666663;
+  --wp-accent: #cc785c;
+  --wp-accent-hover: #d8876b;
+  --wp-on-accent: #fafaf7;
+  --wp-focus: #61aaf2;
+  --wp-error: #bf4d43;
+  --wp-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wp-shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
 
-    --accent: 240 6% 16%;
-    --accent-foreground: 240 5% 96%;
+/* ---------- Accent overrides (only accent tokens change) ---------- */
+[data-accent='kraft'] {
+  --wp-accent: #d4a27f;
+  --wp-accent-hover: #c08f6d;
+  --wp-on-accent: #191919;
+}
+[data-accent='focus'] {
+  --wp-accent: #61aaf2;
+  --wp-accent-hover: #4f98e0;
+  --wp-on-accent: #191919;
+}
+[data-accent='sage'] {
+  --wp-accent: #7e9b7a;
+  --wp-accent-hover: #6d8a69;
+  --wp-on-accent: #191919;
+}
 
-    --primary: 255 85% 66%;
-    --primary-foreground: 0 0% 100%;
+:root {
+  --wp-font-display: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  --wp-font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --wp-font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-    --secondary: 240 6% 14%;
-    --secondary-foreground: 240 5% 96%;
+  --wp-r-sm: 6px;
+  --wp-r-md: 8px;
+  --wp-r-lg: 12px;
+  --wp-r-pill: 999px;
 
-    --destructive: 0 72% 55%;
-    --destructive-foreground: 0 0% 100%;
+  --wp-ease: cubic-bezier(0.2, 0, 0, 1);
+  --wp-fast: 120ms;
+  --wp-base: 160ms;
+  --wp-slow: 220ms;
+}
 
-    --border: 240 6% 18%;
-    --input: 240 6% 18%;
-    --ring: 255 85% 66%;
+* {
+  box-sizing: border-box;
+}
 
-    --radius: 0.75rem;
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
 
-    color-scheme: dark;
-  }
+body {
+  background: var(--wp-canvas);
+  color: var(--wp-text);
+  font-family: var(--wp-font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
 
-  * {
-    border-color: hsl(var(--border));
-  }
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--wp-font-display);
+  margin: 0;
+}
 
-  html,
-  body {
-    height: 100%;
-  }
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
 
-  body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
-    font-feature-settings: 'rlig' 1, 'calt' 1;
-    -webkit-font-smoothing: antialiased;
-  }
+a {
+  color: var(--wp-accent);
+}
 
-  /* Thin, subtle scrollbars for the board columns. */
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--border)) transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--border));
-    border-radius: 9999px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
+/* Global focus ring — never a browser default outline. */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--wp-focus);
+  border-radius: var(--wp-r-sm);
+}
+
+/* Thin scrollbars for board columns and drawer. */
+.wp-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--wp-border-strong) transparent;
+}
+.wp-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.wp-scroll::-webkit-scrollbar-thumb {
+  background: var(--wp-border-strong);
+  border-radius: var(--wp-r-pill);
+}
+.wp-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }

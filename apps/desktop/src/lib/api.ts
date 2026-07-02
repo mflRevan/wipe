@@ -1,6 +1,18 @@
 // Small typed client for the wipe-daemon REST + WebSocket API.
 import { browser } from '$app/environment';
-import type { Board, CommitInfo, CreateTicketInput, Health, Project, Ticket } from './types';
+import type {
+  Attachment,
+  Board,
+  CommitInfo,
+  CreateTicketInput,
+  Definitions,
+  Health,
+  Identity,
+  IdentityKind,
+  Project,
+  Ticket,
+  TicketPatch
+} from './types';
 
 const DEFAULT_BASE = 'http://localhost:6737';
 const STORAGE_KEY = 'wipe.apiBase';
@@ -29,22 +41,63 @@ export function setApiBase(url: string): void {
   else window.localStorage.removeItem(STORAGE_KEY);
 }
 
+function qs(params: Record<string, string | number | undefined>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+async function parseError(res: Response): Promise<string> {
+  let msg = `${res.status} ${res.statusText}`;
+  try {
+    const j = await res.json();
+    if (j?.error) msg = j.error;
+  } catch {
+    /* ignore body parse errors */
+  }
+  return msg;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     ...init,
     headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
   });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      if (j?.error) msg = j.error;
-    } catch {
-      /* ignore body parse errors */
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as T;
+}
+
+/**
+ * The daemon omits empty arrays from ticket JSON (for clean on-disk diffs), so
+ * they arrive as `undefined`. Normalize every ticket to always have its arrays.
+ */
+function fillTicket(t: Ticket): Ticket {
+  return {
+    ...t,
+    body: t.body ?? '',
+    labels: t.labels ?? [],
+    tags: t.tags ?? [],
+    assignees: t.assignees ?? [],
+    comments: t.comments ?? [],
+    attachments: t.attachments ?? []
+  };
+}
+
+function fillBoard(b: Board): Board {
+  return {
+    ...b,
+    lists: (b.lists ?? []).map((l) => ({ ...l, tickets: (l.tickets ?? []).map(fillTicket) }))
+  };
+}
+
+/** Build a media URL, preserving path slashes but encoding each segment. */
+export function mediaUrl(path: string, project?: string): string {
+  const encoded = path
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return `${getApiBase()}/api/media/${encoded}${qs({ project })}`;
 }
 
 export const api = {
@@ -57,33 +110,74 @@ export const api = {
     return r.projects ?? [];
   },
 
-  board(project?: string): Promise<Board> {
-    const q = project ? `?project=${encodeURIComponent(project)}` : '';
-    return req<Board>(`/api/board${q}`);
+  async board(project?: string): Promise<Board> {
+    return fillBoard(await req<Board>(`/api/board${qs({ project })}`));
   },
 
   async history(project?: string): Promise<CommitInfo[]> {
-    const q = project ? `?project=${encodeURIComponent(project)}` : '';
-    const r = await req<{ commits: CommitInfo[] }>(`/api/history${q}`);
+    const r = await req<{ commits: CommitInfo[] }>(`/api/history${qs({ project })}`);
     return r.commits ?? [];
   },
 
-  boardAt(commit: string, project?: string): Promise<Board> {
-    const p = project ? `&project=${encodeURIComponent(project)}` : '';
-    return req<Board>(`/api/board/at?commit=${encodeURIComponent(commit)}${p}`);
+  async boardAt(commit: string, project?: string): Promise<Board> {
+    return fillBoard(await req<Board>(`/api/board/at${qs({ commit, project })}`));
   },
 
-  createTicket(input: CreateTicketInput, project?: string): Promise<Ticket> {
-    return req<Ticket>('/api/tickets', {
-      method: 'POST',
-      body: JSON.stringify({ ...input, project })
+  definitions(project?: string): Promise<Definitions> {
+    return req<Definitions>(`/api/definitions${qs({ project })}`);
+  },
+
+  async identities(project?: string): Promise<Identity[]> {
+    const r = await req<{ identities: Identity[] }>(`/api/identities${qs({ project })}`);
+    return r.identities ?? [];
+  },
+
+  putIdentity(
+    id: string,
+    display_name: string,
+    kind?: IdentityKind,
+    project?: string
+  ): Promise<Identity> {
+    return req<Identity>(`/api/identities/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'PUT',
+      body: JSON.stringify({ display_name, kind })
     });
   },
 
-  moveTicket(id: string, to: string, pos: number, project?: string): Promise<{ ok: boolean }> {
-    return req<{ ok: boolean }>(`/api/tickets/${encodeURIComponent(id)}/move`, {
+  createLabel(
+    name: string,
+    color?: string,
+    description?: string,
+    project?: string
+  ): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/labels${qs({ project })}`, {
       method: 'POST',
-      body: JSON.stringify({ to, pos, project })
+      body: JSON.stringify({ name, color, description })
+    });
+  },
+
+  async createTicket(input: CreateTicketInput, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(`/api/tickets${qs({ project })}`, {
+        method: 'POST',
+        body: JSON.stringify(input)
+      })
+    );
+  },
+
+  async patchTicket(id: string, patch: TicketPatch, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(`/api/tickets/${encodeURIComponent(id)}${qs({ project })}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch)
+      })
+    );
+  },
+
+  moveTicket(id: string, to: string, pos?: number, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/tickets/${encodeURIComponent(id)}/move${qs({ project })}`, {
+      method: 'POST',
+      body: JSON.stringify({ to, pos })
     });
   },
 
@@ -94,11 +188,26 @@ export const api = {
     project?: string
   ): Promise<{ ok: boolean; comment: string }> {
     return req<{ ok: boolean; comment: string }>(
-      `/api/tickets/${encodeURIComponent(id)}/comments`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ body, author, project })
-      }
+      `/api/tickets/${encodeURIComponent(id)}/comments${qs({ project })}`,
+      { method: 'POST', body: JSON.stringify({ body, author }) }
+    );
+  },
+
+  async uploadAttachment(id: string, file: File, project?: string): Promise<Attachment> {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(
+      `${getApiBase()}/api/tickets/${encodeURIComponent(id)}/attachments${qs({ project })}`,
+      { method: 'POST', body: form }
+    );
+    if (!res.ok) throw new Error(await parseError(res));
+    return (await res.json()) as Attachment;
+  },
+
+  deleteAttachment(id: string, path: string, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(
+      `/api/tickets/${encodeURIComponent(id)}/attachments${qs({ project })}`,
+      { method: 'DELETE', body: JSON.stringify({ path }) }
     );
   }
 };
@@ -114,10 +223,7 @@ export function subscribeChanges(onChange: () => void): () => void {
   let retry = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const wsUrl = () => {
-    const base = getApiBase();
-    return base.replace(/^http/, 'ws') + '/ws';
-  };
+  const wsUrl = () => getApiBase().replace(/^http/, 'ws') + '/ws';
 
   const connect = () => {
     if (closed) return;

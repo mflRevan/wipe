@@ -1,12 +1,77 @@
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { marked } from 'marked';
+import type { LabelDef } from './types';
 
-/** Merge Tailwind class lists, resolving conflicts. */
-export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs));
+/** The fixed, harmonious label/tag color set from DESIGN.md §4. */
+export const LABEL_COLORS: Record<string, string> = {
+  terracotta: '#CC785C',
+  kraft: '#D4A27F',
+  manilla: '#EBDBBC',
+  sky: '#61AAF2',
+  clay: '#BF4D43',
+  sage: '#7E9B7A',
+  indigo: '#6C7BA8',
+  plum: '#9A7AA0',
+  slate: '#666663'
+};
+
+export const LABEL_KEYS = Object.keys(LABEL_COLORS);
+
+function hash(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return h;
 }
 
-/** Human-friendly relative-ish timestamp. */
+/**
+ * Resolve a label's chip color to a hex. Accepts a stored color key (preferred),
+ * a raw hex (legacy/seed data), or falls back to a deterministic key by name.
+ */
+export function labelColor(name: string, color?: string): string {
+  if (color) {
+    if (LABEL_COLORS[color]) return LABEL_COLORS[color];
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) return color;
+  }
+  const key = LABEL_KEYS[hash(name) % LABEL_KEYS.length];
+  return LABEL_COLORS[key];
+}
+
+export function labelColorFor(name: string, defs: LabelDef[]): string {
+  const def = defs.find((d) => d.name === name);
+  return labelColor(name, def?.color);
+}
+
+/** Deterministic avatar background color for an identity id. */
+export function avatarColor(id: string): string {
+  const key = LABEL_KEYS[hash(id) % LABEL_KEYS.length];
+  return LABEL_COLORS[key];
+}
+
+/** Priority → { dot color, rank } for the card priority dot. */
+export function priorityColor(p?: string): string {
+  switch ((p ?? '').toLowerCase()) {
+    case 'urgent':
+      return '#BF4D43';
+    case 'high':
+      return '#CC785C';
+    case 'medium':
+      return '#61AAF2';
+    case 'low':
+      return '#91918D';
+    default:
+      return 'transparent';
+  }
+}
+
+/** Initials for an avatar from a display name or id. */
+export function initials(name: string): string {
+  const cleaned = name.replace(/<[^>]*>/g, '').trim();
+  const parts = cleaned.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/** Human-friendly timestamp. */
 export function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -18,29 +83,37 @@ export function formatDate(iso: string): string {
   });
 }
 
-/** Deterministic accent color for a label/tag chip. */
-export function chipColor(seed: string): string {
-  const palette = [
-    'text-violet-300 bg-violet-500/10 border-violet-500/20',
-    'text-sky-300 bg-sky-500/10 border-sky-500/20',
-    'text-emerald-300 bg-emerald-500/10 border-emerald-500/20',
-    'text-amber-300 bg-amber-500/10 border-amber-500/20',
-    'text-rose-300 bg-rose-500/10 border-rose-500/20',
-    'text-cyan-300 bg-cyan-500/10 border-cyan-500/20'
-  ];
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return palette[h % palette.length];
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
-const PRIORITY_STYLES: Record<string, string> = {
-  urgent: 'text-rose-300 bg-rose-500/10 border-rose-500/25',
-  high: 'text-orange-300 bg-orange-500/10 border-orange-500/25',
-  medium: 'text-amber-300 bg-amber-500/10 border-amber-500/25',
-  low: 'text-slate-300 bg-slate-500/10 border-slate-500/25'
-};
+marked.setOptions({ gfm: true, breaks: true });
 
-export function priorityColor(p?: string): string {
-  if (!p) return 'text-muted-foreground bg-muted border-border';
-  return PRIORITY_STYLES[p.toLowerCase()] ?? 'text-muted-foreground bg-muted border-border';
+/** Render markdown to HTML (synchronous). */
+export function renderMarkdown(src: string): string {
+  if (!src) return '';
+  return marked.parse(src, { async: false }) as string;
+}
+
+/** Categorize an attachment MIME for rendering (DESIGN.md §9). */
+export type MediaKind = 'image' | 'audio' | 'video' | 'pdf' | 'text' | 'other';
+
+export function mediaKind(mime: string, name: string): MediaKind {
+  const m = (mime || '').toLowerCase();
+  const ext = name.toLowerCase().split('.').pop() ?? '';
+  if (m.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext))
+    return 'image';
+  if (m.startsWith('audio/') || ['mp3', 'ogg', 'wav'].includes(ext)) return 'audio';
+  if (m.startsWith('video/') || ['mp4', 'webm', 'mov'].includes(ext)) return 'video';
+  if (m === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (m.startsWith('text/') || ['md', 'txt', 'csv', 'log', 'json'].includes(ext)) return 'text';
+  return 'other';
 }

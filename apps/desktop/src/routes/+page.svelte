@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { fade, scale } from 'svelte/transition';
+  import { RefreshCw, Settings, X, WifiOff } from 'lucide-svelte';
   import {
     board,
     boardError,
@@ -7,28 +9,23 @@
     healthError,
     currentProject,
     rewinding,
-    rewindCommit,
     loading,
     bootstrap,
     checkHealth,
     loadBoard,
-    loadHistory,
     loadProjects,
-    returnToNow,
+    reloadProject,
     stopLiveUpdates
   } from '$lib/stores/board';
   import { getApiBase, setApiBase } from '$lib/api';
   import Board from '$lib/components/Board.svelte';
-  import HistoryBar from '$lib/components/HistoryBar.svelte';
+  import TimeMachine from '$lib/components/TimeMachine.svelte';
   import ProjectSwitcher from '$lib/components/ProjectSwitcher.svelte';
   import TicketDrawer from '$lib/components/TicketDrawer.svelte';
   import NewTicketDialog from '$lib/components/NewTicketDialog.svelte';
-  import Dialog from '$lib/components/ui/Dialog.svelte';
-  import Input from '$lib/components/ui/Input.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import type { Ticket } from '$lib/types';
-  import { formatDate } from '$lib/utils';
-  import { RefreshCw, Settings, Rotate3d } from 'lucide-svelte';
 
   let drawerTicketId = $state<string | null>(null);
   let newTicketOpen = $state(false);
@@ -42,19 +39,16 @@
     apiBaseInput = getApiBase();
     void bootstrap();
   });
-
   onDestroy(() => stopLiveUpdates());
 
   async function selectProject(path: string) {
     currentProject.set(path);
-    await returnToNow();
-    await loadHistory();
+    await reloadProject();
   }
 
   function openTicket(t: Ticket) {
     drawerTicketId = t.id;
   }
-
   function addToList(listId: string, listName: string) {
     newTicketList = listId;
     newTicketName = listName;
@@ -72,89 +66,62 @@
     if (await checkHealth()) {
       await loadProjects();
       await loadBoard();
-      await loadHistory();
     }
   }
 </script>
 
-<div class="flex h-screen flex-col bg-background">
-  <!-- top bar -->
-  <header class="flex items-center gap-3 border-b border-border px-5 py-3">
-    <div class="flex items-center gap-2.5">
-      <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15">
-        <Rotate3d class="h-4 w-4 text-primary" />
-      </div>
-      <span class="text-base font-semibold tracking-tight">wipe</span>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="wordmark">wipe</span>
     </div>
-
-    <div class="mx-1 h-5 w-px bg-border"></div>
-
+    <div class="sep"></div>
     <ProjectSwitcher onselect={selectProject} />
 
-    <div class="ml-auto flex items-center gap-3">
-      <!-- health indicator -->
+    <div class="right">
       {#if $health}
-        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/50"
-          ></span>
-          <span class="hidden md:inline">daemon v{$health.version}</span>
+        <span class="status ok" title="daemon v{$health.version}">
+          <span class="dot"></span>
+          <span class="stxt">v{$health.version}</span>
         </span>
       {:else}
-        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span class="h-2 w-2 rounded-full bg-rose-500"></span>
-          <span class="hidden md:inline">offline</span>
-        </span>
+        <span class="status off"><span class="dot"></span><span class="stxt">offline</span></span>
       {/if}
 
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-8 w-8"
-        aria-label="Refresh"
-        onclick={refresh}
-      >
-        <RefreshCw class="h-4 w-4 {$loading ? 'animate-spin' : ''}" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-8 w-8"
+      <button class="ib" aria-label="Refresh" title="Refresh" onclick={refresh}>
+        <RefreshCw size={16} class={$loading ? 'spin' : ''} />
+      </button>
+      <ThemeToggle />
+      <button
+        class="ib"
         aria-label="Settings"
+        title="Settings"
         onclick={() => {
           apiBaseInput = getApiBase();
           settingsOpen = true;
         }}
       >
-        <Settings class="h-4 w-4" />
-      </Button>
+        <Settings size={16} />
+      </button>
     </div>
   </header>
 
-  <!-- body -->
-  <main class="flex flex-1 flex-col overflow-hidden p-5">
+  <main class="main">
     {#if !$health}
-      <!-- daemon unreachable -->
-      <div class="flex flex-1 items-center justify-center">
-        <div class="max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-lg">
-          <div
-            class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10"
-          >
-            <span class="h-3 w-3 rounded-full bg-rose-500"></span>
-          </div>
-          <h2 class="text-lg font-semibold">Can’t reach the wipe daemon</h2>
-          <p class="mt-2 text-sm text-muted-foreground">
+      <div class="offline">
+        <div class="offcard">
+          <div class="officon"><WifiOff size={22} /></div>
+          <h2>Can't reach the wipe daemon</h2>
+          <p>
             Start it from your project with
-            <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">wipe serve</code>
+            <code>wipe serve</code>
             then retry. Expecting the API at
-            <span class="font-mono text-foreground">{getApiBase()}</span>.
+            <span class="mono">{getApiBase()}</span>.
           </p>
-          {#if $healthError}
-            <p class="mt-2 text-xs text-muted-foreground/70">({$healthError})</p>
-          {/if}
-          <div class="mt-5 flex justify-center gap-2">
-            <Button onclick={refresh}>Retry connection</Button>
+          {#if $healthError}<p class="dim">({$healthError})</p>{/if}
+          <div class="offactions">
+            <Button variant="primary" onclick={refresh}>Retry connection</Button>
             <Button
-              variant="outline"
               onclick={() => {
                 apiBaseInput = getApiBase();
                 settingsOpen = true;
@@ -164,68 +131,294 @@
         </div>
       </div>
     {:else}
-      <!-- rewind banner -->
-      {#if $rewinding && $rewindCommit}
-        <div
-          class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm"
-        >
-          <span class="font-mono font-semibold text-amber-300">{$rewindCommit.short}</span>
-          <span class="text-foreground/90">{$rewindCommit.subject}</span>
-          <span class="text-muted-foreground">
-            · {$rewindCommit.author_name} · {formatDate($rewindCommit.date)}
-          </span>
-          <span
-            class="ml-1 rounded-full border border-amber-500/30 px-2 py-0.5 text-[11px] font-medium text-amber-300"
-          >
-            read-only
-          </span>
-          <div class="ml-auto">
-            <Button size="sm" variant="secondary" onclick={returnToNow}>Return to now</Button>
-          </div>
-        </div>
-      {/if}
-
-      <!-- history / time machine -->
-      <div class="mb-4">
-        <HistoryBar />
-      </div>
+      <div class="tmwrap"><TimeMachine /></div>
 
       {#if $boardError}
-        <div
-          class="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive"
-        >
-          {$boardError}
-        </div>
+        <div class="banner err">{$boardError}</div>
       {/if}
 
-      <!-- board -->
-      <div class="min-h-0 flex-1">
+      <div class="boardwrap">
         {#if $board}
           <Board onopen={openTicket} onadd={addToList} />
         {:else if $loading}
-          <div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Loading board…
-          </div>
+          <div class="loading">Loading board…</div>
         {/if}
       </div>
     {/if}
   </main>
 </div>
 
-<!-- overlays -->
 <TicketDrawer bind:ticketId={drawerTicketId} />
 <NewTicketDialog bind:open={newTicketOpen} listId={newTicketList} listName={newTicketName} />
 
-<Dialog bind:open={settingsOpen} title="Settings" description="Where the wipe daemon is reachable.">
-  <div class="space-y-2">
-    <label for="api-base" class="text-xs font-medium text-muted-foreground">API base URL</label>
-    <Input id="api-base" bind:value={apiBaseInput} placeholder="http://localhost:6737" />
-    <p class="text-xs text-muted-foreground">
-      Overrides <code class="font-mono">VITE_WIPE_API</code>. Stored locally in this browser.
-    </p>
+{#if settingsOpen}
+  <div class="scrim" transition:fade={{ duration: 160 }} onclick={() => (settingsOpen = false)} role="presentation"></div>
+  <div class="modal-wrap">
+    <div class="modal" transition:scale={{ duration: 160, start: 0.96 }} role="dialog" aria-modal="true">
+      <header class="m-head">
+        <h3>Settings</h3>
+        <button class="close" aria-label="Close" onclick={() => (settingsOpen = false)}><X size={18} /></button>
+      </header>
+      <label class="fl" for="api-base">API base URL</label>
+      <input id="api-base" class="in" bind:value={apiBaseInput} placeholder="http://localhost:6737" />
+      <p class="hint">
+        Overrides <code>VITE_WIPE_API</code>. Stored locally in this browser. Leave blank to use the
+        serving origin.
+      </p>
+      <div class="actions">
+        <Button variant="ghost" onclick={() => (settingsOpen = false)}>Cancel</Button>
+        <Button variant="primary" onclick={saveSettings}>Save &amp; reconnect</Button>
+      </div>
+    </div>
   </div>
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (settingsOpen = false)}>Cancel</Button>
-    <Button onclick={saveSettings}>Save &amp; reconnect</Button>
-  {/snippet}
-</Dialog>
+{/if}
+
+<style>
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--wp-canvas);
+  }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--wp-border);
+    background: var(--wp-canvas);
+  }
+  .wordmark {
+    font-family: var(--wp-font-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--wp-text);
+  }
+  .sep {
+    width: 1px;
+    height: 20px;
+    background: var(--wp-border);
+  }
+  .right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--wp-font-mono);
+    font-size: 12px;
+    color: var(--wp-text-muted);
+  }
+  .status .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .status.ok .dot {
+    background: #7e9b7a;
+  }
+  .status.off .dot {
+    background: var(--wp-error);
+  }
+  .ib {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    width: 32px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-card);
+    color: var(--wp-text-muted);
+    cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .ib:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+  :global(.spin) {
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 14px 16px 16px;
+    gap: 12px;
+  }
+  .tmwrap:empty {
+    display: none;
+  }
+  .boardwrap {
+    flex: 1;
+    min-height: 0;
+  }
+  .loading {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    color: var(--wp-text-muted);
+  }
+  .banner.err {
+    padding: 8px 12px;
+    border-radius: var(--wp-r-md);
+    border: 1px solid color-mix(in srgb, var(--wp-error) 40%, transparent);
+    background: color-mix(in srgb, var(--wp-error) 12%, transparent);
+    color: var(--wp-error);
+    font-size: 13px;
+  }
+  .offline {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .offcard {
+    max-width: 420px;
+    text-align: center;
+    padding: 28px;
+    background: var(--wp-card);
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-lg);
+    box-shadow: var(--wp-shadow);
+  }
+  .officon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--wp-r-pill);
+    background: color-mix(in srgb, var(--wp-error) 12%, transparent);
+    color: var(--wp-error);
+    margin-bottom: 14px;
+  }
+  .offcard h2 {
+    font-family: var(--wp-font-display);
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .offcard p {
+    font-size: 13px;
+    color: var(--wp-text-muted);
+    margin: 0 0 8px;
+    line-height: 1.5;
+  }
+  .offcard code,
+  .mono {
+    font-family: var(--wp-font-mono);
+    font-size: 12px;
+  }
+  .offcard code {
+    background: var(--wp-surface);
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-sm);
+    padding: 1px 5px;
+    color: var(--wp-text);
+  }
+  .dim {
+    color: var(--wp-text-subtle);
+    font-size: 12px;
+  }
+  .offactions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  /* settings modal */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 90;
+  }
+  .modal-wrap {
+    position: fixed;
+    inset: 0;
+    z-index: 91;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 14vh;
+    pointer-events: none;
+  }
+  .modal {
+    pointer-events: auto;
+    width: min(440px, 92vw);
+    background: var(--wp-card);
+    border: 1px solid var(--wp-border);
+    border-radius: var(--wp-r-lg);
+    box-shadow: var(--wp-shadow-lift);
+    padding: 18px;
+  }
+  .m-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .m-head h3 {
+    font-family: var(--wp-font-display);
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .close {
+    display: inline-flex;
+    padding: 6px;
+    border: none;
+    background: none;
+    color: var(--wp-text-muted);
+    cursor: pointer;
+    border-radius: var(--wp-r-sm);
+  }
+  .close:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+  .fl {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--wp-text-muted);
+    margin-bottom: 6px;
+  }
+  .in {
+    height: 34px;
+    padding: 0 10px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border);
+    background: var(--wp-canvas);
+    color: var(--wp-text);
+    width: 100%;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--wp-text-subtle);
+    margin: 8px 0 0;
+  }
+  .hint code {
+    font-family: var(--wp-font-mono);
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+</style>

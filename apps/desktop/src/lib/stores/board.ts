@@ -1,6 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, subscribeChanges } from '$lib/api';
-import type { Board, CommitInfo, Health, Project } from '$lib/types';
+import type { Board, CommitInfo, Definitions, Health, Identity, Project, Ticket } from '$lib/types';
 
 export const health = writable<Health | null>(null);
 export const healthError = writable<string | null>(null);
@@ -12,12 +12,29 @@ export const board = writable<Board | null>(null);
 export const boardError = writable<string | null>(null);
 export const loading = writable<boolean>(false);
 
+export const definitions = writable<Definitions>({
+  types: [],
+  labels: [],
+  tags: [],
+  priorities: []
+});
+export const identities = writable<Identity[]>([]);
+
 // Rewind / time-machine state.
 export const history = writable<CommitInfo[]>([]);
 export const rewindCommit = writable<CommitInfo | null>(null);
 export const rewinding = derived(rewindCommit, ($c) => $c !== null);
 
+/** Flat list of every ticket on the current board (for drawer lookup). */
+export const allTickets = derived(board, ($b) =>
+  $b ? $b.lists.flatMap((l) => l.tickets) : ([] as Ticket[])
+);
+
 let unsubscribeWs: (() => void) | null = null;
+
+function project(): string | undefined {
+  return get(currentProject) ?? undefined;
+}
 
 /** Poll health; safe to call repeatedly. */
 export async function checkHealth(): Promise<boolean> {
@@ -39,9 +56,7 @@ export async function loadProjects(): Promise<void> {
     const list = await api.projects();
     projects.set(list);
     const cur = get(currentProject);
-    if (!cur && list.length > 0) {
-      currentProject.set(list[0].path);
-    } else if (cur && !list.some((p) => p.path === cur) && list.length > 0) {
+    if ((!cur || !list.some((p) => p.path === cur)) && list.length > 0) {
       currentProject.set(list[0].path);
     }
   } catch (e) {
@@ -51,11 +66,9 @@ export async function loadProjects(): Promise<void> {
 
 /** Fetch the live board for the current project. */
 export async function loadBoard(): Promise<void> {
-  const project = get(currentProject) ?? undefined;
   loading.set(true);
   try {
-    const b = await api.board(project);
-    board.set(b);
+    board.set(await api.board(project()));
     boardError.set(null);
   } catch (e) {
     boardError.set(e instanceof Error ? e.message : String(e));
@@ -64,11 +77,26 @@ export async function loadBoard(): Promise<void> {
   }
 }
 
+export async function loadDefinitions(): Promise<void> {
+  try {
+    definitions.set(await api.definitions(project()));
+  } catch {
+    /* definitions are non-critical */
+  }
+}
+
+export async function loadIdentities(): Promise<void> {
+  try {
+    identities.set(await api.identities(project()));
+  } catch {
+    /* identities are non-critical */
+  }
+}
+
 /** Fetch the commit history for the current project. */
 export async function loadHistory(): Promise<void> {
-  const project = get(currentProject) ?? undefined;
   try {
-    history.set(await api.history(project));
+    history.set(await api.history(project()));
   } catch (e) {
     boardError.set(e instanceof Error ? e.message : String(e));
   }
@@ -76,11 +104,9 @@ export async function loadHistory(): Promise<void> {
 
 /** Enter rewind mode at a specific commit and load the historical snapshot. */
 export async function enterRewind(commit: CommitInfo): Promise<void> {
-  const project = get(currentProject) ?? undefined;
   loading.set(true);
   try {
-    const b = await api.boardAt(commit.hash, project);
-    board.set(b);
+    board.set(await api.boardAt(commit.hash, project()));
     rewindCommit.set(commit);
     boardError.set(null);
   } catch (e) {
@@ -96,14 +122,29 @@ export async function returnToNow(): Promise<void> {
   await loadBoard();
 }
 
+/** Optimistically move a ticket, then persist + let WS reconcile. */
+export async function moveTicket(id: string, to: string, pos: number): Promise<void> {
+  try {
+    await api.moveTicket(id, to, pos, project());
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+    await loadBoard(); // roll back to server truth
+  }
+}
+
 /** (Re)initialise everything for the current environment. */
 export async function bootstrap(): Promise<void> {
   const ok = await checkHealth();
   if (!ok) return;
   await loadProjects();
-  await loadBoard();
-  await loadHistory();
+  await Promise.all([loadBoard(), loadDefinitions(), loadIdentities(), loadHistory()]);
   startLiveUpdates();
+}
+
+/** Reload everything for the current project (after a project switch). */
+export async function reloadProject(): Promise<void> {
+  rewindCommit.set(null);
+  await Promise.all([loadBoard(), loadDefinitions(), loadIdentities(), loadHistory()]);
 }
 
 /** Subscribe to WS change events; refetch the live board (not while rewinding). */
@@ -112,6 +153,8 @@ export function startLiveUpdates(): void {
   unsubscribeWs = subscribeChanges(() => {
     if (get(rewindCommit)) return;
     void loadBoard();
+    void loadDefinitions();
+    void loadIdentities();
     void loadHistory();
   });
 }
