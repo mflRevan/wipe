@@ -13,43 +13,27 @@
 [workspace]
 members = ["cargo:."]
 
+# Config for 'dist'
 [dist]
-# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax).
-# Bump this after upgrading your local `cargo-dist`/`dist` install.
-cargo-dist-version = "0.32.0"
-
-# CI backends to support.
-ci = ["github"]
-
-# The installers to generate for each app.
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.28.2"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
 installers = ["shell", "powershell", "npm"]
-
-# Target platforms to build apps for (Rust target-triple syntax).
-targets = [
-    "x86_64-unknown-linux-gnu",
-    "x86_64-unknown-linux-musl",
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-]
-
-# Publish jobs to run in CI after a GitHub Release is created.
-# "npm" publishes the generated wrapper package to the npm registry using
-# the NPM_TOKEN secret (see docs/RELEASE.md).
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+# Publish jobs to run in CI
 publish-jobs = ["npm"]
-
-# Scope/name for the generated npm installer package. Together these publish
-# as "@mflrevan/wipe" — the single, canonical `npm install -g` path.
+# A namespace to use when publishing this package to the npm registry
 npm-scope = "@mflrevan"
+# The npm package should have this name
 npm-package = "wipe"
-
-# Whether to install an updater program alongside the binary.
+# Whether to install an updater program
 install-updater = false
-
-# Archive formats. .tar.gz on unix and .zip on windows keep the generated
-# npm installer's extraction simple and dependency-free.
+# The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.gz"
+# The archive format to use for windows builds (defaults .zip)
 windows-archive = ".zip"
-
-# Path that installers should place binaries in.
+# Path that installers should place binaries in
 install-path = "CARGO_HOME"

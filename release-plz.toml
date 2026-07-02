@@ -1,24 +1,21 @@
 # Configuration for release-plz: https://release-plz.dev/docs/config
 #
-# release-plz watches `main`, groups Conventional Commits since the last
-# release, opens/updates a "Release PR" that bumps crate versions and
-# updates CHANGELOG.md files, and (once merged) tags + publishes to
-# crates.io.
+# We use release-plz ONLY to publish crates to crates.io, and only when a `v*`
+# tag is pushed (see .github/workflows/release-plz.yml). It does NOT create git
+# tags or GitHub Releases here — cargo-dist (`release.yml`) owns the GitHub
+# Release, binaries, and npm package. Versions are bumped by hand in
+# `Cargo.toml` before tagging (no auto "release PRs").
 
 [workspace]
-# Treat all workspace crates as part of one release train (wipe-core and
-# wipe-cli are versioned/released together via workspace.package.version).
+# Treat all workspace crates as part of one release train.
 release = true
 publish = true
 publish_allow_dirty = false
-git_release_enable = true
-git_tag_enable = true
-# release-plz's own tag/release naming; cargo-dist's release.yml triggers
-# on the same `v*` pattern, so tags created here (e.g. "v0.2.0") kick off
-# the cargo-dist build/publish workflow automatically.
-git_tag_name = "v{{ version }}"
-git_release_name = "v{{ version }}"
-semver_check = true
+# cargo-dist owns the GitHub Release and the git tag; release-plz only publishes
+# the crates.
+git_release_enable = false
+git_tag_enable = false
+semver_check = false
 changelog_update = true
 dependencies_update = false
 
@@ -56,6 +53,11 @@ sort_commits = "oldest"
 
 [[package]]
 name = "wipe-core"
+changelog_update = true
+publish = true
+
+[[package]]
+name = "wipe-daemon"
 changelog_update = true
 publish = true
 

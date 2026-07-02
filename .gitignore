@@ -16,9 +16,10 @@ apps/desktop/src-tauri/target
 # Local, user-specific caches inside any wipe board
 **/.wipe/.cache/
 
-# Daemon UI embed staging (populated by scripts/embed-ui from apps/desktop build)
-crates/wipe-daemon/assets/*
-!crates/wipe-daemon/assets/.gitkeep
+# The built desktop UI is committed under crates/wipe-daemon/assets/ so it is
+# embedded into the wipe binary across ALL distribution channels (crates.io,
+# npm, prebuilt binaries). Rebuild + commit it with `scripts/embed-ui` whenever
+# the desktop UI changes. (node_modules etc. are still ignored globally above.)
 
 # Local sandbox: persistent mock projects for running the CLI / agents locally
 tests/sandbox/

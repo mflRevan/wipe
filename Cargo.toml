@@ -22,10 +22,16 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
 
-# Internal crates
-wipe-core = { path = "crates/wipe-core" }
-wipe-daemon = { path = "crates/wipe-daemon" }
+# Internal crates. `version` is required so they can be published to crates.io
+# (path is used for local builds, version for the published dependency).
+wipe-core = { path = "crates/wipe-core", version = "0.1.0" }
+wipe-daemon = { path = "crates/wipe-daemon", version = "0.1.0" }
 
 [profile.release]
 lto = "thin"
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

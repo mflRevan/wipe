@@ -1,105 +1,66 @@
-# Release setup (cargo-dist + release-plz)
+# Release & deploy
 
-This document describes the release automation added to the repo and the
-manual, one-time steps a maintainer needs to do to make it fully live. None
-of this was run automatically -- no tags were pushed, nothing was published,
-and the root `Cargo.toml` was **not** modified.
+Two independent, automated flows:
 
-## What was added
+| Trigger | Workflow | What it does |
+| --- | --- | --- |
+| **push to `main`** (touching `apps/web/`) | `deploy-web.yml` | Deploys the website to **Vercel → wipeboard.dev**. |
+| **push a `v*` tag** | `release.yml` (cargo-dist) | Builds cross-platform binaries, creates the **GitHub Release**, and publishes the **`@mflrevan/wipe` npm** installer. |
+| **push a `v*` tag** | `release-plz.yml` | Publishes the crates (`wipe-core`, `wipe-daemon`, `wipe-cli`) to **crates.io**. |
 
-| File | Purpose |
-| --- | --- |
-| `dist-workspace.toml` | cargo-dist configuration (the modern config file, used instead of `[workspace.metadata.dist]` in `Cargo.toml`). |
-| `.github/workflows/release.yml` | GitHub Actions workflow that runs `dist` to build/package/release binaries when a `v*` tag is pushed. |
-| `release-plz.toml` | release-plz configuration (conventional commits, changelog, workspace mode). |
-| `.github/workflows/release-plz.yml` | GitHub Actions workflow that runs release-plz on push to `main` to open "release PRs" and publish crates to crates.io. |
+**Releases happen only on version tags.** There are no auto "release PRs" — you bump
+the version yourself and push a tag. Pull requests only run CI (`ci.yml`) and a
+cargo-dist dry-run (`dist plan`), never a publish.
 
-## Why `dist-workspace.toml` instead of editing `Cargo.toml`
+## One-time setup
 
-The task constraints for this change said not to touch the root
-`Cargo.toml`. cargo-dist >= 0.28 supports (and now prefers) a standalone
-`dist-workspace.toml` file at the repo root as an alternative to
-`[workspace.metadata.dist]`, so that's what's used here. Functionally it is
-equivalent.
+**Repository secrets** (Settings → Secrets and variables → Actions):
 
-## Manual follow-up steps
+- `CARGO_REGISTRY_TOKEN` — crates.io API token (✅ set).
+- `NPM_TOKEN` — npm **automation** token with publish rights to the `@mflrevan`
+  scope (must bypass 2FA) (✅ set).
+- `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — for `deploy-web.yml`.
 
-1. **Install cargo-dist locally** and let it validate/regenerate this setup:
-   ```sh
-   cargo install cargo-dist --locked
-   cargo dist init
-   ```
-   `cargo dist init` will read the existing `dist-workspace.toml`, ask a few
-   interactive questions (targets, installers, etc. are already filled in),
-   and may adjust the file to match whatever cargo-dist version you have
-   installed.
+**Vercel** (for wipeboard.dev): create a project from this repo with **Root
+Directory = `apps/web`**, attach the `wipeboard.dev` domain, then copy the org/project
+IDs into the secrets above. (Or use Vercel's native Git integration and delete
+`deploy-web.yml` to avoid double deploys.)
 
-2. **Regenerate the CI workflow from the config** so it's byte-for-byte what
-   your installed cargo-dist version expects (action SHAs, step names, and
-   internal `dist` flags occasionally change between versions):
-   ```sh
-   cargo dist generate-ci
-   ```
-   This will overwrite `.github/workflows/release.yml`. The version
-   committed here is a hand-authored approximation of that output (based on
-   cargo-dist v0.32.0's real generated workflow) so it is correct in
-   structure, but treat the `cargo dist generate-ci` output as the source of
-   truth going forward.
+**npm trusted publishing (recommended):** once `@mflrevan/wipe` exists, configure a
+GitHub Actions **trusted publisher** on the package (npmjs.com → package → Settings)
+for repo `mflRevan/wipe`, workflow `release.yml`. Then you can drop `NPM_TOKEN`.
 
-3. **Add repository secrets** (Settings -> Secrets and variables -> Actions):
-   - `NPM_TOKEN` -- an npm automation token with publish rights, used by the
-     `publish-npm` job in `release.yml` to publish the cargo-dist-generated
-     `@mflrevan/wipe` npm installer package.
-   - `CARGO_REGISTRY_TOKEN` -- a crates.io API token, used by
-     `release-plz.yml` to publish `wipe-core` and `wipe-cli` to crates.io.
-   - `GITHUB_TOKEN` is provided automatically by Actions; no setup needed.
+## The embedded UI
 
-4. **Cut the first release** once ready:
+The `wipe` binary serves the board UI from `crates/wipe-daemon/assets/`, which is
+**committed** so the UI is embedded across every channel (crates.io, npm, binaries).
+Rebuild and commit it whenever the desktop UI changes:
+
+```sh
+pwsh scripts/embed-ui.ps1     # or: bash scripts/embed-ui.sh
+git add crates/wipe-daemon/assets && git commit -m "chore: rebuild embedded UI"
+```
+
+`cargo install wipe-cli` and the prebuilt binaries then all ship the real board.
+
+## Cutting a release
+
+1. Rebuild the embedded UI (above) if the desktop UI changed.
+2. Bump `version` in the root `Cargo.toml` (`[workspace.package]`).
+3. Commit on `main`: `git commit -am "chore(release): v0.1.0"` and push.
+4. Tag and push:
    ```sh
    git tag v0.1.0
    git push origin v0.1.0
    ```
-   This triggers `release.yml`, which builds the 5 configured targets, opens
-   a GitHub Release with all archives/checksums/installers attached, and
-   (if `NPM_TOKEN` is set) publishes the npm installer package.
+5. Watch the runs: `gh run watch` (or the Actions tab). On success you'll have a
+   GitHub Release with installers, `@mflrevan/wipe@0.1.0` on npm, and the crates on
+   crates.io.
 
-5. **release-plz** runs on every push to `main` and will open/update a
-   "Release PR" that bumps versions and updates `CHANGELOG.md` files based
-   on Conventional Commits. Merging that PR is what should be treated as
-   "cut a release" long-term -- it's expected to also create/push the
-   matching `vX.Y.Z` git tag (release-plz does this automatically), which
-   in turn triggers `release.yml` above.
+## Config files
 
-## npm distribution
-
-`npm install -g @mflrevan/wipe` is served by **cargo-dist's generated npm
-installer** (`dist-workspace.toml`: `installers = [..., "npm"]`,
-`npm-scope = "@mflrevan"`, `npm-package = "wipe"`), published automatically by
-`release.yml`'s `publish-npm` job on each tagged release. This is the single,
-canonical npm path; the earlier hand-rolled `npm/` wrapper was removed to avoid
-confusion.
-
-## Embedding the desktop UI into release binaries
-
-The `wipe` binary serves the human board UI from assets embedded at compile time
-(`crates/wipe-daemon/assets/`, gitignored). A plain `cargo build` produces a
-working binary that falls back to a placeholder page; to ship the **real** board
-UI in release binaries, the desktop app must be built and staged **before** the
-Rust build.
-
-After running `cargo dist init` / `cargo dist generate-ci`, add a step to the
-build job(s) in `release.yml` that runs the embed script before the cargo build,
-e.g.:
-
-```yaml
-- uses: pnpm/action-setup@v4
-  with: { version: 9 }
-- uses: actions/setup-node@v4
-  with: { node-version: 20, cache: pnpm, cache-dependency-path: apps/desktop/pnpm-lock.yaml }
-- name: Build and embed the desktop UI
-  run: bash scripts/embed-ui.sh   # builds apps/desktop -> crates/wipe-daemon/assets
-```
-
-Locally, `pwsh scripts/embed-ui.ps1` (Windows) or `scripts/embed-ui.sh` (unix)
-does the same before `cargo build --release`.
-
+- `dist-workspace.toml` — cargo-dist config (targets, installers = shell/powershell/npm,
+  npm scope/package). Regenerate CI after editing with `dist init && dist generate`.
+- `release-plz.toml` — release-plz config; scoped to **crates.io only** (it does not
+  create tags or GitHub Releases — cargo-dist owns those).
+- `.github/workflows/{ci,release,release-plz,deploy-web}.yml`.

@@ -1,73 +1,39 @@
-# Standard release-plz workflow: https://release-plz.dev/docs/github/quickstart
+# Publish crates to crates.io — triggered ONLY by pushing a release tag.
 #
-# Runs on every push to `main`:
-# - `release-plz-release` publishes any package whose version was already
-#   bumped (i.e. a release PR was merged) to crates.io and pushes the
-#   matching `vX.Y.Z` git tag / GitHub Release, which in turn triggers
-#   `.github/workflows/release.yml` (cargo-dist).
-# - `release-plz-pr` opens/updates a "Release PR" that bumps versions and
-#   updates CHANGELOG.md files for unreleased Conventional Commits.
+# Releases happen exclusively on `v*` tags (no auto "release PRs" on push to
+# main). On a tag, this publishes the workspace crates (in dependency order,
+# waiting for the index) to crates.io. Binaries, the npm package, and the GitHub
+# Release are handled by cargo-dist in `release.yml`; the website deploys on
+# every `main` push via `deploy-web.yml`.
 #
-# One-time manual setup (see docs/RELEASE.md):
-# - Allow GitHub Actions to create/approve pull requests
-#   (Settings -> Actions -> General -> Workflow permissions).
-# - Add the `CARGO_REGISTRY_TOKEN` repository secret.
+# One-time setup (see docs/RELEASE.md): add the `CARGO_REGISTRY_TOKEN` secret.
 
-name: Release-plz
+name: Publish crates
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
 
 jobs:
-  # Release unpublished packages.
-  # If you'd rather run `cargo publish` and push tags yourself, remove this job.
-  release-plz-release:
-    name: Release-plz release
+  crates:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
     if: ${{ github.repository_owner == 'mflRevan' }}
     permissions:
-      # Push tags, and create releases.
-      contents: write
-      # Detect the release PR and its commits.
-      pull-requests: read
+      contents: read
     steps:
-      - &checkout
-        name: Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - &install-rust
-        name: Install Rust toolchain
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
+      - name: Publish with release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  # Create/update a PR with the next release's version bump and changelog.
-  release-plz-pr:
-    name: Release-plz PR
-    runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'mflRevan' }}
-    permissions:
-      contents: write
-      pull-requests: write
-    concurrency:
-      group: release-plz-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - *checkout
-      - *install-rust
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
