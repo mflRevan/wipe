@@ -628,7 +628,10 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
         expose: settings.daemon.expose,
         open: args.open,
     };
-    out.line(format!("starting wipe UI for '{}' on port {port}…", s.load_board()?.name));
+    out.line(format!(
+        "starting wipe UI for '{}' on port {port}…",
+        s.load_board()?.name
+    ));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -188,8 +188,16 @@ fn supervision_protocol_offline() {
 
     // Supervisor files a spec ticket into `todo`.
     let filed = p.json(&[
-        "ticket", "create", "--title", "Implement add", "--type", "feature", "--list", "todo",
-        "--body", "Create calc.py defining add(a, b).",
+        "ticket",
+        "create",
+        "--title",
+        "Implement add",
+        "--type",
+        "feature",
+        "--list",
+        "todo",
+        "--body",
+        "Create calc.py defining add(a, b).",
     ]);
     assert_eq!(filed["id"], "T-1");
 
@@ -204,11 +212,17 @@ fn supervision_protocol_offline() {
     assert!(spec["body"].as_str().unwrap().contains("calc.py"));
 
     // ...reports back and advances the ticket.
-    p.json(&["comment", "add", &id, "--body", "Implemented add(a,b) in calc.py"]);
+    p.json(&[
+        "comment",
+        "add",
+        &id,
+        "--body",
+        "Implemented add(a,b) in calc.py",
+    ]);
     p.json(&["ticket", "move", &id, "--to", "done"]);
 
     // Supervisor verifies the acceptance state.
     let done = p.json(&["ticket", "show", &id]);
     assert_eq!(done["list"], "done");
-    assert!(done["comments"].as_array().unwrap().len() >= 1);
+    assert!(!done["comments"].as_array().unwrap().is_empty());
 }

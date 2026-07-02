@@ -44,8 +44,12 @@ pub fn is_repo(root: &Path) -> bool {
 /// commits touching that path are returned. `limit` caps the number of commits.
 pub fn log(root: &Path, pathspec: Option<&str>, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
     let format = format!("--format=%H{FS}%h{FS}%an{FS}%ae{FS}%aI{FS}%s{RS}");
-    let mut args: Vec<String> =
-        vec!["--no-pager".into(), "log".into(), format, "--no-color".into()];
+    let mut args: Vec<String> = vec![
+        "--no-pager".into(),
+        "log".into(),
+        format,
+        "--no-color".into(),
+    ];
     if let Some(l) = limit {
         args.push("-n".into());
         args.push(l.to_string());
@@ -116,7 +120,9 @@ fn run(root: &Path, args: &[&str]) -> Result<String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(Error::msg(String::from_utf8_lossy(&out.stderr).trim().to_string()))
+        Err(Error::msg(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
     }
 }
 

@@ -9,12 +9,21 @@ use wipe_core::ops::{self, NewTicket};
 use wipe_core::Store;
 
 fn git(root: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git").arg("-C").arg(root).args(args).output().unwrap()
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn git_ok(root: &Path, args: &[&str]) {
     let out = git(root, args);
-    assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn now() -> chrono::DateTime<chrono::Utc> {
@@ -32,8 +41,24 @@ fn concurrent_edits_to_different_tickets_merge_cleanly() {
     git_ok(root, &["config", "user.name", "Tester"]);
 
     let store = Store::init(root, "Merge Test", now()).unwrap();
-    ops::create_ticket(&store, NewTicket { title: "Alpha".into(), ..Default::default() }, now()).unwrap();
-    ops::create_ticket(&store, NewTicket { title: "Beta".into(), ..Default::default() }, now()).unwrap();
+    ops::create_ticket(
+        &store,
+        NewTicket {
+            title: "Alpha".into(),
+            ..Default::default()
+        },
+        now(),
+    )
+    .unwrap();
+    ops::create_ticket(
+        &store,
+        NewTicket {
+            title: "Beta".into(),
+            ..Default::default()
+        },
+        now(),
+    )
+    .unwrap();
     git_ok(root, &["add", "-A"]);
     git_ok(root, &["commit", "-q", "-m", "seed two tickets"]);
 

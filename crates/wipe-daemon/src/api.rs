@@ -50,7 +50,9 @@ pub struct ProjectQuery {
 }
 
 fn store_for(state: &AppState, project: Option<String>) -> Result<Store, ApiError> {
-    let root = project.map(PathBuf::from).unwrap_or_else(|| state.current.clone());
+    let root = project
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.current.clone());
     Ok(Store::open(root)?)
 }
 
@@ -62,7 +64,10 @@ fn board_json(board: &Board, view: &[(String, Vec<Ticket>)]) -> Value {
     let lists: Vec<Value> = view
         .iter()
         .map(|(list_id, tickets)| {
-            let name = board.list(list_id).map(|l| l.name.clone()).unwrap_or_else(|| list_id.clone());
+            let name = board
+                .list(list_id)
+                .map(|l| l.name.clone())
+                .unwrap_or_else(|| list_id.clone());
             json!({ "list": list_id, "name": name, "tickets": tickets })
         })
         .collect();
@@ -124,7 +129,9 @@ pub async fn board_at(State(state): State<AppState>, Query(q): Query<AtQuery>) -
         }
         lists.push(json!({ "list": list.id, "name": list.name, "tickets": tickets }));
     }
-    Ok(Json(json!({ "board": board.name, "commit": q.commit, "lists": lists })))
+    Ok(Json(
+        json!({ "board": board.name, "commit": q.commit, "lists": lists }),
+    ))
 }
 
 // --- write endpoints -------------------------------------------------------
@@ -151,7 +158,10 @@ pub struct CreateTicketBody {
 }
 
 /// `POST /api/tickets`
-pub async fn create_ticket(State(state): State<AppState>, Json(b): Json<CreateTicketBody>) -> ApiResult {
+pub async fn create_ticket(
+    State(state): State<AppState>,
+    Json(b): Json<CreateTicketBody>,
+) -> ApiResult {
     let store = store_for(&state, b.project)?;
     let spec = NewTicket {
         title: b.title,

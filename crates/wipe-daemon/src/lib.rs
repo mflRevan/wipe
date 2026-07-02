@@ -58,7 +58,10 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     registry::register(&cfg.root);
 
     let (tx, _rx) = broadcast::channel::<String>(64);
-    let state = AppState { current: cfg.root.clone(), tx: tx.clone() };
+    let state = AppState {
+        current: cfg.root.clone(),
+        tx: tx.clone(),
+    };
 
     // Watch `.wipe` for live updates; keep the watcher alive for the whole serve.
     let _watcher = watch::spawn(&cfg.root.join(".wipe"), tx.clone());
@@ -113,7 +116,10 @@ mod tests {
         let store = Store::init(dir.path(), "Daemon Test", chrono::Utc::now()).unwrap();
         wipe_core::ops::create_ticket(
             &store,
-            wipe_core::ops::NewTicket { title: "Hello".into(), ..Default::default() },
+            wipe_core::ops::NewTicket {
+                title: "Hello".into(),
+                ..Default::default()
+            },
             chrono::Utc::now(),
         )
         .unwrap();
@@ -122,17 +128,29 @@ mod tests {
 
         let health = app
             .clone()
-            .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
 
         let board = app
-            .oneshot(Request::builder().uri("/api/board").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/board")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(board.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(board.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(board.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["board"], "Daemon Test");
         assert_eq!(v["lists"][0]["tickets"][0]["title"], "Hello");
