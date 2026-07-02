@@ -1,20 +1,19 @@
-# Publish the @mflrevan/wipe npm package via npm **OIDC trusted publishing** —
-# no token, no 2FA. Runs when a GitHub Release is published (by cargo-dist's
-# release.yml) and can be re-run manually for a given tag.
+# Publish the @mflrevan/wipe npm package via npm **OIDC trusted publishing**
+# (no token, no 2FA). Triggers on the SAME `v*` tag as the crates and binary
+# releases, so one tagged commit ships everything automatically.
 #
-# One-time npm setup: on npmjs.com the package's Trusted Publisher must point at
-# THIS workflow file (repo mflRevan/wipe, workflow `publish-npm.yml`).
+# It builds the npm installer package itself with `dist` (self-contained; no
+# dependency on the release job's timing) and publishes it tokenlessly. The
+# package's Trusted Publisher on npmjs.com must point at this workflow
+# (repo mflRevan/wipe, workflow `publish-npm.yml`).
 
 name: Publish npm
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to publish (e.g. v0.1.0)"
-        required: true
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -25,9 +24,8 @@ jobs:
     name: Publish to npm (OIDC)
     runs-on: ubuntu-latest
     if: ${{ github.repository_owner == 'mflRevan' }}
-    env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -35,14 +33,13 @@ jobs:
         run: |
           npm install -g npm@latest
           npm --version
-      - name: Download the npm package from the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "*-npm-package.tar.gz" -D .
+      - name: Install dist
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.28.2/cargo-dist-installer.sh | sh
+      - name: Build the npm installer package
+        run: dist build --artifacts=global
       - name: Publish via OIDC trusted publisher
         run: |
-          mkdir npmpkg && tar -xzf *-npm-package.tar.gz -C npmpkg
-          pkgdir="$(dirname "$(find npmpkg -name package.json | head -1)")"
-          echo "publishing from $pkgdir"
+          pkgdir="$(dirname "$(find target/distrib -name package.json -path '*npm-package*' | head -1)")"
+          echo "publishing @mflrevan/wipe from $pkgdir"
           cd "$pkgdir"
           npm publish --access public
