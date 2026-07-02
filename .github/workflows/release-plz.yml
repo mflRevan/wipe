@@ -24,8 +24,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
+        # Check out the `main` branch (not the detached tag) so release-plz can
+        # resolve the current branch / upstream when publishing.
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
