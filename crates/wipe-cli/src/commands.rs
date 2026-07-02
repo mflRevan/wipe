@@ -14,7 +14,7 @@ use crate::identity;
 use crate::output::{dim, id_style, Out};
 
 /// The embedded agent SKILL guide, printed by `wipe skill`.
-const SKILL: &str = include_str!("../../../skills/SKILL.md");
+const SKILL: &str = include_str!("../skills/SKILL.md");
 
 /// Open the board for the current directory.
 fn store() -> Result<Store> {
