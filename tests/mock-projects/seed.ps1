@@ -12,7 +12,7 @@ $wipe = Join-Path $repo "target/debug/wipe.exe"
 if (-not (Test-Path $wipe)) { $wipe = Join-Path $repo "target/debug/wipe" }
 if (-not (Test-Path $wipe)) { throw "build first: cargo build" }
 
-if (-not $Dir) { $Dir = Join-Path ([System.IO.Path]::GetTempPath()) "wipe-demo" }
+if (-not $Dir) { $Dir = Join-Path $repo "tests\sandbox\demo" }
 if (Test-Path $Dir) { Remove-Item -Recurse -Force $Dir }
 New-Item -ItemType Directory -Force $Dir | Out-Null
 

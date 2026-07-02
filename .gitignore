@@ -20,6 +20,9 @@ apps/desktop/src-tauri/target
 crates/wipe-daemon/assets/*
 !crates/wipe-daemon/assets/.gitkeep
 
+# Local sandbox: persistent mock projects for running the CLI / agents locally
+tests/sandbox/
+
 # Working build log (per project convention)
 /PLAN.md
 

@@ -6,7 +6,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WIPE="$REPO/target/debug/wipe"; [ -x "$WIPE" ] || WIPE="$REPO/target/debug/wipe.exe"
 [ -x "$WIPE" ] || { echo "build first: cargo build" >&2; exit 1; }
 
-DIR="${1:-${TMPDIR:-/tmp}/wipe-demo}"
+DIR="${1:-$REPO/tests/sandbox/demo}"
 SERVE=0; [ "${2:-}" = "--serve" ] && SERVE=1
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
 
