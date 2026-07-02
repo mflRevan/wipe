@@ -174,9 +174,4 @@ for community expectations.
 
 ## License
 
-`wipe` is dual-licensed under either of:
-
-- MIT license ([LICENSE-MIT](./LICENSE-MIT))
-- Apache License, Version 2.0 ([LICENSE-APACHE](./LICENSE-APACHE))
-
-at your option.
+`wipe` is released under the [MIT License](https://github.com/mflRevan/wipe/blob/main/LICENSE-MIT).

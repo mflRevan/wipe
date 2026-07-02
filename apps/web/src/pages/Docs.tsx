@@ -140,7 +140,7 @@ function Quickstart() {
         <div className="space-y-2">
           <H3>2. Create a ticket</H3>
           <CodeBlock
-            code={`wipe ticket create --title "Write onboarding docs" --type feature --priority high`}
+            code={`wipe ticket create --title "Write onboarding docs" --priority high`}
             prompt
           />
         </div>

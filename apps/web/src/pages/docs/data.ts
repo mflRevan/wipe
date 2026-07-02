@@ -54,9 +54,8 @@ export const CLI_GROUPS: CliGroup[] = [
     commands: [
       {
         command: "wipe ticket create",
-        description: "Create a ticket with a title, type, and priority.",
-        example:
-          'wipe ticket create --title "Add login" --type feature --priority high --json',
+        description: "Create a ticket with a title, priority, and labels.",
+        example: 'wipe ticket create --title "Add login" --priority high --json',
       },
       {
         command: "wipe ticket move",
@@ -98,28 +97,17 @@ export const CLI_GROUPS: CliGroup[] = [
   },
   {
     name: "label",
-    summary: "Define and assign colored labels.",
+    summary: "Define and assign colored labels (the only categorization).",
     commands: [
       {
         command: "wipe label create",
-        description: "Create a label with a name and hex color.",
-        example: 'wipe label create needs-review --color "#f5a623"',
+        description: "Create a label; a color is auto-assigned if you don't pass one.",
+        example: "wipe label create needs-review",
       },
       {
         command: "wipe label assign",
         description: "Assign an existing label to a ticket.",
         example: "wipe label assign T-1 needs-review",
-      },
-    ],
-  },
-  {
-    name: "tag",
-    summary: "Attach freeform tags to tickets.",
-    commands: [
-      {
-        command: "wipe tag add",
-        description: "Add a tag to a ticket.",
-        example: "wipe tag add T-1 backend",
       },
     ],
   },

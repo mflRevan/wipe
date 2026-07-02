@@ -76,7 +76,7 @@ const quickstart = `# Initialize a board in your project
 wipe init .
 
 # Create a ticket
-wipe ticket create --title "Write onboarding docs" --type feature --priority high
+wipe ticket create --title "Write onboarding docs" --priority high
 
 # Move it as work progresses
 wipe ticket move T-1 --to in-progress
@@ -103,7 +103,7 @@ export default function Landing() {
             className="animate-fade-up mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors duration-wp-fast hover:text-foreground"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-            Pre-1.0 · open source · MIT OR Apache-2.0
+            Pre-1.0 · open source · MIT
           </a>
           <h1 className="animate-fade-up max-w-3xl font-display text-4xl font-semibold tracking-[-0.01em] sm:text-6xl">
             A git-native task board

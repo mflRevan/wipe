@@ -103,7 +103,7 @@ each has a specific job and generally must live at the repo root.
 | File | Why it exists |
 | --- | --- |
 | `README.md` | The front page: what wipe is, install, quickstart. |
-| `LICENSE-MIT`, `LICENSE-APACHE` | The open-source license (dual MIT/Apache-2.0, the Rust-ecosystem norm — users may pick either). |
+| `LICENSE-MIT` | The open-source license (MIT). |
 | `CONTRIBUTING.md` | How to build/test and the commit conventions. |
 | `CODE_OF_CONDUCT.md` | Community behavior policy (standard Contributor Covenant). |
 | `SECURITY.md` | How to report a security issue privately. |

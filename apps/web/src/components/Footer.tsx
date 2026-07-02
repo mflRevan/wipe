@@ -20,7 +20,7 @@ export function Footer() {
           <a href={REPO_URL} target="_blank" rel="noreferrer" className="hover:text-foreground">
             GitHub
           </a>
-          <span className="text-xs">MIT OR Apache-2.0</span>
+          <span className="text-xs">MIT</span>
         </div>
       </div>
     </footer>
