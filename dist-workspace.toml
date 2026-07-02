@@ -23,8 +23,9 @@ ci = "github"
 installers = ["shell", "powershell", "npm"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
-# Publish jobs to run in CI
-publish-jobs = ["npm"]
+# npm is published tokenlessly via OIDC in .github/workflows/publish-npm.yml,
+# not by cargo-dist (which would use a token). The npm installer is still built
+# and uploaded to the release as `*-npm-package.tar.gz` for that workflow to use.
 # A namespace to use when publishing this package to the npm registry
 npm-scope = "@mflrevan"
 # The npm package should have this name
