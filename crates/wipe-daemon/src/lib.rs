@@ -84,7 +84,7 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     };
     println!("wipe UI serving on http://{shown}  (Ctrl-C to stop)");
     if cfg.open {
-        println!("open http://{shown} in your browser");
+        open_browser(&format!("http://{shown}"));
     }
 
     let app = router(state);
@@ -96,6 +96,16 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Best-effort: open `url` in the user's default browser.
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 #[cfg(test)]
