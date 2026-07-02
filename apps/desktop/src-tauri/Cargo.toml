@@ -1,0 +1,28 @@
+# Standalone crate: the empty [workspace] table detaches this from the parent
+# Cargo workspace so the Rust crates in ../../crates are unaffected.
+[workspace]
+
+[package]
+name = "wipe-desktop"
+version = "0.1.0"
+description = "wipe desktop app (Tauri wrapper around the SvelteKit UI)"
+authors = ["Bilal <bilal@bigitec.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "wipe_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Enabled by `tauri dev`/`tauri build` when using the custom protocol.
+custom-protocol = ["tauri/custom-protocol"]

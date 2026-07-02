@@ -1,0 +1,3 @@
+# The built desktop UI is copied here by scripts/embed-ui before `cargo build`.
+# Contents are gitignored; this file just keeps the directory present so
+# rust-embed has a folder to embed even when the UI hasn't been built.

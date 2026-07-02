@@ -16,6 +16,10 @@ apps/desktop/src-tauri/target
 # Local, user-specific caches inside any wipe board
 **/.wipe/.cache/
 
+# Daemon UI embed staging (populated by scripts/embed-ui from apps/desktop build)
+crates/wipe-daemon/assets/*
+!crates/wipe-daemon/assets/.gitkeep
+
 # Working build log (per project convention)
 /PLAN.md
 
