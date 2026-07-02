@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::id::{slug, ticket_id};
-use crate::model::{Attachment, AttachmentSource, Board, Identity, IdentityKind, List, Ticket};
+use crate::model::{
+    next_label_color, Attachment, AttachmentSource, Board, Identity, IdentityKind, LabelDef, List,
+    Ticket,
+};
 use crate::store::Store;
 
 /// Specification for a new ticket. Only `title` is required.
@@ -20,16 +23,12 @@ pub struct NewTicket {
     pub title: String,
     /// Optional long-form body.
     pub body: Option<String>,
-    /// Optional ticket type.
-    pub kind: Option<String>,
     /// Optional priority.
     pub priority: Option<String>,
     /// Target list ID; defaults to the board's first list.
     pub list: Option<String>,
     /// Labels to apply.
     pub labels: Vec<String>,
-    /// Tags to apply.
-    pub tags: Vec<String>,
     /// Assignees.
     pub assignees: Vec<String>,
 }
@@ -58,10 +57,8 @@ pub fn create_ticket(store: &Store, spec: NewTicket, now: DateTime<Utc>) -> Resu
 
     let mut ticket = Ticket::new(id.clone(), spec.title, now);
     ticket.body = spec.body.unwrap_or_default();
-    ticket.kind = spec.kind;
     ticket.priority = spec.priority;
     ticket.labels = spec.labels;
-    ticket.tags = spec.tags;
     ticket.assignees = spec.assignees;
 
     board
@@ -235,22 +232,18 @@ pub fn board_view(store: &Store) -> Result<(Board, Vec<ListView>)> {
     Ok((board, out))
 }
 
-/// A partial update to a ticket. `None` fields are left unchanged. For `kind` and
-/// `priority`, an inner `Some(None)` clears the value.
+/// A partial update to a ticket. `None` fields are left unchanged. For `priority`,
+/// an inner `Some(None)` clears the value.
 #[derive(Debug, Default, Clone)]
 pub struct TicketPatch {
     /// New title.
     pub title: Option<String>,
     /// New body.
     pub body: Option<String>,
-    /// Set/clear the ticket type.
-    pub kind: Option<Option<String>>,
     /// Set/clear the priority.
     pub priority: Option<Option<String>>,
     /// Replace the label set.
     pub labels: Option<Vec<String>>,
-    /// Replace the tag set.
-    pub tags: Option<Vec<String>>,
     /// Replace the assignee set.
     pub assignees: Option<Vec<String>>,
 }
@@ -269,17 +262,11 @@ pub fn update_ticket(
     if let Some(v) = patch.body {
         t.body = v;
     }
-    if let Some(v) = patch.kind {
-        t.kind = v;
-    }
     if let Some(v) = patch.priority {
         t.priority = v;
     }
     if let Some(v) = patch.labels {
         t.labels = v;
-    }
-    if let Some(v) = patch.tags {
-        t.tags = v;
     }
     if let Some(v) = patch.assignees {
         t.assignees = v;
@@ -287,6 +274,58 @@ pub fn update_ticket(
     t.updated = now;
     store.save_ticket(&t)?;
     Ok(t)
+}
+
+/// Create a label. If `color` is `None`, auto-pick the first unused palette color.
+pub fn create_label(
+    store: &Store,
+    name: &str,
+    color: Option<String>,
+    description: Option<String>,
+) -> Result<LabelDef> {
+    let mut defs = store.load_definitions()?;
+    if defs.labels.iter().any(|l| l.name == name) {
+        return Err(Error::msg(format!("label `{name}` already exists")));
+    }
+    let color = color.or_else(|| Some(next_label_color(&defs.labels)));
+    let label = LabelDef {
+        name: name.to_string(),
+        color,
+        description: description.unwrap_or_default(),
+    };
+    defs.labels.push(label.clone());
+    store.save_definitions(&defs)?;
+    Ok(label)
+}
+
+/// Set a label's color. Errors if the label is not defined.
+pub fn set_label_color(store: &Store, name: &str, color: &str) -> Result<LabelDef> {
+    let mut defs = store.load_definitions()?;
+    let label = defs
+        .labels
+        .iter_mut()
+        .find(|l| l.name == name)
+        .ok_or_else(|| Error::msg(format!("label `{name}` not found")))?;
+    label.color = Some(color.to_string());
+    let out = label.clone();
+    store.save_definitions(&defs)?;
+    Ok(out)
+}
+
+/// Delete a label definition and strip it from every ticket.
+pub fn delete_label(store: &Store, name: &str, now: DateTime<Utc>) -> Result<()> {
+    let mut defs = store.load_definitions()?;
+    defs.labels.retain(|l| l.name != name);
+    store.save_definitions(&defs)?;
+    for id in store.ticket_ids()? {
+        let mut t = store.load_ticket(&id)?;
+        if t.labels.iter().any(|l| l == name) {
+            t.labels.retain(|l| l != name);
+            t.updated = now;
+            store.save_ticket(&t)?;
+        }
+    }
+    Ok(())
 }
 
 /// List identities: the saved registry merged with human authors discovered from

@@ -45,7 +45,7 @@ Acceptance criteria:
 
 When finished: add a comment on this ticket summarizing what you did, then move this ticket to the done list.
 "@
-    & $wipeExe ticket create --title "Implement add(a, b) in calc.py" --type feature --list todo --body $body | Out-Null
+    & $wipeExe ticket create --title "Implement add(a, b) in calc.py" --list todo --body $body | Out-Null
     git add -A; git commit -q -m "chore: seed spec board for subordinate agent"
 }
 finally { Pop-Location }

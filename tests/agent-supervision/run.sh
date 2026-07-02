@@ -25,7 +25,7 @@ echo "==> model:    $MODEL"
   git config user.email "supervisor@wipe.dev"
   git config user.name "Supervisor"
   "$WIPE" init . --name "Calc Service" >/dev/null
-  "$WIPE" ticket create --title "Implement add(a, b) in calc.py" --type feature --list todo \
+  "$WIPE" ticket create --title "Implement add(a, b) in calc.py" --list todo \
     --body "Create a file calc.py at the repository root that defines a function add(a, b) returning a + b.
 
 Acceptance criteria:

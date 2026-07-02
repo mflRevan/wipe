@@ -80,13 +80,11 @@ fn full_agent_flow() {
         "create",
         "--title",
         "Add login",
-        "--type",
-        "feature",
         "--priority",
         "high",
     ]);
     assert_eq!(t1["id"], "T-1");
-    let t2 = p.json(&["ticket", "create", "--title", "Fix navbar", "--type", "bug"]);
+    let t2 = p.json(&["ticket", "create", "--title", "Fix navbar"]);
     assert_eq!(t2["id"], "T-2");
 
     // Move, comment, label.
@@ -192,8 +190,6 @@ fn supervision_protocol_offline() {
         "create",
         "--title",
         "Implement add",
-        "--type",
-        "feature",
         "--list",
         "todo",
         "--body",

@@ -46,7 +46,6 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Ticket(c) => commands::ticket(out, c),
         Command::Comment(c) => commands::comment(out, c),
         Command::Label(c) => commands::label(out, c),
-        Command::Tag(c) => commands::tag(out, c),
         Command::Media(c) => commands::media(out, c),
         Command::Serve(a) => commands::serve(out, a),
         Command::Config(c) => commands::config(out, c),

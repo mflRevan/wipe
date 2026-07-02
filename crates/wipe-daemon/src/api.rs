@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use wipe_core::model::{Board, IdentityKind, LabelDef, Ticket};
+use wipe_core::model::{Board, IdentityKind, Ticket};
 use wipe_core::ops::{self, NewTicket, TicketPatch};
 use wipe_core::{git, Store};
 
@@ -143,16 +143,12 @@ pub struct CreateTicketBody {
     title: String,
     #[serde(default)]
     body: Option<String>,
-    #[serde(default, rename = "type")]
-    kind: Option<String>,
     #[serde(default)]
     priority: Option<String>,
     #[serde(default)]
     list: Option<String>,
     #[serde(default)]
     labels: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
     #[serde(default)]
     assignees: Vec<String>,
 }
@@ -166,11 +162,9 @@ pub async fn create_ticket(
     let spec = NewTicket {
         title: b.title,
         body: b.body,
-        kind: b.kind,
         priority: b.priority,
         list: b.list,
         labels: b.labels,
-        tags: b.tags,
         assignees: b.assignees,
     };
     let ticket = ops::create_ticket(&store, spec, Utc::now())?;
@@ -221,7 +215,7 @@ pub async fn add_comment(
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
 }
 
-/// `GET /api/definitions` — types, labels, tags, priorities.
+/// `GET /api/definitions` — labels + priorities.
 pub async fn definitions(
     State(state): State<AppState>,
     Query(q): Query<ProjectQuery>,
@@ -230,7 +224,7 @@ pub async fn definitions(
     Ok(Json(serde_json::to_value(store.load_definitions()?)?))
 }
 
-/// Body for creating a label definition.
+/// Body for creating a label definition. `color` is optional (auto-assigned).
 #[derive(Debug, Deserialize)]
 pub struct LabelBody {
     project: Option<String>,
@@ -241,28 +235,47 @@ pub struct LabelBody {
     description: Option<String>,
 }
 
-/// `POST /api/labels` — define a new label.
+/// `POST /api/labels` — define a new label (auto-colored if no color given).
 pub async fn create_label(State(state): State<AppState>, Json(b): Json<LabelBody>) -> ApiResult {
     let store = store_for(&state, b.project)?;
-    let mut defs = store.load_definitions()?;
-    if defs.labels.iter().any(|l| l.name == b.name) {
-        return Err(ApiError(anyhow::anyhow!(
-            "label `{}` already exists",
-            b.name
-        )));
-    }
-    defs.labels.push(LabelDef {
-        name: b.name.clone(),
-        color: b.color,
-        description: b.description.unwrap_or_default(),
-    });
-    store.save_definitions(&defs)?;
+    let label = ops::create_label(&store, &b.name, b.color, b.description)?;
     notify(&state);
-    Ok(Json(json!({ "ok": true, "name": b.name })))
+    Ok(Json(serde_json::to_value(label)?))
+}
+
+/// Body for updating a label's color.
+#[derive(Debug, Deserialize)]
+pub struct LabelColorBody {
+    project: Option<String>,
+    color: String,
+}
+
+/// `PATCH /api/labels/{name}` — change a label's color.
+pub async fn recolor_label(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(b): Json<LabelColorBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let label = ops::set_label_color(&store, &name, &b.color)?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(label)?))
+}
+
+/// `DELETE /api/labels/{name}` — delete a label and strip it from all tickets.
+pub async fn delete_label(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    ops::delete_label(&store, &name, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Body for patching a ticket. Absent fields are left unchanged; an explicit
-/// `null` for `type`/`priority` clears them.
+/// `null` for `priority` clears it.
 #[derive(Debug, Deserialize)]
 pub struct PatchBody {
     project: Option<String>,
@@ -270,14 +283,10 @@ pub struct PatchBody {
     title: Option<String>,
     #[serde(default)]
     body: Option<String>,
-    #[serde(default, rename = "type")]
-    kind: Option<Option<String>>,
     #[serde(default)]
     priority: Option<Option<String>>,
     #[serde(default)]
     labels: Option<Vec<String>>,
-    #[serde(default)]
-    tags: Option<Vec<String>>,
     #[serde(default)]
     assignees: Option<Vec<String>>,
 }
@@ -292,10 +301,8 @@ pub async fn patch_ticket(
     let patch = TicketPatch {
         title: b.title,
         body: b.body,
-        kind: b.kind,
         priority: b.priority,
         labels: b.labels,
-        tags: b.tags,
         assignees: b.assignees,
     };
     let ticket = ops::update_ticket(&store, &id, patch, Utc::now())?;
@@ -426,6 +433,86 @@ pub async fn serve_media(
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+/// `GET /api/graph` — the commit graph (all branches) with board checkpoints.
+pub async fn graph(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    let commits = git::graph(store.root(), Some(300))?;
+    Ok(Json(json!({ "commits": commits })))
+}
+
+/// Body for adding a list.
+#[derive(Debug, Deserialize)]
+pub struct AddListBody {
+    project: Option<String>,
+    name: String,
+}
+
+/// `POST /api/lists` — add a list to the board.
+pub async fn add_list(State(state): State<AppState>, Json(b): Json<AddListBody>) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let id = ops::add_list(&store, &b.name, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id, "name": b.name })))
+}
+
+/// Body for renaming a list.
+#[derive(Debug, Deserialize)]
+pub struct RenameListBody {
+    project: Option<String>,
+    name: String,
+}
+
+/// `PATCH /api/lists/{id}` — rename a list.
+pub async fn rename_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<RenameListBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    ops::rename_list(&store, &id, &b.name, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id, "name": b.name })))
+}
+
+/// Body for reordering a list.
+#[derive(Debug, Deserialize)]
+pub struct MoveListBody {
+    project: Option<String>,
+    index: usize,
+}
+
+/// `POST /api/lists/{id}/move` — reorder a list to a new index.
+pub async fn move_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<MoveListBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    ops::move_list(&store, &id, b.index, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id, "index": b.index })))
+}
+
+/// Query for removing a list.
+#[derive(Debug, Deserialize)]
+pub struct RemoveListQuery {
+    project: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
+/// `DELETE /api/lists/{id}` — remove a list (use `?force=true` to delete its cards).
+pub async fn remove_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RemoveListQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    ops::remove_list(&store, &id, q.force, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id })))
 }
 
 // --- websocket -------------------------------------------------------------

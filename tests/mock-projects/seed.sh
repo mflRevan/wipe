@@ -14,11 +14,11 @@ git init -q; git config user.email "demo@wipe.dev"; git config user.name "Demo"
 "$WIPE" init . --name "Payments Service" >/dev/null
 "$WIPE" label create backend --color "#3b82f6" >/dev/null
 "$WIPE" label create urgent  --color "#ef4444" >/dev/null
-"$WIPE" ticket create --title "Design ledger schema"       --type spec    --priority high --list backlog >/dev/null
-"$WIPE" ticket create --title "Implement /charge endpoint" --type feature --priority high --list todo --label backend >/dev/null
-"$WIPE" ticket create --title "Add idempotency keys"       --type feature --list todo --label backend >/dev/null
-"$WIPE" ticket create --title "Fix rounding in refunds"    --type bug     --priority urgent --list in-progress --label urgent --label backend >/dev/null
-"$WIPE" ticket create --title "Set up CI"                  --type chore   --list done >/dev/null
+"$WIPE" ticket create --title "Design ledger schema"          --priority high --list backlog >/dev/null
+"$WIPE" ticket create --title "Implement /charge endpoint" --priority high --list todo --label backend >/dev/null
+"$WIPE" ticket create --title "Add idempotency keys"       --list todo --label backend >/dev/null
+"$WIPE" ticket create --title "Fix rounding in refunds"        --priority urgent --list in-progress --label urgent --label backend >/dev/null
+"$WIPE" ticket create --title "Set up CI"                    --list done >/dev/null
 git add -A && git commit -q -m "chore: seed initial board"
 "$WIPE" comment add T-4 --body "Repro: refund of 0.10 loses a cent due to float math." >/dev/null
 "$WIPE" ticket move T-2 --to in-progress >/dev/null

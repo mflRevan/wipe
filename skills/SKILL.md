@@ -33,7 +33,7 @@ wipe status --json     # see lists and tickets
 Create and place a ticket:
 
 ```bash
-wipe ticket create --title "Add login" --type feature --priority high --json
+wipe ticket create --title "Add login" --priority high --json
 # -> {"id":"T-1", ...}
 ```
 
@@ -58,12 +58,12 @@ wipe comment add T-1 --body "Spec clarified: use OAuth" --json
 wipe comment list T-1 --json
 ```
 
-Labels and tags:
+Labels (the only categorization — there is no "type" or "tags"). New labels are
+auto-assigned a color if you don't pass one:
 
 ```bash
-wipe label create needs-review --color "#f5a623" --json
+wipe label create needs-review --json
 wipe label assign T-1 needs-review --json
-wipe tag add T-1 backend --json
 ```
 
 ## Working with a supervisor

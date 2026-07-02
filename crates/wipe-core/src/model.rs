@@ -138,18 +138,12 @@ pub struct Ticket {
     /// Long-form body (Markdown allowed inside the JSON string).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
-    /// Ticket type (references a name in `definitions.json`).
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
     /// Priority (references a name in `definitions.json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
-    /// Applied label names.
+    /// Applied label names (the only categorization mechanism).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    /// Applied free-form tags.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
     /// Assignee identities (git-style `Name <email>` or agent IDs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assignees: Vec<String>,
@@ -183,10 +177,8 @@ impl Ticket {
             id: id.into(),
             title: title.into(),
             body: String::new(),
-            kind: None,
             priority: None,
             labels: Vec::new(),
-            tags: Vec::new(),
             assignees: Vec::new(),
             relations: Vec::new(),
             attachments: Vec::new(),
@@ -318,20 +310,42 @@ pub enum IdentityKind {
 // definitions.json
 // ---------------------------------------------------------------------------
 
-/// Project-wide registries: ticket types, labels, tags, priorities.
+/// The label color palette. New labels are auto-assigned the first unused entry;
+/// colors can also be changed later. Matches the label set in `docs/DESIGN.md`.
+pub const LABEL_PALETTE: &[&str] = &[
+    "#CC785C", // terracotta
+    "#6C7BA8", // indigo
+    "#7E9B7A", // sage
+    "#61AAF2", // sky
+    "#BF4D43", // clay
+    "#D4A27F", // kraft
+    "#9A7AA0", // plum
+    "#EBDBBC", // manilla
+    "#666663", // slate
+];
+
+/// Pick the first palette color not already used by an existing label; if every
+/// palette color is in use, cycle deterministically by count.
+pub fn next_label_color(existing: &[LabelDef]) -> String {
+    let used: std::collections::HashSet<&str> =
+        existing.iter().filter_map(|l| l.color.as_deref()).collect();
+    for c in LABEL_PALETTE {
+        if !used.contains(c) {
+            return (*c).to_string();
+        }
+    }
+    LABEL_PALETTE[existing.len() % LABEL_PALETTE.len()].to_string()
+}
+
+/// Project-wide registries: labels and priorities. (Tickets are categorized by
+/// labels only; there is no separate "type" or "tags" concept.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Definitions {
     /// On-disk format version.
     pub version: u32,
-    /// Allowed ticket types.
-    #[serde(default)]
-    pub types: Vec<String>,
     /// Defined labels.
     #[serde(default)]
     pub labels: Vec<LabelDef>,
-    /// Registered free-form tags.
-    #[serde(default)]
-    pub tags: Vec<String>,
     /// Allowed priorities, ordered from lowest to highest.
     #[serde(default)]
     pub priorities: Vec<String>,
@@ -342,18 +356,11 @@ impl Definitions {
     pub fn seed() -> Self {
         Definitions {
             version: FORMAT_VERSION,
-            types: vec![
-                "feature".into(),
-                "bug".into(),
-                "chore".into(),
-                "spec".into(),
-            ],
             labels: vec![
-                LabelDef::new("blocked", Some("#e5484d")),
-                LabelDef::new("needs-review", Some("#f5a623")),
-                LabelDef::new("agent", Some("#8e4ec6")),
+                LabelDef::new("blocked", Some(LABEL_PALETTE[4])),
+                LabelDef::new("needs-review", Some(LABEL_PALETTE[3])),
+                LabelDef::new("agent", Some(LABEL_PALETTE[6])),
             ],
-            tags: Vec::new(),
             priorities: vec![
                 "low".into(),
                 "medium".into(),
@@ -470,14 +477,23 @@ mod tests {
     }
 
     #[test]
-    fn ticket_type_serializes_as_type() {
-        let mut t = Ticket::new("T-1", "Hello", fixed());
-        t.kind = Some("bug".into());
+    fn ticket_omits_empty_fields_and_has_no_type_or_tags() {
+        let t = Ticket::new("T-1", "Hello", fixed());
         let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("\"type\":\"bug\""));
-        // Empty vecs and empty body are skipped.
+        // Empty vecs and empty body are skipped for clean diffs.
         assert!(!json.contains("labels"));
+        assert!(!json.contains("assignees"));
         assert!(!json.contains("\"body\""));
+        // Type and tags no longer exist.
+        assert!(!json.contains("\"type\""));
+        assert!(!json.contains("tags"));
+    }
+
+    #[test]
+    fn label_color_auto_picks_unused() {
+        let existing = vec![LabelDef::new("a", Some(LABEL_PALETTE[0]))];
+        let picked = next_label_color(&existing);
+        assert_eq!(picked, LABEL_PALETTE[1]);
     }
 
     #[test]

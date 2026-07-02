@@ -45,7 +45,18 @@ fn router(state: AppState) -> Router {
         .route("/api/history", get(api::history))
         .route("/api/board/at", get(api::board_at))
         .route("/api/definitions", get(api::definitions))
+        .route("/api/graph", get(api::graph))
         .route("/api/labels", post(api::create_label))
+        .route(
+            "/api/labels/{name}",
+            patch(api::recolor_label).delete(api::delete_label),
+        )
+        .route("/api/lists", post(api::add_list))
+        .route(
+            "/api/lists/{id}",
+            patch(api::rename_list).delete(api::remove_list),
+        )
+        .route("/api/lists/{id}/move", post(api::move_list))
         .route("/api/identities", get(api::identities))
         .route("/api/identities/{id}", put(api::put_identity))
         .route("/api/tickets", post(api::create_ticket))

@@ -49,9 +49,6 @@ pub enum Command {
     /// Manage labels.
     #[command(subcommand)]
     Label(LabelCmd),
-    /// Manage free-form tags on tickets.
-    #[command(subcommand)]
-    Tag(TagCmd),
     /// Manage media/attachments referenced by tickets.
     #[command(subcommand)]
     Media(MediaCmd),
@@ -187,9 +184,6 @@ pub struct TicketCreateArgs {
     /// Long-form body (Markdown allowed).
     #[arg(long, short)]
     pub body: Option<String>,
-    /// Ticket type (see `wipe config show` / definitions).
-    #[arg(long = "type", value_name = "TYPE")]
-    pub kind: Option<String>,
     /// Priority.
     #[arg(long)]
     pub priority: Option<String>,
@@ -199,9 +193,6 @@ pub struct TicketCreateArgs {
     /// Label to apply (repeatable).
     #[arg(long = "label", value_name = "LABEL")]
     pub labels: Vec<String>,
-    /// Tag to apply (repeatable).
-    #[arg(long = "tag", value_name = "TAG")]
-    pub tags: Vec<String>,
     /// Assignee (repeatable).
     #[arg(long = "assignee", value_name = "WHO")]
     pub assignees: Vec<String>,
@@ -218,9 +209,6 @@ pub struct TicketEditArgs {
     /// New body.
     #[arg(long)]
     pub body: Option<String>,
-    /// New type.
-    #[arg(long = "type", value_name = "TYPE")]
-    pub kind: Option<String>,
     /// New priority.
     #[arg(long)]
     pub priority: Option<String>,
@@ -235,9 +223,6 @@ pub struct TicketListArgs {
     /// Only tickets carrying this label.
     #[arg(long)]
     pub label: Option<String>,
-    /// Only tickets carrying this tag.
-    #[arg(long)]
-    pub tag: Option<String>,
 }
 
 /// `wipe comment ...`
@@ -296,27 +281,6 @@ pub enum LabelCmd {
         /// Label name.
         name: String,
     },
-}
-
-/// `wipe tag ...`
-#[derive(Debug, Subcommand)]
-pub enum TagCmd {
-    /// Add a tag to a ticket.
-    Add {
-        /// Ticket ID.
-        ticket: String,
-        /// Tag name.
-        name: String,
-    },
-    /// Remove a tag from a ticket.
-    Remove {
-        /// Ticket ID.
-        ticket: String,
-        /// Tag name.
-        name: String,
-    },
-    /// List all tags currently in use.
-    List,
 }
 
 /// `wipe media ...`

@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use wipe_core::model::{Exposure, LabelDef};
+use wipe_core::model::Exposure;
 use wipe_core::ops::{self, NewTicket};
 use wipe_core::Store;
 
@@ -169,11 +169,9 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             let spec = NewTicket {
                 title: a.title,
                 body: a.body,
-                kind: a.kind,
                 priority: a.priority,
                 list: a.list,
                 labels: a.labels,
-                tags: a.tags,
                 assignees: a.assignees,
             };
             let t = ops::create_ticket(&s, spec, Utc::now())?;
@@ -200,9 +198,6 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             }
             if let Some(v) = a.body {
                 t.body = v;
-            }
-            if a.kind.is_some() {
-                t.kind = a.kind;
             }
             if a.priority.is_some() {
                 t.priority = a.priority;
@@ -271,11 +266,6 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 for t in tickets {
                     if let Some(l) = &a.label {
                         if !t.labels.contains(l) {
-                            continue;
-                        }
-                    }
-                    if let Some(tag) = &a.tag {
-                        if !t.tags.contains(tag) {
                             continue;
                         }
                     }
@@ -349,19 +339,14 @@ pub fn label(out: &Out, cmd: LabelCmd) -> Result<()> {
             color,
             description,
         } => {
-            let mut defs = s.load_definitions()?;
-            if defs.labels.iter().any(|l| l.name == name) {
-                bail!("label '{name}' already exists");
-            }
-            defs.labels.push(LabelDef {
-                name: name.clone(),
-                color,
-                description: description.unwrap_or_default(),
-            });
-            s.save_definitions(&defs)?;
+            let label = ops::create_label(&s, &name, color, description)?;
             out.ok(
-                format!("created label '{name}'"),
-                json!({ "ok": true, "name": name }),
+                format!(
+                    "created label '{}' ({})",
+                    label.name,
+                    label.color.clone().unwrap_or_default()
+                ),
+                to_value(&label),
             );
         }
         LabelCmd::List => {
@@ -378,17 +363,7 @@ pub fn label(out: &Out, cmd: LabelCmd) -> Result<()> {
             }
         }
         LabelCmd::Delete { name } => {
-            let mut defs = s.load_definitions()?;
-            defs.labels.retain(|l| l.name != name);
-            s.save_definitions(&defs)?;
-            // Strip from all tickets.
-            for id in s.ticket_ids()? {
-                let mut t = s.load_ticket(&id)?;
-                if t.labels.contains(&name) {
-                    t.labels.retain(|l| l != &name);
-                    s.save_ticket(&t)?;
-                }
-            }
+            ops::delete_label(&s, &name, Utc::now())?;
             out.ok(
                 format!("deleted label '{name}'"),
                 json!({ "ok": true, "name": name }),
@@ -412,51 +387,6 @@ pub fn label(out: &Out, cmd: LabelCmd) -> Result<()> {
                 format!("removed label '{name}' from {ticket}"),
                 to_value(&t),
             );
-        }
-    }
-    Ok(())
-}
-
-/// `wipe tag ...`
-pub fn tag(out: &Out, cmd: TagCmd) -> Result<()> {
-    let s = store()?;
-    match cmd {
-        TagCmd::Add { ticket, name } => {
-            let mut t = s.load_ticket(&ticket)?;
-            if !t.tags.contains(&name) {
-                t.tags.push(name.clone());
-                t.updated = Utc::now();
-                s.save_ticket(&t)?;
-            }
-            let mut defs = s.load_definitions()?;
-            if !defs.tags.contains(&name) {
-                defs.tags.push(name.clone());
-                defs.tags.sort();
-                s.save_definitions(&defs)?;
-            }
-            out.ok(format!("tagged {ticket} '{name}'"), to_value(&t));
-        }
-        TagCmd::Remove { ticket, name } => {
-            let mut t = s.load_ticket(&ticket)?;
-            t.tags.retain(|x| x != &name);
-            t.updated = Utc::now();
-            s.save_ticket(&t)?;
-            out.ok(format!("removed tag '{name}' from {ticket}"), to_value(&t));
-        }
-        TagCmd::List => {
-            let mut tags: std::collections::BTreeSet<String> = Default::default();
-            tags.extend(s.load_definitions()?.tags);
-            for id in s.ticket_ids()? {
-                tags.extend(s.load_ticket(&id)?.tags);
-            }
-            let tags: Vec<String> = tags.into_iter().collect();
-            if out.json {
-                out.json_value(&json!({ "tags": tags }));
-            } else {
-                for t in tags {
-                    println!("{t}");
-                }
-            }
         }
     }
     Ok(())
@@ -696,17 +626,11 @@ fn print_ticket_human(t: &wipe_core::model::Ticket, list_id: Option<&str>) {
     if let Some(l) = list_id {
         println!("  {}", dim(&format!("list: {l}")));
     }
-    if let Some(k) = &t.kind {
-        println!("  {}", dim(&format!("type: {k}")));
-    }
     if let Some(p) = &t.priority {
         println!("  {}", dim(&format!("priority: {p}")));
     }
     if !t.labels.is_empty() {
         println!("  {}", dim(&format!("labels: {}", t.labels.join(", "))));
-    }
-    if !t.tags.is_empty() {
-        println!("  {}", dim(&format!("tags: {}", t.tags.join(", "))));
     }
     if !t.assignees.is_empty() {
         println!(

@@ -24,11 +24,11 @@ try {
     & $wipe label create backend --color "#3b82f6" | Out-Null
     & $wipe label create urgent --color "#ef4444" | Out-Null
 
-    & $wipe ticket create --title "Design ledger schema" --type spec --priority high --list backlog | Out-Null
-    & $wipe ticket create --title "Implement /charge endpoint" --type feature --priority high --list todo --label backend | Out-Null
-    & $wipe ticket create --title "Add idempotency keys" --type feature --list todo --label backend | Out-Null
-    & $wipe ticket create --title "Fix rounding in refunds" --type bug --priority urgent --list in-progress --label urgent --label backend | Out-Null
-    & $wipe ticket create --title "Set up CI" --type chore --list done | Out-Null
+    & $wipe ticket create --title "Design ledger schema" --priority high --list backlog | Out-Null
+    & $wipe ticket create --title "Implement /charge endpoint" --priority high --list todo --label backend | Out-Null
+    & $wipe ticket create --title "Add idempotency keys" --list todo --label backend | Out-Null
+    & $wipe ticket create --title "Fix rounding in refunds" --priority urgent --list in-progress --label urgent --label backend | Out-Null
+    & $wipe ticket create --title "Set up CI" --list done | Out-Null
     git add -A; git commit -q -m "chore: seed initial board" | Out-Null
 
     & $wipe comment add T-4 --body "Repro: refund of 0.10 loses a cent due to float math." | Out-Null
