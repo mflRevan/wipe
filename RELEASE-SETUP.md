@@ -94,6 +94,30 @@ unscoped `wipe` package (better discoverability, `npx wipe` works) and drop
 `"npm"` from `dist-workspace.toml`'s `installers`/`publish-jobs` once you've
 decided.
 
+## Embedding the desktop UI into release binaries
+
+The `wipe` binary serves the human board UI from assets embedded at compile time
+(`crates/wipe-daemon/assets/`, gitignored). A plain `cargo build` produces a
+working binary that falls back to a placeholder page; to ship the **real** board
+UI in release binaries, the desktop app must be built and staged **before** the
+Rust build.
+
+After running `cargo dist init` / `cargo dist generate-ci`, add a step to the
+build job(s) in `release.yml` that runs the embed script before the cargo build,
+e.g.:
+
+```yaml
+- uses: pnpm/action-setup@v4
+  with: { version: 9 }
+- uses: actions/setup-node@v4
+  with: { node-version: 20, cache: pnpm, cache-dependency-path: apps/desktop/pnpm-lock.yaml }
+- name: Build and embed the desktop UI
+  run: bash scripts/embed-ui.sh   # builds apps/desktop -> crates/wipe-daemon/assets
+```
+
+Locally, `pwsh scripts/embed-ui.ps1` (Windows) or `scripts/embed-ui.sh` (unix)
+does the same before `cargo build --release`.
+
 ## Asset naming contract
 
 `npm/install.js` builds the download URL/asset name it expects from

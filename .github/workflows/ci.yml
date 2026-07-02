@@ -108,3 +108,51 @@ jobs:
         if: steps.check-web.outputs.exists == 'true'
         working-directory: apps/web
         run: pnpm build
+
+  desktop:
+    name: Desktop UI (apps/desktop)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for apps/desktop
+        id: check-desktop
+        shell: bash
+        run: |
+          if [ -d "apps/desktop" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.check-desktop.outputs.exists == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        if: steps.check-desktop.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install dependencies
+        if: steps.check-desktop.outputs.exists == 'true'
+        working-directory: apps/desktop
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Type-check and build (static SPA)
+        if: steps.check-desktop.outputs.exists == 'true'
+        working-directory: apps/desktop
+        run: |
+          pnpm check
+          pnpm build
