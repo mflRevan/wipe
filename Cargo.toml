@@ -9,7 +9,7 @@ license = "MIT"
 authors = ["Aiman <aiman@shabib.net>"]
 rust-version = "1.80"
 repository = "https://github.com/mflRevan/wipe"
-homepage = "https://github.com/mflRevan/wipe"
+homepage = "https://wipeboard.dev"
 keywords = ["cli", "kanban", "agents", "git", "collaboration"]
 categories = ["command-line-utilities", "development-tools"]
 

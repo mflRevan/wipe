@@ -2,6 +2,14 @@
 
 **A git-native task board for humans and agents.**
 
+### 🌐 [**wipeboard.dev**](https://wipeboard.dev) — the official site & docs   ·   `npm i -g @mflrevan/wipe`   ·   `cargo install wipe-cli`
+
+<p align="center">
+  <a href="https://wipeboard.dev">
+    <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/board.png" alt="The wipe board — the local desktop UI" width="880">
+  </a>
+</p>
+
 ## What is wipe?
 
 `wipe` is a CLI-first, git-native system for collaboration between humans and
@@ -40,8 +48,8 @@ without inventing a new protocol or requiring a hosted service:
 
 - **CLI-first for agents.** Every command supports `--json` output, and the
   CLI is self-documenting (`wipe help`, `wipe <command> --help`).
-- **Local desktop UX for humans.** Built with SvelteKit, shadcn-svelte, and
-  Tauri, served by a lightweight local daemon (`wipe serve`).
+- **Local desktop UX for humans.** A Trello-style board (SvelteKit + Tauri)
+  served by a lightweight local daemon (`wipe serve`), with a git-graph history.
 - **Git-history board rewind.** Scrub through the board's past states and see
   GitLens-style attribution for who (human or agent) changed what, and when.
 - **Flat, diffable JSON storage.** No embedded database — everything under
@@ -50,6 +58,29 @@ without inventing a new protocol or requiring a hosted service:
   tickets, not in some external blob store.
 - **One board per project.** `.wipe/` == board == project, created with a
   single `wipe init`.
+
+## A look inside
+
+**Drive it from the terminal** — agents (and you) use one self-documenting,
+`--json`-everywhere CLI. Foreign agents coordinate on the *same* board:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/terminal.png" alt="wipe CLI usage and agent-to-agent interaction" width="820">
+</p>
+
+**Open a ticket** — a clean, centered editor with labels, assignees, rendered
+media, and a comment thread (the human ↔ agent channel):
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/ticket.png" alt="wipe ticket editor" width="880">
+</p>
+
+**Scrub the git history** — every board change is a commit, shown as a real git
+graph with branches and board checkpoints; jump to any past state:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/history.png" alt="wipe git-history graph" width="880">
+</p>
 
 ## Install
 
