@@ -2,11 +2,15 @@
 
 Two independent, automated flows:
 
+**One tagged commit ships everything.** Pushing a `v*` tag fires all three release
+workflows in parallel:
+
 | Trigger | Workflow | What it does |
 | --- | --- | --- |
 | **push to `main`** (touching `apps/web/`) | `deploy-web.yml` | Deploys the website to **Vercel → wipeboard.dev**. |
-| **push a `v*` tag** | `release.yml` (cargo-dist) | Builds cross-platform binaries, creates the **GitHub Release**, and publishes the **`@mflrevan/wipe` npm** installer. |
+| **push a `v*` tag** | `release.yml` (cargo-dist) | Builds cross-platform binaries and creates the **GitHub Release** (with the npm installer package attached as an asset). |
 | **push a `v*` tag** | `release-plz.yml` | Publishes the crates (`wipe-core`, `wipe-daemon`, `wipe-cli`) to **crates.io**. |
+| **push a `v*` tag** | `publish-npm.yml` | Publishes **`@mflrevan/wipe`** to npm via **OIDC trusted publishing** (no token, no 2FA, signed provenance). |
 
 **Releases happen only on version tags.** There are no auto "release PRs" — you bump
 the version yourself and push a tag. Pull requests only run CI (`ci.yml`) and a
@@ -16,19 +20,18 @@ cargo-dist dry-run (`dist plan`), never a publish.
 
 **Repository secrets** (Settings → Secrets and variables → Actions):
 
-- `CARGO_REGISTRY_TOKEN` — crates.io API token (✅ set).
-- `NPM_TOKEN` — npm **automation** token with publish rights to the `@mflrevan`
-  scope (must bypass 2FA) (✅ set).
-- `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — for `deploy-web.yml`.
+- `CARGO_REGISTRY_TOKEN` — crates.io API token (✅ set). Your crates.io account also
+  needs a **verified email** to publish.
+- `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — for `deploy-web.yml` (✅ set).
+- **npm needs no secret** — it uses OIDC trusted publishing (below).
 
-**Vercel** (for wipeboard.dev): create a project from this repo with **Root
-Directory = `apps/web`**, attach the `wipeboard.dev` domain, then copy the org/project
-IDs into the secrets above. (Or use Vercel's native Git integration and delete
-`deploy-web.yml` to avoid double deploys.)
+**npm OIDC trusted publishing:** on npmjs.com → `@mflrevan/wipe` → Settings →
+**Trusted Publisher**, point it at repo `mflRevan/wipe`, workflow **`publish-npm.yml`**
+(✅ configured). `publish-npm.yml` requests an `id-token` and publishes tokenlessly;
+no `NPM_TOKEN` is required.
 
-**npm trusted publishing (recommended):** once `@mflrevan/wipe` exists, configure a
-GitHub Actions **trusted publisher** on the package (npmjs.com → package → Settings)
-for repo `mflRevan/wipe`, workflow `release.yml`. Then you can drop `NPM_TOKEN`.
+**Vercel** (wipeboard.dev): a project with **Root Directory = `apps/web`** and the
+`wipeboard.dev` domain is set up, with the three secrets above (✅ done).
 
 ## The embedded UI
 
