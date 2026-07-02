@@ -13,6 +13,11 @@ export function getApiBase(): string {
   }
   const env = import.meta.env.VITE_WIPE_API as string | undefined;
   if (env && env.trim()) return env.trim().replace(/\/$/, '');
+  // When served by the daemon itself (any origin other than the Vite dev
+  // server on :5173), use that same origin so `wipe serve --port <any>` works.
+  if (browser && window.location.port !== '5173') {
+    return window.location.origin.replace(/\/$/, '');
+  }
   return DEFAULT_BASE;
 }
 
