@@ -53,10 +53,7 @@ without inventing a new protocol or requiring a hosted service:
 
 ## Install
 
-`wipe` is not yet released; the following are the intended distribution
-channels once binaries land at `0.1.0`.
-
-**npm** (pure install wrapper that downloads the prebuilt binary):
+**npm** (downloads the prebuilt binary for your platform):
 
 ```sh
 npm install -g @mflrevan/wipe
@@ -122,7 +119,7 @@ project — this is the board:
 ```
 .wipe/
 ├── board.json          # list order, board-level metadata
-├── definitions.json    # labels, ticket schema, custom fields
+├── definitions.json    # label definitions and priorities
 ├── settings.json       # local/project board settings
 ├── tickets/
 │   ├── T-1.json
@@ -148,7 +145,7 @@ project-specific conventions for how agents should use the board.
 
 ## Repository layout
 
-New to Rust/Cargo? [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) explains how
+New to Rust/Cargo? [`docs/ARCHITECTURE.md`](https://github.com/mflRevan/wipe/blob/main/docs/ARCHITECTURE.md) explains how
 the pieces fit together and what **every** file and folder in the repo is for
 (including the release tooling). In short:
 
@@ -170,8 +167,9 @@ and contributions are very welcome.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how
-to build, test, and submit changes, and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+Contributions are welcome — see [CONTRIBUTING.md](https://github.com/mflRevan/wipe/blob/main/CONTRIBUTING.md)
+for how to build, test, and submit changes, and
+[CODE_OF_CONDUCT.md](https://github.com/mflRevan/wipe/blob/main/CODE_OF_CONDUCT.md)
 for community expectations.
 
 ## License
