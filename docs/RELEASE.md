@@ -49,19 +49,26 @@ git add crates/wipe-daemon/assets && git commit -m "chore: rebuild embedded UI"
 ## Cutting a release
 
 1. Rebuild the embedded UI (above) if the desktop UI changed.
-2. Bump `version` in the root `Cargo.toml` (`[workspace.package]`).
-3. Commit on `main`: `git commit -am "chore(release): v0.1.0"` and push.
-4. Tag and push:
+2. **Set the version everywhere with one command** — never hand-edit versions:
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   node scripts/set-version.mjs 0.1.2
    ```
-5. Watch the runs: `gh run watch` (or the Actions tab). On success you'll have a
-   GitHub Release with installers, `@mflrevan/wipe@0.1.0` on npm, and the crates on
-   crates.io.
+   This updates the root `Cargo.toml` (workspace version + internal
+   `wipe-core`/`wipe-daemon` dependency versions), the Tauri crate, the frontend
+   `package.json`s, and refreshes `Cargo.lock`. crates.io, the npm package, and the
+   binaries all derive their version from the root `Cargo.toml`.
+3. Commit on `main` and tag — one tag ships everything:
+   ```sh
+   git commit -am "chore(release): v0.1.2"
+   git tag v0.1.2
+   git push origin main v0.1.2
+   ```
+4. Watch the runs: `gh run watch` (or the Actions tab). On success you'll have the
+   GitHub Release with installers, `@mflrevan/wipe` on npm, and the crates on crates.io.
 
 ## Config files
 
+- `scripts/set-version.mjs` — the single source of version truth; run it to bump.
 - `dist-workspace.toml` — cargo-dist config (targets, installers = shell/powershell/npm,
   npm scope/package). Regenerate CI after editing with `dist init && dist generate`.
 - `release-plz.toml` — release-plz config; scoped to **crates.io only** (it does not
