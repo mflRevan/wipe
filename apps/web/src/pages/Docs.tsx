@@ -84,7 +84,7 @@ function Installation() {
                 <p className="text-sm text-muted-foreground">
                   A pure install wrapper that downloads the prebuilt binary.
                 </p>
-                <CodeBlock code="npm install -g wipe" prompt />
+                <CodeBlock code="npm install -g @mflrevan/wipe" prompt />
               </div>
             ),
           },

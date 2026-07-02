@@ -13,7 +13,6 @@ and the root `Cargo.toml` was **not** modified.
 | `.github/workflows/release.yml` | GitHub Actions workflow that runs `dist` to build/package/release binaries when a `v*` tag is pushed. |
 | `release-plz.toml` | release-plz configuration (conventional commits, changelog, workspace mode). |
 | `.github/workflows/release-plz.yml` | GitHub Actions workflow that runs release-plz on push to `main` to open "release PRs" and publish crates to crates.io. |
-| `npm/` | A hand-written, dependency-free npm install-wrapper package (separate from cargo-dist's own generated npm installer -- see "Two npm packages" below). |
 
 ## Why `dist-workspace.toml` instead of editing `Cargo.toml`
 
@@ -71,28 +70,14 @@ equivalent.
    matching `vX.Y.Z` git tag (release-plz does this automatically), which
    in turn triggers `release.yml` above.
 
-## Two npm packages -- don't confuse them
+## npm distribution
 
-There are **two independent** ways `wipe` ends up on npm, both added by this
-change:
-
-1. **cargo-dist's own npm installer** (`dist-workspace.toml`:
-   `installers = [..., "npm"]`, `npm-scope = "@mflrevan"`,
-   `npm-package = "wipe"`). This is generated and published automatically
-   by `release.yml`'s `publish-npm` job as **`@mflrevan/wipe`**.
-
-2. **The hand-written wrapper in `npm/`** (this repo's `npm/package.json`,
-   name **`wipe`**, unscoped). It is *not* published by any workflow in this
-   change -- publishing it is a separate, manual `npm publish` from the
-   `npm/` directory whenever you want to update it, since it doesn't change
-   with every Rust release (only its `install.js` download logic would).
-
-Only maintain/publish one of these long-term to avoid user confusion; both
-were included here because the task asked for both a cargo-dist npm
-installer and a standalone wrapper package. A reasonable default: keep the
-unscoped `wipe` package (better discoverability, `npx wipe` works) and drop
-`"npm"` from `dist-workspace.toml`'s `installers`/`publish-jobs` once you've
-decided.
+`npm install -g @mflrevan/wipe` is served by **cargo-dist's generated npm
+installer** (`dist-workspace.toml`: `installers = [..., "npm"]`,
+`npm-scope = "@mflrevan"`, `npm-package = "wipe"`), published automatically by
+`release.yml`'s `publish-npm` job on each tagged release. This is the single,
+canonical npm path; the earlier hand-rolled `npm/` wrapper was removed to avoid
+confusion.
 
 ## Embedding the desktop UI into release binaries
 
@@ -118,11 +103,3 @@ e.g.:
 Locally, `pwsh scripts/embed-ui.ps1` (Windows) or `scripts/embed-ui.sh` (unix)
 does the same before `cargo build --release`.
 
-## Asset naming contract
-
-`npm/install.js` builds the download URL/asset name it expects from
-cargo-dist's output. If cargo-dist's archive naming convention differs from
-what's hardcoded there (e.g. after a cargo-dist major version upgrade),
-update `ASSET_MAP` in `npm/install.js` to match the actual filenames in a
-GitHub Release (check `.github/workflows/release.yml`'s uploaded artifacts,
-or a real release page, after the first tagged release).

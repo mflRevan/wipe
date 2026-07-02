@@ -59,7 +59,7 @@ channels once binaries land at `0.1.0`.
 **npm** (pure install wrapper that downloads the prebuilt binary):
 
 ```sh
-npm install -g wipe
+npm install -g @mflrevan/wipe
 ```
 
 **Cargo** (builds from source):

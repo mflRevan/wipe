@@ -131,7 +131,7 @@ export default function Landing() {
           <p className="mt-4 font-mono text-xs text-muted-foreground">{TAGLINE}</p>
 
           <div className="animate-fade-up mt-14 w-full max-w-2xl text-left">
-            <CodeBlock code={`npm install -g wipe\nwipe init .`} prompt />
+            <CodeBlock code={`npm install -g @mflrevan/wipe\nwipe init .`} prompt />
           </div>
         </div>
       </section>
