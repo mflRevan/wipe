@@ -101,7 +101,9 @@ async fn shutdown_signal() {
 /// Best-effort: open `url` in the user's default browser.
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
