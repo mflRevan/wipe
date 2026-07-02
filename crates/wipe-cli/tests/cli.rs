@@ -178,3 +178,37 @@ fn skill_is_embedded() {
     let out = p.run(&["skill"]);
     assert!(out.contains("wipe — agent operating guide"));
 }
+
+/// Deterministic mirror of the agent-to-agent supervision loop (no LLM), so CI
+/// guards the exact collaboration protocol the live opencode harness exercises.
+#[test]
+fn supervision_protocol_offline() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "Calc Service"]);
+
+    // Supervisor files a spec ticket into `todo`.
+    let filed = p.json(&[
+        "ticket", "create", "--title", "Implement add", "--type", "feature", "--list", "todo",
+        "--body", "Create calc.py defining add(a, b).",
+    ]);
+    assert_eq!(filed["id"], "T-1");
+
+    // Subordinate discovers assigned work purely via --json.
+    let todo = p.json(&["ticket", "list", "--list", "todo"]);
+    let assigned = todo.as_array().unwrap();
+    assert_eq!(assigned.len(), 1);
+    let id = assigned[0]["id"].as_str().unwrap().to_string();
+
+    // ...reads the spec...
+    let spec = p.json(&["ticket", "show", &id]);
+    assert!(spec["body"].as_str().unwrap().contains("calc.py"));
+
+    // ...reports back and advances the ticket.
+    p.json(&["comment", "add", &id, "--body", "Implemented add(a,b) in calc.py"]);
+    p.json(&["ticket", "move", &id, "--to", "done"]);
+
+    // Supervisor verifies the acceptance state.
+    let done = p.json(&["ticket", "show", &id]);
+    assert_eq!(done["list"], "done");
+    assert!(done["comments"].as_array().unwrap().len() >= 1);
+}
