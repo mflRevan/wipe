@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wipe-core", "crates/wipe-cli"]
+members = ["crates/wipe-core", "crates/wipe-cli", "crates/wipe-daemon"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +24,7 @@ tempfile = "3"
 
 # Internal crates
 wipe-core = { path = "crates/wipe-core" }
+wipe-daemon = { path = "crates/wipe-daemon" }
 
 [profile.release]
 lto = "thin"

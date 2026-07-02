@@ -1,0 +1,28 @@
+[package]
+name = "wipe-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Local HTTP/WS daemon that serves the wipe board UI and API."
+
+[dependencies]
+wipe-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+notify = "7"
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
+directories = "5"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }

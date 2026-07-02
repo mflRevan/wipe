@@ -617,9 +617,24 @@ pub fn skill(out: &Out) -> Result<()> {
     Ok(())
 }
 
-/// `wipe serve` — placeholder until the daemon lands in M3.
-pub fn serve(_out: &Out, _args: ServeArgs) -> Result<()> {
-    bail!("the local UI daemon (`wipe serve`) arrives in a later milestone (M3)")
+/// `wipe serve` — start the local daemon serving the board UI + API.
+pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
+    let s = store()?;
+    let settings = s.load_settings()?;
+    let port = args.port.unwrap_or(settings.daemon.port);
+    let cfg = wipe_daemon::ServeConfig {
+        root: s.root().to_path_buf(),
+        port,
+        expose: settings.daemon.expose,
+        open: args.open,
+    };
+    out.line(format!("starting wipe UI for '{}' on port {port}…", s.load_board()?.name));
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting async runtime")?;
+    rt.block_on(wipe_daemon::serve(cfg))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

@@ -17,12 +17,14 @@ path = "src/main.rs"
 
 [dependencies]
 wipe-core.workspace = true
+wipe-daemon.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive", "wrap_help"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 assert_cmd = "2"

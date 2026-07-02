@@ -9,6 +9,7 @@
 //! newline, atomic writes) and git diffs remain minimal and merge-friendly.
 
 pub mod error;
+pub mod git;
 pub mod id;
 pub mod model;
 pub mod ops;
