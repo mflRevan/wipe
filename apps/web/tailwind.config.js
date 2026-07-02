@@ -1,6 +1,18 @@
 /** @type {import('tailwindcss').Config} */
+
+/** Builds a Tailwind color that resolves an `--wp-*-rgb` CSS variable and
+ * supports the standard `/opacity` modifier syntax (e.g. `bg-card/50`). */
+function withOpacity(variable) {
+  return ({ opacityValue }) => {
+    if (opacityValue === undefined) {
+      return `rgb(var(${variable}))`;
+    }
+    return `rgb(var(${variable}) / ${opacityValue})`;
+  };
+}
+
 export default {
-  darkMode: "class",
+  darkMode: ["selector", '[data-theme="dark"]'],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     container: {
@@ -10,40 +22,63 @@ export default {
     },
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
+        border: withOpacity("--wp-border-rgb"),
+        "border-strong": withOpacity("--wp-border-strong-rgb"),
+        input: withOpacity("--wp-border-rgb"),
+        ring: withOpacity("--wp-focus-rgb"),
+        background: withOpacity("--wp-canvas-rgb"),
+        foreground: withOpacity("--wp-text-rgb"),
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: withOpacity("--wp-accent-rgb"),
+          hover: withOpacity("--wp-accent-hover-rgb"),
+          foreground: withOpacity("--wp-on-accent-rgb"),
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: withOpacity("--wp-surface-rgb"),
+          foreground: withOpacity("--wp-text-rgb"),
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: withOpacity("--wp-surface-rgb"),
+          foreground: withOpacity("--wp-text-muted-rgb"),
         },
+        subtle: withOpacity("--wp-text-subtle-rgb"),
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: withOpacity("--wp-accent-rgb"),
+          hover: withOpacity("--wp-accent-hover-rgb"),
+          foreground: withOpacity("--wp-on-accent-rgb"),
         },
         card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
+          DEFAULT: withOpacity("--wp-card-rgb"),
+          foreground: withOpacity("--wp-text-rgb"),
         },
+        elevated: withOpacity("--wp-elevated-rgb"),
+        destructive: {
+          DEFAULT: withOpacity("--wp-error-rgb"),
+          foreground: withOpacity("--wp-on-accent-rgb"),
+        },
+        focus: withOpacity("--wp-focus-rgb"),
+        error: withOpacity("--wp-error-rgb"),
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        sm: "6px",
+        md: "8px",
+        lg: "12px",
+        pill: "999px",
+      },
+      boxShadow: {
+        DEFAULT: "var(--wp-shadow)",
+        card: "var(--wp-shadow)",
+        lift: "var(--wp-shadow-lift)",
       },
       fontFamily: {
+        display: [
+          "Space Grotesk Variable",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
         sans: [
-          "Inter",
+          "Geist Variable",
           "ui-sans-serif",
           "system-ui",
           "-apple-system",
@@ -52,6 +87,7 @@ export default {
           "sans-serif",
         ],
         mono: [
+          "Geist Mono Variable",
           "ui-monospace",
           "SFMono-Regular",
           "Menlo",
@@ -60,6 +96,14 @@ export default {
           "monospace",
         ],
       },
+      transitionTimingFunction: {
+        "wp-ease": "cubic-bezier(0.2, 0, 0, 1)",
+      },
+      transitionDuration: {
+        "wp-fast": "120ms",
+        "wp-base": "160ms",
+        "wp-slow": "220ms",
+      },
       keyframes: {
         "fade-up": {
           "0%": { opacity: "0", transform: "translateY(8px)" },
@@ -67,7 +111,7 @@ export default {
         },
       },
       animation: {
-        "fade-up": "fade-up 0.5s ease-out both",
+        "fade-up": "fade-up 0.5s cubic-bezier(0.2, 0, 0, 1) both",
       },
     },
   },

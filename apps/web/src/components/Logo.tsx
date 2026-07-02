@@ -19,7 +19,7 @@ export function Logo({ className }: { className?: string }) {
           <rect x="17" y="4" width="4" height="7" rx="1" />
         </svg>
       </span>
-      <span className="text-lg tracking-tight">wipe</span>
+      <span className="font-display text-lg tracking-[-0.02em]">wipe</span>
     </span>
   );
 }

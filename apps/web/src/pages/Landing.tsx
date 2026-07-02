@@ -95,19 +95,18 @@ export default function Landing() {
     <>
       {/* Hero */}
       <section className="relative overflow-hidden">
-        <div className="glow pointer-events-none absolute inset-x-0 top-0 h-[520px]" />
         <div className="container relative flex flex-col items-center py-24 text-center md:py-32">
           <a
             href={REPO_URL}
             target="_blank"
             rel="noreferrer"
-            className="animate-fade-up mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="animate-fade-up mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition-colors duration-wp-fast hover:text-foreground"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
             Pre-1.0 · open source · MIT OR Apache-2.0
           </a>
-          <h1 className="animate-fade-up max-w-3xl text-4xl font-extrabold tracking-tight sm:text-6xl">
-            <span className="text-gradient">A git-native task board</span>
+          <h1 className="animate-fade-up max-w-3xl font-display text-4xl font-semibold tracking-[-0.01em] sm:text-6xl">
+            A git-native task board
             <br />
             for humans and agents.
           </h1>
@@ -140,7 +139,7 @@ export default function Landing() {
       <section className="border-t border-border/60 py-20">
         <div className="container">
           <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-3xl font-bold tracking-tight">Why wipe</h2>
+            <h2 className="font-display text-3xl font-semibold tracking-[-0.01em]">Why wipe</h2>
             <p className="mt-3 text-muted-foreground">
               Coding agents are good at execution but bad at staying aligned. wipe
               gives humans and agents a shared, durable place to track the work.
@@ -150,12 +149,12 @@ export default function Landing() {
             {whyItems.map((item) => (
               <div
                 key={item.title}
-                className="rounded-xl border border-border bg-card/50 p-6"
+                className="rounded-md border border-border bg-card p-6 transition-shadow duration-wp-fast hover:shadow-card"
               >
-                <div className="mb-4 grid h-10 w-10 place-items-center rounded-lg bg-primary/10 text-primary">
+                <div className="mb-4 grid h-10 w-10 place-items-center rounded-md bg-primary/10 text-primary">
                   <item.icon className="h-5 w-5" />
                 </div>
-                <h3 className="text-lg font-semibold">{item.title}</h3>
+                <h3 className="font-display text-lg font-semibold tracking-[-0.01em]">{item.title}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                   {item.body}
                 </p>
@@ -169,18 +168,18 @@ export default function Landing() {
       <section className="border-t border-border/60 py-20">
         <div className="container">
           <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-3xl font-bold tracking-tight">
+            <h2 className="font-display text-3xl font-semibold tracking-[-0.01em]">
               Built for the way agents work
             </h2>
             <p className="mt-3 text-muted-foreground">
               Everything is a file. Everything is scriptable. Everything merges.
             </p>
           </div>
-          <div className="mt-12 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-12 grid gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
             {features.map((f) => (
               <div key={f.title} className="bg-background p-6">
                 <f.icon className="h-5 w-5 text-primary" />
-                <h3 className="mt-4 font-semibold">{f.title}</h3>
+                <h3 className="mt-4 font-display font-semibold tracking-[-0.01em]">{f.title}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                   {f.body}
                 </p>
@@ -194,13 +193,13 @@ export default function Landing() {
       <section className="border-t border-border/60 py-20">
         <div className="container grid gap-10 lg:grid-cols-2 lg:items-center">
           <div>
-            <h2 className="text-3xl font-bold tracking-tight">
+            <h2 className="font-display text-3xl font-semibold tracking-[-0.01em]">
               From zero to a shared board in seconds
             </h2>
             <p className="mt-4 text-muted-foreground">
               Initialize a board, create tickets, move them across lists, and
               leave comments — all from the CLI, all committed to git. Add{" "}
-              <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-primary">
+              <code className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-xs text-primary">
                 --json
               </code>{" "}
               to any command for machine-readable output.

@@ -34,7 +34,7 @@ export function CodeBlock({
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-lg border border-border bg-card",
+        "group relative overflow-hidden rounded-md border border-border bg-card",
         className
       )}
     >
@@ -46,7 +46,7 @@ export function CodeBlock({
         <button
           onClick={copy}
           aria-label="Copy code"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground transition-colors duration-wp-fast hover:bg-elevated hover:text-foreground"
         >
           {copied ? (
             <Check className="h-3.5 w-3.5 text-primary" />

@@ -21,14 +21,14 @@ function Prose({ children }: { children: React.ReactNode }) {
 
 function H2({ children, id }: { children: React.ReactNode; id?: string }) {
   return (
-    <h2 id={id} className="scroll-mt-24 text-2xl font-bold tracking-tight text-foreground">
+    <h2 id={id} className="scroll-mt-24 font-display text-2xl font-semibold tracking-[-0.01em] text-foreground">
       {children}
     </h2>
   );
 }
 
 function H3({ children }: { children: React.ReactNode }) {
-  return <h3 className="text-lg font-semibold text-foreground">{children}</h3>;
+  return <h3 className="font-display text-lg font-semibold tracking-[-0.01em] text-foreground">{children}</h3>;
 }
 
 function Introduction() {
@@ -41,7 +41,7 @@ function Introduction() {
           git-native task board for collaboration between humans and AI agents —
           and agents with each other. There is no external service, no separate
           database, and no account to create: the board <em>is</em> a folder in
-          your repo (<code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>),
+          your repo (<code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>),
           and every change to it is a change you can diff, blame, branch, and
           merge like any other file.
         </p>
@@ -55,9 +55,9 @@ function Introduction() {
         </p>
         <p>
           Agents drive everything through the self-documenting{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe</code>{" "}
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe</code>{" "}
           CLI. Humans use a local desktop app (
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe serve</code>
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe serve</code>
           ) with drag-and-drop and a git-history board rewind.
         </p>
       </Prose>
@@ -95,7 +95,7 @@ function Installation() {
                 <p className="text-sm text-muted-foreground">
                   Build and install from source with Cargo.
                 </p>
-                <CodeBlock code="cargo install wipe" prompt />
+                <CodeBlock code="cargo install wipe-cli" prompt />
               </div>
             ),
           },
@@ -118,7 +118,7 @@ function Installation() {
       <Prose>
         <p>
           Verify your install and environment at any time with{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe doctor</code>.
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe doctor</code>.
         </p>
       </Prose>
     </section>
@@ -171,23 +171,23 @@ function Concepts() {
       <Prose>
         <p>
           <strong className="text-foreground">Board = project.</strong> The{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>{" "}
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>{" "}
           directory <em>is</em> the board, and there is one board per project,
-          created with <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe init .</code>.
+          created with <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe init .</code>.
         </p>
         <p>
           <strong className="text-foreground">Lists</strong> are ordered columns
           (Backlog, Todo, In Progress, Done…). Their order and each list's card
-          order live in <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">board.json</code>{" "}
+          order live in <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">board.json</code>{" "}
           as references to ticket ids.
         </p>
         <p>
           <strong className="text-foreground">Tickets</strong> are the unit of
           work. Each ticket is its own JSON file under{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">tickets/</code>,
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">tickets/</code>,
           holding its fields (type, priority, labels, tags) and its inline
           comments. Media and attachments are version-controlled under{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">media/</code>.
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">media/</code>.
         </p>
       </Prose>
       <div className="space-y-2">
@@ -197,7 +197,7 @@ function Concepts() {
       <Prose>
         <p>
           Everything except the gitignored{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.cache/index.db</code>{" "}
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.cache/index.db</code>{" "}
           is flat JSON, formatted deterministically so diffs stay readable and
           merges stay low-conflict.
         </p>
@@ -213,9 +213,9 @@ function CliReference() {
       <Prose>
         <p>
           The CLI is self-documenting — run{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe &lt;command&gt; --help</code>{" "}
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe &lt;command&gt; --help</code>{" "}
           for any command. Add{" "}
-          <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>{" "}
+          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>{" "}
           for machine-readable output.
         </p>
       </Prose>
@@ -260,7 +260,7 @@ function ForAgents() {
         <Prose>
           <p>
             Every command accepts{" "}
-            <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>{" "}
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>{" "}
             and emits stable, machine-readable output on stdout. Parse that
             instead of scraping human text.
           </p>
@@ -277,7 +277,7 @@ function ForAgents() {
             Commands return stable exit codes: use them for control flow.
           </p>
         </Prose>
-        <div className="overflow-hidden rounded-lg border border-border">
+        <div className="overflow-hidden rounded-md border border-border">
           <table className="w-full text-sm">
             <thead className="bg-card/60 text-left text-muted-foreground">
               <tr>
@@ -311,7 +311,7 @@ function ForAgents() {
         <Prose>
           <p>
             Point an agent at{" "}
-            <code className="rounded bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe skill</code>
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe skill</code>
             : it prints a self-contained guide teaching the agent how to drive the
             board — the commands, the JSON shapes, and the conventions.
           </p>

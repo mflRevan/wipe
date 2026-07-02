@@ -8,9 +8,9 @@ interface CommandCardProps {
 
 export function CommandCard({ command, description, example }: CommandCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-card/50 p-4">
+    <div className="rounded-md border border-border bg-card p-4">
       <div className="mb-1 flex flex-wrap items-baseline gap-2">
-        <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-sm text-primary">
+        <code className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-sm text-primary">
           {command}
         </code>
       </div>

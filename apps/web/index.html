@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,6 +8,17 @@
       name="description"
       content="wipe is a CLI-first, git-native task board for collaboration between humans and AI agents."
     />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("wipe-theme");
+          var theme = stored === "light" || stored === "dark" ? stored : "dark";
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

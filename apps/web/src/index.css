@@ -1,31 +1,83 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 8% 6%;
-    --card-foreground: 0 0% 98%;
-    --primary: 255 82% 66%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 240 5% 12%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 5% 12%;
-    --muted-foreground: 240 5% 64%;
-    --accent: 255 82% 66%;
-    --accent-foreground: 0 0% 100%;
-    --border: 240 5% 15%;
-    --input: 240 5% 15%;
-    --ring: 255 82% 66%;
-    --radius: 0.65rem;
+  /* ---------- Light (default :root) ---------- */
+  :root,
+  [data-theme="light"] {
+    --wp-canvas: #fafaf7;
+    --wp-canvas-rgb: 250 250 247;
+    --wp-surface: #f0f0eb;
+    --wp-surface-rgb: 240 240 235;
+    --wp-card: #ffffff;
+    --wp-card-rgb: 255 255 255;
+    --wp-elevated: #ffffff;
+    --wp-elevated-rgb: 255 255 255;
+    --wp-border: #e5e4df;
+    --wp-border-rgb: 229 228 223;
+    --wp-border-strong: #d6d5ce;
+    --wp-border-strong-rgb: 214 213 206;
+    --wp-text: #191919;
+    --wp-text-rgb: 25 25 25;
+    --wp-text-muted: #666663;
+    --wp-text-muted-rgb: 102 102 99;
+    --wp-text-subtle: #91918d;
+    --wp-text-subtle-rgb: 145 145 141;
+    --wp-accent: #cc785c;
+    --wp-accent-rgb: 204 120 92;
+    --wp-accent-hover: #b96a4f;
+    --wp-accent-hover-rgb: 185 106 79;
+    --wp-on-accent: #ffffff;
+    --wp-on-accent-rgb: 255 255 255;
+    --wp-focus: #61aaf2;
+    --wp-focus-rgb: 97 170 242;
+    --wp-error: #bf4d43;
+    --wp-error-rgb: 191 77 67;
+    --wp-shadow: 0 1px 2px rgba(25, 25, 25, 0.06);
+    --wp-shadow-lift: 0 10px 30px rgba(25, 25, 25, 0.14);
+
+    color-scheme: light;
+  }
+
+  /* ---------- Dark ---------- */
+  [data-theme="dark"] {
+    --wp-canvas: #191919;
+    --wp-canvas-rgb: 25 25 25;
+    --wp-surface: #1e1e1d;
+    --wp-surface-rgb: 30 30 29;
+    --wp-card: #262625;
+    --wp-card-rgb: 38 38 37;
+    --wp-elevated: #2e2e2c;
+    --wp-elevated-rgb: 46 46 44;
+    --wp-border: #302f2d;
+    --wp-border-rgb: 48 47 45;
+    --wp-border-strong: #40403e;
+    --wp-border-strong-rgb: 64 64 62;
+    --wp-text: #fafaf7;
+    --wp-text-rgb: 250 250 247;
+    --wp-text-muted: #91918d;
+    --wp-text-muted-rgb: 145 145 141;
+    --wp-text-subtle: #666663;
+    --wp-text-subtle-rgb: 102 102 99;
+    --wp-accent: #cc785c;
+    --wp-accent-rgb: 204 120 92;
+    --wp-accent-hover: #d8876b;
+    --wp-accent-hover-rgb: 216 135 107;
+    --wp-on-accent: #fafaf7;
+    --wp-on-accent-rgb: 250 250 247;
+    --wp-focus: #61aaf2;
+    --wp-focus-rgb: 97 170 242;
+    --wp-error: #bf4d43;
+    --wp-error-rgb: 191 77 67;
+    --wp-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --wp-shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.55);
+
+    color-scheme: dark;
   }
 
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--wp-border);
   }
 
   html {
@@ -34,30 +86,36 @@
   }
 
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    background-color: var(--wp-canvas);
+    color: var(--wp-text);
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
   }
-}
 
-@layer utilities {
-  .text-gradient {
-    background: linear-gradient(
-      120deg,
-      hsl(var(--foreground)) 30%,
-      hsl(var(--primary)) 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: theme("fontFamily.display");
   }
 
-  .glow {
-    background: radial-gradient(
-      60% 60% at 50% 0%,
-      hsl(var(--primary) / 0.18) 0%,
-      transparent 70%
-    );
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: theme("fontFamily.mono");
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }

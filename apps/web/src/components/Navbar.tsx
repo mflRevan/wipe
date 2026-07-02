@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import { Github } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { REPO_URL } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +42,7 @@ export function Navbar() {
               <span className="hidden sm:inline">GitHub</span>
             </Button>
           </a>
+          <ThemeToggle />
           <Link to="/docs" className="hidden sm:block">
             <Button size="sm">Get started</Button>
           </Link>
