@@ -166,6 +166,9 @@
     flex-direction: column;
     width: 300px;
     flex: none;
+    /* Fill the board height (see Board.svelte .board align-items: stretch) so the
+       card list below is a tall drop target even when the list is empty. */
+    height: 100%;
     max-height: 100%;
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);

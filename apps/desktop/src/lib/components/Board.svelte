@@ -132,7 +132,10 @@
     height: 100%;
     padding-bottom: 8px;
     overflow-x: auto;
-    align-items: flex-start;
+    /* Stretch columns to the full board height so each list's drop zone is a
+       large, consistent target. With flex-start, empty lists collapse to their
+       min-height (~40px) and dropped cards land below the zone and snap back. */
+    align-items: stretch;
   }
   .empty {
     color: var(--wp-text-muted);
@@ -142,6 +145,7 @@
   .addcol {
     width: 280px;
     flex: none;
+    align-self: flex-start;
   }
   .addcol-btn {
     display: inline-flex;
