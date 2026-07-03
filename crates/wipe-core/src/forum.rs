@@ -284,7 +284,7 @@ pub fn index(store: &Store) -> Result<Vec<PostView>> {
     for thread in store.load_all_threads()? {
         posts.extend(flatten(&thread));
     }
-    posts.sort_by(|a, b| b.created.cmp(&a.created));
+    posts.sort_by_key(|p| std::cmp::Reverse(p.created)); // newest first
 
     // Best-effort cache write; never fail a read over a cache issue.
     if let Some(dir) = cpath.parent() {

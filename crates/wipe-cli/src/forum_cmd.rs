@@ -295,7 +295,7 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
         if a.replay {
             let mut matched: Vec<&PostView> =
                 initial.iter().filter(|p| forum::matches(p, &q)).collect();
-            matched.sort_by(|x, y| x.created.cmp(&y.created));
+            matched.sort_by_key(|p| p.created);
             for p in matched {
                 emit(p);
             }
@@ -313,7 +313,7 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
             .iter()
             .filter(|p| !seen.contains(&p.id) && forum::matches(p, &q))
             .collect();
-        fresh.sort_by(|x, y| x.created.cmp(&y.created)); // oldest-first
+        fresh.sort_by_key(|p| p.created); // oldest-first
         for p in fresh {
             emit(p);
         }
