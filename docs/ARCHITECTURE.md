@@ -67,15 +67,19 @@ Each project that runs `wipe init` gets a `.wipe/` folder committed to git:
 ```
 .wipe/
   board.json         # the lists (columns) and the order of cards in each
-  definitions.json   # ticket types, labels, tags, priorities
-  settings.json      # daemon port + exposure
+  definitions.json   # labels and priorities
+  settings.json      # daemon port + exposure + autoserve
   tickets/T-1.json   # one file per ticket (its fields + inline comments)
+  forum/F-1.json     # one file per forum thread (root post + nested reply tree)
   media/             # attachments (version-controlled)
-  .cache/            # local SQLite cache, gitignored (safe to delete)
+  .cache/            # local derived cache, gitignored (safe to delete)
 ```
 
 Because each ticket is its own file and card *ordering* is kept separately in
 `board.json`, two people editing different tickets never produce a git conflict.
+The forum works the same way: one file per thread, so replies to different
+threads (even on different branches) merge cleanly, and the derived search index
+lives in the gitignored `.cache/` so reading never touches version control.
 
 ## Every root file, explained
 
