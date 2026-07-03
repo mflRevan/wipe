@@ -64,8 +64,16 @@ pub fn create_thread(
     now: DateTime<Utc>,
 ) -> Result<Thread> {
     let mut board = store.load_board()?;
-    let id = format!("F-{}", board.next_thread);
-    board.next_thread += 1;
+    // Never reuse an id: skip past any thread file already on disk (board.json and
+    // the forum/*.json files can diverge across git operations or a crash between
+    // the two writes below).
+    let mut n = board.next_thread;
+    let mut id = format!("F-{n}");
+    while store.thread_exists(&id) {
+        n += 1;
+        id = format!("F-{n}");
+    }
+    board.next_thread = n + 1;
 
     let mut root = Post::new(id.clone(), author, spec.body, now);
     root.labels = spec.labels;
@@ -80,8 +88,10 @@ pub fn create_thread(
         created: now,
         updated: now,
     };
-    store.save_thread(&thread)?;
+    // Persist the counter FIRST: if we're interrupted between the two writes, the
+    // id is over-allocated (a harmless gap) rather than reused next time.
     store.save_board(&board)?;
+    store.save_thread(&thread)?;
     Ok(thread)
 }
 
@@ -300,60 +310,69 @@ pub struct SearchQuery {
     pub limit: Option<usize>,
 }
 
-/// Compile a search pattern; `case_insensitive` adds the `i` flag.
+/// Compile a search pattern. `case_insensitive` adds the `i` flag; multi-line
+/// mode is on so `^`/`$` anchor to each line of a multi-line post body (the
+/// intuitive behavior for line-oriented content). Rust's `regex` is linear-time,
+/// so user patterns cannot cause catastrophic backtracking / ReDoS.
 pub fn compile_pattern(pat: &str, case_insensitive: bool) -> Result<Regex> {
     regex::RegexBuilder::new(pat)
         .case_insensitive(case_insensitive)
+        .multi_line(true)
         .build()
         .map_err(|e| Error::msg(format!("invalid search pattern: {e}")))
 }
 
 /// True if `id` is within the `scope` thread/subtree (prefix match on dotted IDs).
+/// The trailing `.` makes `F-1` match `F-1.2` but not `F-10`.
 fn in_scope(id: &str, scope: &str) -> bool {
     id == scope || id.starts_with(&format!("{scope}."))
 }
 
+/// Whether a post matches a query (all set filters AND together). Shared by
+/// [`search`] and `wipe forum watch` so both apply identical semantics.
+pub fn matches(p: &PostView, q: &SearchQuery) -> bool {
+    if q.titles_only && p.depth != 0 {
+        return false;
+    }
+    if let Some(scope) = &q.scope {
+        if !in_scope(&p.id, scope) {
+            return false;
+        }
+    }
+    if let Some(md) = q.max_depth {
+        if p.depth > md {
+            return false;
+        }
+    }
+    if let Some(a) = &q.author {
+        if !p.author.to_lowercase().contains(&a.to_lowercase()) {
+            return false;
+        }
+    }
+    if !q.labels.iter().all(|l| p.labels.contains(l)) {
+        return false;
+    }
+    if let Some(re) = &q.pattern {
+        let hit = if q.titles_only {
+            re.is_match(&p.thread_title)
+        } else {
+            // A plain search also finds a thread by its title (via the root post),
+            // so title keywords are discoverable without hiding replies.
+            re.is_match(&p.body) || (p.depth == 0 && re.is_match(&p.thread_title))
+        };
+        if !hit {
+            return false;
+        }
+    }
+    true
+}
+
 /// Run a search over the (cached) flattened forum.
 pub fn search(store: &Store, q: &SearchQuery) -> Result<Vec<PostView>> {
-    let all = index(store)?;
-    let mut out: Vec<PostView> = all
+    let mut out: Vec<PostView> = index(store)?
         .into_iter()
-        .filter(|p| {
-            if q.titles_only && p.depth != 0 {
-                return false;
-            }
-            if let Some(scope) = &q.scope {
-                if !in_scope(&p.id, scope) {
-                    return false;
-                }
-            }
-            if let Some(md) = q.max_depth {
-                if p.depth > md {
-                    return false;
-                }
-            }
-            if let Some(a) = &q.author {
-                if !p.author.to_lowercase().contains(&a.to_lowercase()) {
-                    return false;
-                }
-            }
-            if !q.labels.iter().all(|l| p.labels.contains(l)) {
-                return false;
-            }
-            if let Some(re) = &q.pattern {
-                let hay = if q.titles_only {
-                    &p.thread_title
-                } else {
-                    &p.body
-                };
-                if !re.is_match(hay) {
-                    return false;
-                }
-            }
-            true
-        })
+        .filter(|p| matches(p, q))
         .collect();
-
     if let Some(n) = q.limit {
         out.truncate(n);
     }
@@ -552,6 +571,95 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scoped.len(), 2);
+    }
+
+    #[test]
+    fn default_search_finds_threads_by_title() {
+        let (_d, s) = project();
+        create_thread(
+            &s,
+            NewThread {
+                title: "Auth design".into(),
+                body: "OAuth 2.1".into(),
+                ..Default::default()
+            },
+            "a",
+            now(),
+        )
+        .unwrap();
+        reply(&s, "F-1", post("a reply"), "b", now()).unwrap();
+        // "design" appears only in the title; a plain search still finds the root.
+        let hits = search(
+            &s,
+            &SearchQuery {
+                pattern: Some(compile_pattern("design", true).unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "F-1");
+    }
+
+    #[test]
+    fn search_anchors_are_line_scoped() {
+        let (_d, s) = project();
+        create_thread(
+            &s,
+            NewThread {
+                title: "T".into(),
+                body: "context line\nERROR: boom".into(),
+                ..Default::default()
+            },
+            "a",
+            now(),
+        )
+        .unwrap();
+        // `^ERROR` must match a line inside a multi-line body.
+        let hits = search(
+            &s,
+            &SearchQuery {
+                pattern: Some(compile_pattern("^ERROR", false).unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn create_thread_never_reuses_an_id() {
+        let (_d, s) = project();
+        let t1 = create_thread(
+            &s,
+            NewThread {
+                title: "T".into(),
+                body: "one".into(),
+                ..Default::default()
+            },
+            "a",
+            now(),
+        )
+        .unwrap();
+        assert_eq!(t1.id, "F-1");
+        // Simulate board/forum divergence: rewind the counter while F-1.json stays.
+        let mut b = s.load_board().unwrap();
+        b.next_thread = 1;
+        s.save_board(&b).unwrap();
+        let t2 = create_thread(
+            &s,
+            NewThread {
+                title: "T2".into(),
+                body: "two".into(),
+                ..Default::default()
+            },
+            "a",
+            now(),
+        )
+        .unwrap();
+        // Must skip the existing F-1 and allocate F-2, not overwrite F-1.
+        assert_eq!(t2.id, "F-2");
+        assert_eq!(s.load_thread("F-1").unwrap().root.body, "one");
     }
 
     #[test]

@@ -52,11 +52,18 @@
   }
 
   async function openThread(id: string) {
+    const switching = id !== selectedId;
     selectedId = id;
     results = null;
-    replyTo = id;
+    // Only reset the reply target when actually switching threads, so a background
+    // WS refresh of the current thread doesn't clobber an in-progress reply aimed
+    // at a nested post.
+    if (switching) replyTo = id;
     try {
-      thread = await api.forumThread(id, proj());
+      const t = await api.forumThread(id, proj());
+      // Drop a stale response if the selection changed while awaiting.
+      if (id !== selectedId) return;
+      thread = t;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }

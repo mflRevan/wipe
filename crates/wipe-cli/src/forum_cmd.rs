@@ -179,9 +179,13 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
         }
 
         ForumCmd::Search(a) => {
-            let pattern = match &a.pattern {
-                Some(p) => Some(forum::compile_pattern(p, !a.case_sensitive)?),
-                None => None,
+            // A blank/whitespace-only pattern means "no pattern" (match all),
+            // matching the daemon's behavior.
+            let pattern = match a.pattern.as_deref() {
+                Some(p) if !p.trim().is_empty() => {
+                    Some(forum::compile_pattern(p, !a.case_sensitive)?)
+                }
+                _ => None,
             };
             let q = SearchQuery {
                 pattern,
@@ -269,9 +273,9 @@ fn render(post: &Post, level: usize, max_depth: Option<usize>) {
 
 /// Stream new matching posts as newline-delimited JSON until interrupted.
 fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
-    let pattern = match &a.pattern {
-        Some(p) => Some(forum::compile_pattern(p, true)?),
-        None => None,
+    let pattern = match a.pattern.as_deref() {
+        Some(p) if !p.trim().is_empty() => Some(forum::compile_pattern(p, true)?),
+        _ => None,
     };
     let q = SearchQuery {
         pattern,
@@ -282,27 +286,40 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
     };
     let interval = Duration::from_millis(a.interval.max(50));
 
-    // Optionally replay current matches, then treat everything already present as
-    // "seen" so only genuinely new posts are emitted from here on.
-    if a.replay {
-        for p in forum::search(store, &q)? {
-            emit(&p);
+    // One initial snapshot seeds both `seen` (every id) and the optional replay
+    // (its matching subset, oldest-first). Using a single snapshot closes the
+    // window where a post created between two separate reads would be recorded as
+    // seen yet never emitted.
+    let mut seen: HashSet<String> = {
+        let initial = forum::index(store)?;
+        if a.replay {
+            let mut matched: Vec<&PostView> =
+                initial.iter().filter(|p| forum::matches(p, &q)).collect();
+            matched.sort_by(|x, y| x.created.cmp(&y.created));
+            for p in matched {
+                emit(p);
+            }
         }
-    }
-    let mut seen: HashSet<String> = forum::index(store)?.into_iter().map(|p| p.id).collect();
+        initial.into_iter().map(|p| p.id).collect()
+    };
 
     loop {
         std::thread::sleep(interval);
-        let hits = match forum::search(store, &q) {
-            Ok(h) => h,
+        let all = match forum::index(store) {
+            Ok(a) => a,
             Err(_) => continue,
         };
-        // Emit oldest-first so events arrive in chronological order.
-        for h in hits.into_iter().rev() {
-            if seen.insert(h.id.clone()) {
-                emit(&h);
-            }
+        let mut fresh: Vec<&PostView> = all
+            .iter()
+            .filter(|p| !seen.contains(&p.id) && forum::matches(p, &q))
+            .collect();
+        fresh.sort_by(|x, y| x.created.cmp(&y.created)); // oldest-first
+        for p in fresh {
+            emit(p);
         }
+        // Rebuild `seen` from the current ids each poll: bounded memory, and safe
+        // because dotted ids are never reused (a deleted id can never return).
+        seen = all.into_iter().map(|p| p.id).collect();
     }
 }
 

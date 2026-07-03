@@ -272,6 +272,11 @@ impl Store {
         self.forum_dir().join(format!("{thread_id}.json"))
     }
 
+    /// Whether a thread file already exists on disk for `thread_id`.
+    pub fn thread_exists(&self, thread_id: &str) -> bool {
+        valid_thread_id(thread_id) && self.thread_path(thread_id).exists()
+    }
+
     /// Load a forum thread by its thread ID (e.g. `F-1`).
     pub fn load_thread(&self, thread_id: &str) -> Result<Thread> {
         if !valid_thread_id(thread_id) {
