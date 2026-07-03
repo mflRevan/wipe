@@ -106,10 +106,14 @@ cargo build --workspace --release
 
 ## Quickstart
 
-Initialize a board in your project:
+Initialize a board in your project. `wipe init` runs a short guided wizard
+(board name, starter content, port/exposure, auto-serve, and whether to install
+the agent skill); add `--yes` to skip it and take sensible defaults:
 
 ```sh
-wipe init .
+wipe init .            # guided setup
+wipe init . --yes      # non-interactive, standard board
+wipe init . --yes --starter empty   # a blank board, no lists/labels
 ```
 
 Create a ticket:
@@ -142,6 +146,13 @@ Launch the local desktop UI:
 wipe serve
 ```
 
+`wipe serve` notices if a daemon is already serving the board and points you at
+it instead of failing. With auto-serve enabled (from the wizard, or
+`wipe config set daemon.autoserve true`), the daemon shuts itself down once you
+close the board, so it leaves no background overhead when idle. Set machine-wide
+defaults - preferred port, exposure, starter content, and UI accent/theme - with
+`wipe config --global set <key> <value>`.
+
 ## How it works / `.wipe` layout
 
 Everything lives under a single `.wipe/` directory at the root of your
@@ -171,8 +182,19 @@ Agents are expected to interact with the board exclusively through the
 `wipe` CLI - never by hand-editing files under `.wipe/`. Every command
 accepts a `--json` flag for structured, machine-parseable output, and the
 CLI's built-in help (`wipe help`) is written to be sufficient documentation
-on its own. Repositories using `wipe` may also ship a `SKILL.md` describing
-project-specific conventions for how agents should use the board.
+on its own.
+
+`wipe` ships an agent **skill** (`SKILL.md`) that teaches coding agents how to
+drive the board. Install it into a skills directory that your tools
+auto-discover:
+
+```sh
+wipe skill install                 # auto-detect .claude/ or .agents/ in this repo
+wipe skill install --target agents # cross-tool .agents/skills/wipe/
+wipe skill install --global        # user-wide (~/.claude/skills/wipe/)
+wipe skill path                    # show where it would go
+wipe skill show                    # print the guide to stdout
+```
 
 ## Repository layout
 

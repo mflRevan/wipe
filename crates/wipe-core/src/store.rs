@@ -97,14 +97,27 @@ impl Store {
         Err(Error::not_initialized(start))
     }
 
-    /// Initialize a brand-new board under `root`, seeding the default files.
-    ///
-    /// Fails with [`Error::AlreadyInitialized`] if a `.wipe` directory already exists.
+    /// Initialize a brand-new board under `root` with the default (standard)
+    /// starter content. Fails with [`Error::AlreadyInitialized`] if a `.wipe`
+    /// directory already exists.
     pub fn init(
         root: impl AsRef<Path>,
         name: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Self> {
+        Self::init_with(root, name, now, crate::model::Starter::Standard)
+    }
+
+    /// Initialize a brand-new board, choosing how much starter content to seed:
+    /// standard lists+labels, lists only, or a blank board.
+    pub fn init_with(
+        root: impl AsRef<Path>,
+        name: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        starter: crate::model::Starter,
+    ) -> Result<Self> {
+        use crate::model::Starter;
+
         let abs = fs::canonicalize(root.as_ref())?;
         let wipe = abs.join(WIPE_DIR);
         if wipe.exists() {
@@ -118,9 +131,20 @@ impl Store {
         // Keep the media directory in git even when empty.
         write_bytes_atomic(&wipe.join("media").join(".gitkeep"), b"")?;
 
+        let board = match starter {
+            Starter::Standard | Starter::ListsOnly => Board::new(name, now),
+            Starter::Empty => Board::empty(name, now),
+        };
+        // Priorities are a harmless shared vocabulary, kept for every starter;
+        // labels are only seeded for the standard starter.
+        let mut defs = Definitions::seed();
+        if starter != Starter::Standard {
+            defs.labels.clear();
+        }
+
         let store = Store { root: abs };
-        store.save_board(&Board::new(name, now))?;
-        store.save_definitions(&Definitions::seed())?;
+        store.save_board(&board)?;
+        store.save_definitions(&defs)?;
         store.save_settings(&Settings::default())?;
         Ok(store)
     }

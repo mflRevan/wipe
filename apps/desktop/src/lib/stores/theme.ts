@@ -58,6 +58,27 @@ export function setAccent(a: Accent): void {
   applyAccent(a);
 }
 
+/**
+ * Apply user-global defaults from `wipe config --global` (served at /api/config),
+ * but only for values the user hasn't overridden locally - so the global styling
+ * takes effect out of the box without clobbering a local choice.
+ */
+export function applyServerDefaults(cfg: { accent?: string | null; theme?: string | null }): void {
+  if (!browser) return;
+  if (
+    cfg.theme &&
+    !localStorage.getItem(THEME_KEY) &&
+    (cfg.theme === 'light' || cfg.theme === 'dark' || cfg.theme === 'system')
+  ) {
+    appearance.set(cfg.theme);
+    applyAppearance(cfg.theme);
+  }
+  if (cfg.accent && !localStorage.getItem(ACCENT_KEY) && ACCENTS.some((a) => a.id === cfg.accent)) {
+    accent.set(cfg.accent as Accent);
+    applyAccent(cfg.accent as Accent);
+  }
+}
+
 /** Wire up initial application + OS change listener. Call once on mount. */
 export function initTheme(): () => void {
   if (!browser) return () => {};

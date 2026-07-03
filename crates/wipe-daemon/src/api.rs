@@ -1,6 +1,8 @@
 //! HTTP + WebSocket API handlers over `wipe-core`.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Multipart, Path, Query, State};
@@ -23,6 +25,9 @@ pub struct AppState {
     pub current: PathBuf,
     /// Broadcast channel for live-update notifications.
     pub tx: broadcast::Sender<String>,
+    /// Number of live UI WebSocket clients. Drives idle-shutdown: when this is 0
+    /// for long enough, an auto-served daemon exits.
+    pub clients: Arc<AtomicUsize>,
 }
 
 /// An error that renders as a JSON `{ok:false,error}` body.
@@ -89,6 +94,13 @@ fn board_json(board: &Board, view: &[(String, Vec<Ticket>)]) -> Value {
 /// `GET /api/health`
 pub async fn health() -> Json<Value> {
     Json(json!({ "ok": true, "service": "wipe-daemon", "version": env!("CARGO_PKG_VERSION") }))
+}
+
+/// `GET /api/config` - user-global UI preferences (accent/theme) so the board can
+/// honor the styling chosen via `wipe config --global`.
+pub async fn app_config() -> Json<Value> {
+    let g = wipe_core::GlobalConfig::load();
+    Json(json!({ "accent": g.ui_accent, "theme": g.ui_theme }))
 }
 
 /// `GET /api/projects`
@@ -558,8 +570,20 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
     ws.on_upgrade(move |socket| ws_loop(socket, state))
 }
 
+/// Decrements the live-client counter when a WebSocket handler ends.
+struct ClientGuard(Arc<AtomicUsize>);
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn ws_loop(mut socket: WebSocket, state: AppState) {
     let mut rx = state.tx.subscribe();
+    // Count this client for the lifetime of the socket so idle-shutdown knows the
+    // board is actively being viewed; `_guard` decrements on drop (any exit path).
+    state.clients.fetch_add(1, Ordering::SeqCst);
+    let _guard = ClientGuard(state.clients.clone());
     let _ = socket.send(Message::Text("connected".into())).await;
     loop {
         tokio::select! {

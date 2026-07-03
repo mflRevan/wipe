@@ -12,6 +12,7 @@ mod watch;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::routing::{get, patch, post, put};
 use axum::Router;
@@ -34,12 +35,16 @@ pub struct ServeConfig {
     pub expose: Exposure,
     /// Whether to open a browser once bound (best-effort; currently a hint).
     pub open: bool,
+    /// If set, the daemon shuts itself down after this long with no connected UI
+    /// clients - so auto-served daemons leave no overhead once the tab is closed.
+    pub idle_timeout: Option<std::time::Duration>,
 }
 
 /// Build the application router for a given state.
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
+        .route("/api/config", get(api::app_config))
         .route("/api/projects", get(api::projects))
         .route("/api/board", get(api::board))
         .route("/api/history", get(api::history))
@@ -82,9 +87,11 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     registry::register(&cfg.root);
 
     let (tx, _rx) = broadcast::channel::<String>(64);
+    let clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let state = AppState {
         current: cfg.root.clone(),
         tx: tx.clone(),
+        clients: clients.clone(),
     };
 
     // Watch `.wipe` for live updates; keep the watcher alive for the whole serve.
@@ -106,20 +113,63 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     } else {
         bound
     };
-    println!("wipe UI serving on http://{shown}  (Ctrl-C to stop)");
+    match cfg.idle_timeout {
+        Some(d) => println!(
+            "wipe UI serving on http://{shown}  (Ctrl-C to stop; auto-stops after {}s idle)",
+            d.as_secs()
+        ),
+        None => println!("wipe UI serving on http://{shown}  (Ctrl-C to stop)"),
+    }
     if cfg.open {
         open_browser(&format!("http://{shown}"));
     }
 
     let app = router(state);
+    let idle = cfg.idle_timeout;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move { shutdown_signal(clients, idle).await })
         .await?;
     Ok(())
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+/// Resolve when the daemon should stop: on Ctrl-C, or - if an idle timeout is
+/// configured - once there have been no connected UI clients for that long.
+async fn shutdown_signal(
+    clients: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    idle: Option<Duration>,
+) {
+    tokio::select! {
+        _ = async { let _ = tokio::signal::ctrl_c().await; } => {}
+        _ = idle_watcher(clients, idle) => {
+            println!("wipe: idle with no viewers; shutting down.");
+        }
+    }
+}
+
+/// Completes once the daemon has been idle (zero clients) for `timeout`. If no
+/// timeout is set, never completes.
+async fn idle_watcher(
+    clients: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    timeout: Option<Duration>,
+) {
+    use std::sync::atomic::Ordering;
+    let Some(timeout) = timeout else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    let mut idle_since = Some(std::time::Instant::now());
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        tick.tick().await;
+        if clients.load(Ordering::SeqCst) > 0 {
+            idle_since = None;
+        } else {
+            let since = idle_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= timeout {
+                return;
+            }
+        }
+    }
 }
 
 /// Best-effort: open `url` in the user's default browser.
@@ -143,7 +193,11 @@ mod tests {
 
     fn test_state(root: PathBuf) -> AppState {
         let (tx, _rx) = broadcast::channel(8);
-        AppState { current: root, tx }
+        AppState {
+            current: root,
+            tx,
+            clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
     }
 
     #[tokio::test]

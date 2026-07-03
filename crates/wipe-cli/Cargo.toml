@@ -25,6 +25,8 @@ chrono.workspace = true
 clap = { version = "4", features = ["derive", "wrap_help"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+inquire = "0.7"
+directories = "5"
 
 [dev-dependencies]
 assert_cmd = "2"

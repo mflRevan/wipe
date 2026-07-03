@@ -5,7 +5,9 @@
 mod args;
 mod commands;
 mod identity;
+mod onboard;
 mod output;
+mod skills;
 
 use std::process::ExitCode;
 
@@ -48,8 +50,8 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Label(c) => commands::label(out, c),
         Command::Media(c) => commands::media(out, c),
         Command::Serve(a) => commands::serve(out, a),
-        Command::Config(c) => commands::config(out, c),
+        Command::Config { global, cmd } => commands::config(out, global, cmd),
         Command::Doctor => commands::doctor(out),
-        Command::Skill => commands::skill(out),
+        Command::Skill { cmd } => commands::skill(out, cmd),
     }
 }

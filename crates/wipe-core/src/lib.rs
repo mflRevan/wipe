@@ -8,6 +8,7 @@
 //! crate so that serialization stays deterministic (stable key order, trailing
 //! newline, atomic writes) and git diffs remain minimal and merge-friendly.
 
+pub mod config;
 pub mod error;
 pub mod git;
 pub mod id;
@@ -15,5 +16,6 @@ pub mod model;
 pub mod ops;
 pub mod store;
 
+pub use config::GlobalConfig;
 pub use error::{Error, Result};
 pub use store::{Store, WIPE_DIR};

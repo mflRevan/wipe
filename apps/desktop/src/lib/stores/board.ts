@@ -1,5 +1,6 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, subscribeChanges } from '$lib/api';
+import { applyServerDefaults } from '$lib/stores/theme';
 import type { Board, Definitions, GraphCommit, Health, Identity, Project, Ticket } from '$lib/types';
 
 export const health = writable<Health | null>(null);
@@ -175,6 +176,12 @@ export async function deleteList(id: string): Promise<void> {
 export async function bootstrap(): Promise<void> {
   const ok = await checkHealth();
   if (!ok) return;
+  // Honor user-global UI styling (accent/theme) unless overridden locally.
+  try {
+    applyServerDefaults(await api.appConfig());
+  } catch {
+    /* styling defaults are non-critical */
+  }
   await loadProjects();
   await Promise.all([loadBoard(), loadDefinitions(), loadIdentities(), loadGraph()]);
   startLiveUpdates();

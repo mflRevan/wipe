@@ -107,6 +107,11 @@ export const api = {
     return req<Health>('/api/health');
   },
 
+  /** User-global UI defaults (accent/theme) set via `wipe config --global`. */
+  appConfig(): Promise<{ accent?: string | null; theme?: string | null }> {
+    return req<{ accent?: string | null; theme?: string | null }>('/api/config');
+  },
+
   async projects(): Promise<Project[]> {
     const r = await req<{ projects: Project[] }>('/api/projects');
     return r.projects ?? [];

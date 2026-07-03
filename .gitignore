@@ -24,6 +24,9 @@ apps/desktop/src-tauri/target
 # Local sandbox: persistent mock projects for running the CLI / agents locally
 tests/sandbox/
 
+# The repo does not dogfood its own board; a stray root .wipe/ is never committed.
+/.wipe/
+
 # Working build log (per project convention)
 /PLAN.md
 

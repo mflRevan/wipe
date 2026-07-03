@@ -54,13 +54,21 @@ pub enum Command {
     Media(MediaCmd),
     /// Start the local web UI daemon.
     Serve(ServeArgs),
-    /// Get or set project settings.
-    #[command(subcommand)]
-    Config(ConfigCmd),
+    /// Get or set settings (project by default; `--global` for user defaults).
+    Config {
+        /// Operate on the machine-wide user config instead of this board.
+        #[arg(long)]
+        global: bool,
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
     /// Diagnose the environment and the current board.
     Doctor,
-    /// Print the agent SKILL guide for this CLI.
-    Skill,
+    /// Print or install the agent SKILL guide for this CLI.
+    Skill {
+        #[command(subcommand)]
+        cmd: Option<SkillCmd>,
+    },
 }
 
 /// `wipe init`
@@ -72,6 +80,41 @@ pub struct InitArgs {
     /// Board name (defaults to the directory name).
     #[arg(long)]
     pub name: Option<String>,
+    /// Skip the interactive wizard, using defaults / your global config.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+    /// Starter content: `standard` (lists+labels), `lists`, or `empty`.
+    #[arg(long, value_name = "KIND")]
+    pub starter: Option<String>,
+}
+
+/// `wipe skill ...`
+#[derive(Debug, Subcommand)]
+pub enum SkillCmd {
+    /// Print the SKILL.md guide to stdout (the default when no subcommand given).
+    Show,
+    /// Install SKILL.md into an agent skills directory.
+    Install(SkillInstallArgs),
+    /// Show where the skill would be installed, without writing anything.
+    Path(SkillInstallArgs),
+}
+
+/// `wipe skill install` / `wipe skill path`
+#[derive(Debug, Args, Clone)]
+pub struct SkillInstallArgs {
+    /// Skills convention: `claude` (.claude/skills), `agents` (.agents/skills),
+    /// or omit to auto-detect from the project / home directory.
+    #[arg(long, value_name = "TARGET")]
+    pub target: Option<String>,
+    /// Install user-globally (~/.claude or ~/.agents) instead of project-scoped.
+    #[arg(long)]
+    pub global: bool,
+    /// Install under an explicit base directory (a `skills/` dir is created in it).
+    #[arg(long, value_name = "PATH")]
+    pub dir: Option<PathBuf>,
+    /// Overwrite an existing SKILL.md if present.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// `wipe board ...`
@@ -316,6 +359,9 @@ pub struct ServeArgs {
     /// Open the UI in a browser once started.
     #[arg(long)]
     pub open: bool,
+    /// Auto-stop after N seconds with no viewers (0 = never; overrides settings).
+    #[arg(long, value_name = "SECS")]
+    pub idle: Option<u64>,
 }
 
 /// `wipe config ...`

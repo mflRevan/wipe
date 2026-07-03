@@ -46,6 +46,19 @@ pub struct Board {
     pub updated: DateTime<Utc>,
 }
 
+/// What to pre-populate a new board with (chosen during `wipe init`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Starter {
+    /// Default lists (Backlog/Todo/In Progress/Done) and default labels.
+    #[default]
+    Standard,
+    /// Default lists, but no labels.
+    ListsOnly,
+    /// No lists and no labels - a blank board.
+    Empty,
+}
+
 impl Board {
     /// Create a fresh board with the default set of lists.
     pub fn new(name: impl Into<String>, now: DateTime<Utc>) -> Self {
@@ -59,6 +72,13 @@ impl Board {
             created: now,
             updated: now,
         }
+    }
+
+    /// Create a board with no lists (used by the "empty" starter).
+    pub fn empty(name: impl Into<String>, now: DateTime<Utc>) -> Self {
+        let mut b = Board::new(name, now);
+        b.lists.clear();
+        b
     }
 
     /// Find a list by ID.
@@ -475,6 +495,17 @@ pub struct DaemonSettings {
     /// How the daemon is exposed beyond localhost.
     #[serde(default)]
     pub expose: Exposure,
+    /// When true, the daemon shuts itself down after `idle_timeout_secs` with no
+    /// connected UI clients, so it leaves no background overhead when not viewed.
+    #[serde(default)]
+    pub autoserve: bool,
+    /// Idle timeout (seconds) used when auto-serving / `--idle` is active.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_secs: u64,
+}
+
+fn default_idle_timeout() -> u64 {
+    900
 }
 
 impl Default for DaemonSettings {
@@ -482,6 +513,8 @@ impl Default for DaemonSettings {
         DaemonSettings {
             port: DEFAULT_PORT,
             expose: Exposure::default(),
+            autoserve: false,
+            idle_timeout_secs: default_idle_timeout(),
         }
     }
 }

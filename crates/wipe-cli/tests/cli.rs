@@ -27,11 +27,13 @@ impl Project {
         self.dir.path()
     }
 
-    /// Build a `wipe` invocation rooted at this project with a fixed author.
+    /// Build a `wipe` invocation rooted at this project with a fixed author and
+    /// an isolated global-config dir (so tests never read/write the real one).
     fn cmd(&self, args: &[&str]) -> StdCommand {
         let mut c = StdCommand::cargo_bin("wipe").unwrap();
         c.current_dir(self.dir.path());
         c.env("WIPE_AUTHOR", "Tester <t@example.com>");
+        c.env("WIPE_CONFIG_DIR", self.dir.path());
         c.args(args);
         c
     }
@@ -175,6 +177,76 @@ fn skill_is_embedded() {
     let p = Project::new();
     let out = p.run(&["skill"]);
     assert!(out.contains("wipe - agent operating guide"));
+    // `skill show` is the explicit form of the same output.
+    assert!(p.run(&["skill", "show"]).contains("agent operating guide"));
+}
+
+#[test]
+fn init_empty_starter_has_no_lists() {
+    let p = Project::new();
+    let v = p.json(&[
+        "init",
+        ".",
+        "--name",
+        "Blank",
+        "--yes",
+        "--starter",
+        "empty",
+    ]);
+    assert_eq!(v["starter"], "empty");
+    let status = p.json(&["status"]);
+    assert!(status["lists"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn skill_install_writes_file_and_respects_force() {
+    let p = Project::new();
+    let base = p.path().join("dest");
+    let base_s = base.to_str().unwrap();
+
+    let v = p.json(&["skill", "install", "--dir", base_s, "--target", "claude"]);
+    assert_eq!(v["target"], "claude");
+    assert!(base.join("skills/wipe/SKILL.md").is_file());
+
+    // A second install without --force fails; with --force it succeeds.
+    let again = p
+        .cmd(&["skill", "install", "--dir", base_s])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    p.json(&["skill", "install", "--dir", base_s, "--force"]);
+
+    // `skill path` reports the location without writing.
+    let path = p.json(&["skill", "path", "--dir", base_s, "--target", "agents"]);
+    assert!(path["path"].as_str().unwrap().contains("SKILL.md"));
+}
+
+#[test]
+fn skill_install_auto_detects_agents_dir() {
+    let p = Project::new();
+    std::fs::create_dir_all(p.path().join(".agents")).unwrap();
+    let v = p.json(&["skill", "install"]);
+    assert_eq!(v["target"], "agents");
+    assert!(p.path().join(".agents/skills/wipe/SKILL.md").is_file());
+}
+
+#[test]
+fn global_config_roundtrip() {
+    let p = Project::new();
+    p.json(&["config", "--global", "set", "autoserve", "true"]);
+    p.json(&["config", "--global", "set", "starter", "empty"]);
+    assert_eq!(
+        p.json(&["config", "--global", "get", "autoserve"])["value"],
+        true
+    );
+    assert_eq!(
+        p.json(&["config", "--global", "get", "starter"])["value"],
+        "empty"
+    );
+    // The stored global default then drives a non-interactive init.
+    let v = p.json(&["init", ".", "--name", "G", "--yes"]);
+    assert_eq!(v["starter"], "empty");
+    assert_eq!(v["autoserve"], true);
 }
 
 /// Deterministic mirror of the agent-to-agent supervision loop (no LLM), so CI
