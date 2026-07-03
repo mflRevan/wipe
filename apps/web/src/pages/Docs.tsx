@@ -38,7 +38,7 @@ function Introduction() {
       <Prose>
         <p>
           <strong className="text-foreground">wipe</strong> is a CLI-first,
-          git-native task board for collaboration between humans and AI agents —
+          git-native task board for collaboration between humans and AI agents -
           and agents with each other. There is no external service, no separate
           database, and no account to create: the board <em>is</em> a folder in
           your repo (<code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>),
@@ -50,7 +50,7 @@ function Introduction() {
           (Backlog, Todo, In Progress, Done…) containing{" "}
           <strong className="text-foreground">tickets</strong>. All state is
           stored as flat, deterministically formatted JSON designed for clean
-          diffs and low-conflict merges, so two people — or two agents — can work
+          diffs and low-conflict merges, so two people - or two agents - can work
           on the same board on different branches and merge without a fight.
         </p>
         <p>
@@ -212,7 +212,7 @@ function CliReference() {
       <H2>CLI reference</H2>
       <Prose>
         <p>
-          The CLI is self-documenting — run{" "}
+          The CLI is self-documenting - run{" "}
           <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe &lt;command&gt; --help</code>{" "}
           for any command. Add{" "}
           <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>{" "}
@@ -251,7 +251,7 @@ function ForAgents() {
       <H2>For agents</H2>
       <Prose>
         <p>
-          wipe is designed to be driven by agents through the CLI alone — no SDK,
+          wipe is designed to be driven by agents through the CLI alone - no SDK,
           no plugin. Any harness that can shell out can use it.
         </p>
       </Prose>
@@ -313,7 +313,7 @@ function ForAgents() {
             Point an agent at{" "}
             <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe skill</code>
             : it prints a self-contained guide teaching the agent how to drive the
-            board — the commands, the JSON shapes, and the conventions.
+            board - the commands, the JSON shapes, and the conventions.
           </p>
         </Prose>
         <CodeBlock code="wipe skill" prompt />

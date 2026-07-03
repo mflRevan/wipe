@@ -3,7 +3,7 @@
 ## Supported Versions
 
 `wipe` is **pre-1.0** and under active development. There are no long-term
-support branches yet — only the **latest released version** is supported
+support branches yet - only the **latest released version** is supported
 with security fixes. Please make sure you are on the most recent release
 before reporting an issue, and be prepared to upgrade as part of any fix.
 

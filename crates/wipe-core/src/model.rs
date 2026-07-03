@@ -22,7 +22,7 @@ pub const DEFAULT_PORT: u16 = 6737;
 // board.json
 // ---------------------------------------------------------------------------
 
-/// The board — the top-level object of a project. Holds ordered [`List`]s whose
+/// The board - the top-level object of a project. Holds ordered [`List`]s whose
 /// `cards` reference ticket IDs. Ticket *content* lives in separate files under
 /// `tickets/`, so moving a card and editing a ticket never touch the same file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

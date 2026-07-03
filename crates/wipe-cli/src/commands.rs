@@ -175,7 +175,7 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 assignees: a.assignees,
             };
             let t = ops::create_ticket(&s, spec, &identity::resolve(None), Utc::now())?;
-            out.ok(format!("created {} — {}", t.id, t.title), to_value(&t));
+            out.ok(format!("created {} - {}", t.id, t.title), to_value(&t));
         }
         TicketCmd::Show { id } => {
             let t = s.load_ticket(&id)?;
@@ -602,7 +602,7 @@ pub fn skill(out: &Out) -> Result<()> {
     Ok(())
 }
 
-/// `wipe serve` — start the local daemon serving the board UI + API.
+/// `wipe serve` - start the local daemon serving the board UI + API.
 pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
     let s = store()?;
     let settings = s.load_settings()?;

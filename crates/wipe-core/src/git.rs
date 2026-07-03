@@ -159,7 +159,7 @@ pub struct GraphCommit {
     pub date: String,
     /// Commit subject.
     pub subject: String,
-    /// Whether this commit changed the board (`.wipe/`) — a board "checkpoint".
+    /// Whether this commit changed the board (`.wipe/`) - a board "checkpoint".
     pub board: bool,
 }
 

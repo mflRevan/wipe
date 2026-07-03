@@ -1,4 +1,4 @@
-# wipe — web
+# wipe - web
 
 The public marketing + documentation website for [wipe](https://github.com/mflRevan/wipe),
 a git-native task board for humans and agents.
@@ -34,9 +34,9 @@ configured base automatically.
 
 ## Structure
 
-- `src/pages/Landing.tsx` — landing page (hero, why, features, quickstart)
-- `src/pages/Docs.tsx` — docs layout with sidebar + sections
-- `src/pages/docs/data.ts` — docs sections and CLI reference data
-- `src/components/CodeBlock.tsx` — reusable copyable code block
-- `src/components/CommandCard.tsx` — CLI command card
-- `src/components/ui/` — shadcn-style primitives
+- `src/pages/Landing.tsx` - landing page (hero, why, features, quickstart)
+- `src/pages/Docs.tsx` - docs layout with sidebar + sections
+- `src/pages/docs/data.ts` - docs sections and CLI reference data
+- `src/components/CodeBlock.tsx` - reusable copyable code block
+- `src/components/CommandCard.tsx` - CLI command card
+- `src/components/ui/` - shadcn-style primitives

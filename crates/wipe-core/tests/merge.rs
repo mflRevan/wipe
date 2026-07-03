@@ -79,7 +79,7 @@ fn concurrent_edits_to_different_tickets_merge_cleanly() {
     store.save_ticket(&t2).unwrap();
     git_ok(root, &["commit", "-am", "edit beta"]);
 
-    // Merge both branches into main — must be conflict-free.
+    // Merge both branches into main - must be conflict-free.
     git_ok(root, &["checkout", "-q", "main"]);
     git_ok(root, &["merge", "-q", "--no-edit", "edit-alpha"]);
     let merge = git(root, &["merge", "--no-edit", "edit-beta"]);

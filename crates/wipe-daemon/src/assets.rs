@@ -3,7 +3,7 @@
 //! The UI is baked in from the `assets/` directory at compile time. That
 //! directory is a *build-staging* location populated by `scripts/embed-ui`
 //! (which builds `apps/desktop` and copies its output here); it is gitignored.
-//! When it hasn't been populated — e.g. a plain `cargo build` with no UI — we
+//! When it hasn't been populated - e.g. a plain `cargo build` with no UI - we
 //! fall back to a compiled-in placeholder page so the daemon always works.
 
 use axum::body::Body;

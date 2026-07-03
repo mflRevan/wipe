@@ -58,7 +58,7 @@
 
   $effect(() => {
     if (!open) return;
-    // Render hidden, measure, then place — avoids a one-frame flash at (0,0).
+    // Render hidden, measure, then place - avoids a one-frame flash at (0,0).
     style = `${width ? `width:${width};` : ''} position:fixed; visibility:hidden;`;
     tick().then(place);
     const reposition = () => place();

@@ -34,7 +34,7 @@
     ticket?.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
   );
 
-  // Comments and activity events, interleaved and sorted newest-first — the
+  // Comments and activity events, interleaved and sorted newest-first - the
   // Trello-style timeline in the right pane.
   let feed = $derived<FeedItem[]>(
     ticket
@@ -108,7 +108,7 @@
     return $identities.find((i) => i.id === id);
   }
   // Activity actors and CLI comment authors are stored as the full git identity
-  // (`Name <email>`), while identities are keyed by email — so resolve either form.
+  // (`Name <email>`), while identities are keyed by email - so resolve either form.
   function identityForActor(actor: string) {
     const direct = identityFor(actor);
     if (direct) return direct;
@@ -177,7 +177,7 @@
             <span class="flabel">Labels</span>
             {#if readOnly}
               <div class="chips-ro">
-                {#each ticket.labels as l (l)}<Chip>{l}</Chip>{:else}<span class="dim">—</span>{/each}
+                {#each ticket.labels as l (l)}<Chip>{l}</Chip>{:else}<span class="dim">-</span>{/each}
               </div>
             {:else}
               <LabelPicker selected={ticket.labels} onchange={(labels) => patch({ labels })} />
@@ -194,7 +194,7 @@
                       ?.display_name ?? a}
                   </span>
                 {:else}
-                  <span class="dim">—</span>
+                  <span class="dim">-</span>
                 {/each}
               </div>
             {:else}
@@ -216,7 +216,7 @@
               <Flag size={13} class="flag" />
             {/if}
             {#if readOnly}
-              <span class="prio-val">{ticket.priority ?? '—'}</span>
+              <span class="prio-val">{ticket.priority ?? '-'}</span>
             {:else}
               <select
                 class="sel"
@@ -224,7 +224,7 @@
                 onchange={(e) =>
                   patch({ priority: e.currentTarget.value === '' ? null : e.currentTarget.value })}
               >
-                <option value="">— none —</option>
+                <option value="">- none -</option>
                 {#each $definitions.priorities as p (p)}
                   <option value={p}>{p}</option>
                 {/each}

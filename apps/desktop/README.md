@@ -1,6 +1,6 @@
 # wipe desktop
 
-The local, human-facing desktop UI for **wipe** — a git-native task board. A
+The local, human-facing desktop UI for **wipe** - a git-native task board. A
 Trello-style board that talks to the local `wipe-daemon` REST/WebSocket API.
 
 Built with **SvelteKit** (static SPA), **TypeScript**, **Tailwind CSS**,
@@ -41,19 +41,19 @@ pnpm check      # svelte-check (type checking)
 
 ## Features
 
-- **Project switcher** — dropdown backed by `GET /api/projects`, with a live
+- **Project switcher** - dropdown backed by `GET /api/projects`, with a live
   daemon health indicator (`GET /api/health`).
-- **Board view** — lists as columns, tickets as cards; drag cards within and
+- **Board view** - lists as columns, tickets as cards; drag cards within and
   between columns. Drops call `POST /api/tickets/{id}/move` optimistically and
   reconcile via WebSocket/refetch.
-- **New ticket** — a "+" per column opens a dialog (title, type, priority, body)
+- **New ticket** - a "+" per column opens a dialog (title, type, priority, body)
   → `POST /api/tickets`.
-- **Ticket detail drawer** — full body, metadata, and comment thread with an
+- **Ticket detail drawer** - full body, metadata, and comment thread with an
   add-comment box (`POST /api/tickets/{id}/comments`).
-- **History rewind / time machine** — a commit slider (`GET /api/history`)
+- **History rewind / time machine** - a commit slider (`GET /api/history`)
   loads read-only historical snapshots (`GET /api/board/at`) with a GitLens-style
   attribution banner and a "Return to now" button. Dragging is disabled.
-- **Live updates** — subscribes to `GET /ws`; refetches the board on `changed`.
+- **Live updates** - subscribes to `GET /ws`; refetches the board on `changed`.
 
 Key modules: `src/lib/api.ts` (typed client + WS), `src/lib/stores/board.ts`
 (board state), `src/lib/components/*` (UI).

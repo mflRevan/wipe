@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "wipe — CLI-first, git-native collaboration for humans and agents."
+description = "wipe - CLI-first, git-native collaboration for humans and agents."
 
 [[bin]]
 name = "wipe"

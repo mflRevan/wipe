@@ -61,7 +61,7 @@ try {
   try {
     execSync("cargo build --workspace --quiet", { cwd: root, stdio: "inherit" });
   } catch {
-    console.warn("  (couldn't refresh Cargo.lock automatically — run `cargo build`)");
+    console.warn("  (couldn't refresh Cargo.lock automatically - run `cargo build`)");
   }
 }
 

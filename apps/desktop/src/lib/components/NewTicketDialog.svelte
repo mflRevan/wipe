@@ -113,7 +113,7 @@
 
       <label class="fl" for="nt-prio">Priority</label>
       <select id="nt-prio" class="in" bind:value={priority}>
-        <option value="">— none —</option>
+        <option value="">- none -</option>
         {#each $definitions.priorities as p (p)}<option value={p}>{p}</option>{/each}
       </select>
 

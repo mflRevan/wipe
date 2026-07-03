@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------ *
- * wipe design system — tokens + base. Every color/motion/radius here
+ * wipe design system - tokens + base. Every color/motion/radius here
  * comes from docs/DESIGN.md. Components reference only --wp-* tokens.
  * ------------------------------------------------------------------ */
 
@@ -121,7 +121,7 @@ a {
   color: var(--wp-accent);
 }
 
-/* Global focus ring — never a browser default outline. */
+/* Global focus ring - never a browser default outline. */
 :focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--wp-focus);

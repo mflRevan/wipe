@@ -1,13 +1,13 @@
 # wipe design system
 
-The single source of truth for how **wipe** looks and feels — used by **both** the
+The single source of truth for how **wipe** looks and feels - used by **both** the
 local desktop UI (`apps/desktop`) and the public website (`apps/web`). If a color,
 font, radius, or motion value isn't here, it doesn't ship.
 
 ## Principles
 
 1. **Flat, never gradient.** Depth comes from *borders* and *one* subtle elevation
-   step — never gradients, glows, or heavy shadows. Gradients read as AI slop.
+   step - never gradients, glows, or heavy shadows. Gradients read as AI slop.
 2. **One palette everywhere.** The tokens below are identical across the app and the
    website. No component invents its own colors.
 3. **Earthy + technical.** Warm, papery neutrals (Slate/Cloud/Ivory) with a single
@@ -18,7 +18,7 @@ font, radius, or motion value isn't here, it doesn't ship.
    honor `prefers-reduced-motion`.
 5. **Light and dark are equals.** Both are first-class and fully specified.
 
-## 1. Raw palette (exact hex — from the brand swatches)
+## 1. Raw palette (exact hex - from the brand swatches)
 
 | Token | Hex | | Token | Hex |
 | --- | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ On dark: chip `bg = color @ 22% alpha`, `text = color lightened`, `border = colo
 On light: chip `bg = color @ 14% alpha`, `text = color darkened`, `border = color @ 30%`.
 No solid-fill chips (too loud), no gradients.
 
-## 5. Typography — Space Grotesk + Geist
+## 5. Typography - Space Grotesk + Geist
 
 Three self-hosted families (no CDN, so it works offline and inside the embedded
 binary). Space Grotesk gives the brand its distinctive voice; Geist keeps dense
@@ -134,7 +134,7 @@ Weights: Geist 400 (body) / 500 (emphasis); Space Grotesk 500 / 600 (headings).
 - **Spacing scale (px):** 2, 4, 6, 8, 12, 16, 20, 24, 32. Card padding 12; column gap 12.
 - **Radius:** `sm 6` (chips, inputs, buttons), `md 8` (cards), `lg 12` (columns, drawer,
   menus), `pill 999` (avatars, counts).
-- **Elevation:** resting cards have **no** shadow — just `--wp-border`. `--wp-shadow`
+- **Elevation:** resting cards have **no** shadow - just `--wp-border`. `--wp-shadow`
   appears on hover of interactive cards; `--wp-shadow-lift` only on a dragged card and
   the drawer. That's the entire shadow vocabulary.
 
@@ -197,9 +197,9 @@ These back the UI features above; the on-disk schema lives in `.wipe/`.
   the UI. Ticket `assignees` reference identity `id`s.
 - **Attachments** (per ticket): `{ name, path, source, size, mime }` where `path` is
   **repo-relative**.
-  - `source: "repo"` — the file is already tracked in the repository; store its existing
+  - `source: "repo"` - the file is already tracked in the repository; store its existing
     path and reference it. **No copy, no duplication.**
-  - `source: "media"` — an external upload; copied to `.wipe/media/<hash8>-<name>` and
+  - `source: "media"` - an external upload; copied to `.wipe/media/<hash8>-<name>` and
     referenced there. On upload we hash the bytes and, if a tracked file already has the
     same git blob hash, we record it as `source: "repo"` instead of copying.
   - **Size limit:** default **50 MB** per attachment (`settings.daemon`/`settings` key

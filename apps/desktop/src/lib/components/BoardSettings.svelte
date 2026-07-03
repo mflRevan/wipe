@@ -97,7 +97,7 @@
         <section class="sec">
           <span class="flabel">Board</span>
           <div class="info">
-            <div class="irow"><span class="k">Name</span><span class="v">{$board?.board ?? '—'}</span></div>
+            <div class="irow"><span class="k">Name</span><span class="v">{$board?.board ?? '-'}</span></div>
             <div class="irow"><span class="k">Lists</span><span class="v">{$board?.lists.length ?? 0}</span></div>
             <div class="irow">
               <span class="k">Daemon</span>

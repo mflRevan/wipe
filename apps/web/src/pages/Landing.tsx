@@ -20,12 +20,12 @@ const whyItems = [
   {
     icon: GitBranch,
     title: "Git-native by design",
-    body: "The board is a folder in your repo (.wipe/). Every change is something you can diff, blame, branch, and merge like any other file — no service, no database, no account.",
+    body: "The board is a folder in your repo (.wipe/). Every change is something you can diff, blame, branch, and merge like any other file - no service, no database, no account.",
   },
   {
     icon: Boxes,
     title: "Works with any agent harness",
-    body: "Agents talk to the board exclusively through the wipe CLI. If a harness can shell out, it can drive the board — no SDK, plugin, or proprietary integration required.",
+    body: "Agents talk to the board exclusively through the wipe CLI. If a harness can shell out, it can drive the board - no SDK, plugin, or proprietary integration required.",
   },
   {
     icon: Users,
@@ -53,7 +53,7 @@ const features = [
   {
     icon: Bot,
     title: "Human ↔ agent & agent ↔ agent",
-    body: "A shared board for people and models — and for agents coordinating directly with each other.",
+    body: "A shared board for people and models - and for agents coordinating directly with each other.",
   },
   {
     icon: MousePointerClick,
@@ -113,7 +113,7 @@ export default function Landing() {
           <p className="animate-fade-up mt-6 max-w-2xl text-lg text-muted-foreground">
             wipe is a CLI-first task board that lives inside your git repository.
             Agents drive it through a self-documenting CLI; humans get a local
-            drag-and-drop desktop app — over one shared, diffable source of truth.
+            drag-and-drop desktop app - over one shared, diffable source of truth.
           </p>
           <div className="animate-fade-up mt-8 flex flex-col gap-3 sm:flex-row">
             <Link to="/docs">
@@ -198,7 +198,7 @@ export default function Landing() {
             </h2>
             <p className="mt-4 text-muted-foreground">
               Initialize a board, create tickets, move them across lists, and
-              leave comments — all from the CLI, all committed to git. Add{" "}
+              leave comments - all from the CLI, all committed to git. Add{" "}
               <code className="rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-xs text-primary">
                 --json
               </code>{" "}

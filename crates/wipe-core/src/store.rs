@@ -3,10 +3,10 @@
 //! [`Store`] is the *only* sanctioned way to read and write a `.wipe` directory.
 //! All writes are:
 //!
-//! * **Deterministic** — `serde_json::to_string_pretty` plus a trailing newline,
+//! * **Deterministic** - `serde_json::to_string_pretty` plus a trailing newline,
 //!   with a model whose field/collection order is stable, so re-serializing
 //!   unchanged data yields byte-identical output and git diffs stay minimal.
-//! * **Atomic** — written to a temporary file in the same directory and then
+//! * **Atomic** - written to a temporary file in the same directory and then
 //!   renamed over the target, so a crash never leaves a half-written file.
 
 use std::fs;

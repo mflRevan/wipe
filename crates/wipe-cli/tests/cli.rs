@@ -174,7 +174,7 @@ fn config_roundtrip() {
 fn skill_is_embedded() {
     let p = Project::new();
     let out = p.run(&["skill"]);
-    assert!(out.contains("wipe — agent operating guide"));
+    assert!(out.contains("wipe - agent operating guide"));
 }
 
 /// Deterministic mirror of the agent-to-agent supervision loop (no LLM), so CI

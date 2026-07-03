@@ -1,10 +1,10 @@
-# Scenario: "calc service" — spec encoded as wipe tickets
+# Scenario: "calc service" - spec encoded as wipe tickets
 
 The supervisor sets up a board named **Calc Service** and files one spec ticket in
 the `todo` list. This is the entire brief handed to the subordinate agent; it must
 be discoverable and actionable purely through the `wipe` CLI.
 
-## Ticket T-1 (todo) — Implement `add`
+## Ticket T-1 (todo) - Implement `add`
 
 **Title:** Implement add(a, b) in calc.py
 

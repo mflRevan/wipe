@@ -1,12 +1,12 @@
 ---
 name: wipe
-description: Drive a wipe board — a git-native, CLI-first task board for humans and agents. Use when you need to read or update tickets, lists, comments, labels, or board state in a project that has a `.wipe/` directory (or should have one). All interaction is through the `wipe` CLI with `--json`.
+description: Drive a wipe board - a git-native, CLI-first task board for humans and agents. Use when you need to read or update tickets, lists, comments, labels, or board state in a project that has a `.wipe/` directory (or should have one). All interaction is through the `wipe` CLI with `--json`.
 ---
 
-# wipe — agent operating guide
+# wipe - agent operating guide
 
 `wipe` is a git-native task board that lives inside a repository under `.wipe/`.
-**As an agent you interact only through the `wipe` CLI — never read or edit files
+**As an agent you interact only through the `wipe` CLI - never read or edit files
 under `.wipe/` directly.** The CLI keeps the on-disk JSON deterministic and
 merge-friendly; hand-editing breaks that guarantee.
 
@@ -19,7 +19,7 @@ merge-friendly; hand-editing breaks that guarantee.
 4. IDs are stable: tickets are `T-<n>`, comments `c-<n>`, lists are kebab-case
    slugs (e.g. `in-progress`).
 5. Prefer small, explicit commands over guessing. Run `wipe <group> --help` to
-   discover exact flags — the CLI is self-documenting.
+   discover exact flags - the CLI is self-documenting.
 
 ## Setup
 
@@ -58,7 +58,7 @@ wipe comment add T-1 --body "Spec clarified: use OAuth" --json
 wipe comment list T-1 --json
 ```
 
-Labels (the only categorization — there is no "type" or "tags"). New labels are
+Labels (the only categorization - there is no "type" or "tags"). New labels are
 auto-assigned a color if you don't pass one:
 
 ```bash

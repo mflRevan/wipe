@@ -104,7 +104,7 @@ pub async fn board(State(state): State<AppState>, Query(q): Query<ProjectQuery>)
     Ok(Json(board_json(&board, &view)))
 }
 
-/// `GET /api/history` — commits touching `.wipe/`, most recent first.
+/// `GET /api/history` - commits touching `.wipe/`, most recent first.
 pub async fn history(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
     let store = store_for(&state, q.project)?;
     let commits = git::log(store.root(), Some(".wipe"), Some(200))?;
@@ -118,7 +118,7 @@ pub struct AtQuery {
     commit: String,
 }
 
-/// `GET /api/board/at` — reconstruct the board as of a commit (the rewind feature).
+/// `GET /api/board/at` - reconstruct the board as of a commit (the rewind feature).
 pub async fn board_at(State(state): State<AppState>, Query(q): Query<AtQuery>) -> ApiResult {
     let store = store_for(&state, q.project)?;
     let root = store.root();
@@ -231,7 +231,7 @@ pub async fn add_comment(
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
 }
 
-/// `GET /api/definitions` — labels + priorities.
+/// `GET /api/definitions` - labels + priorities.
 pub async fn definitions(
     State(state): State<AppState>,
     Query(q): Query<ProjectQuery>,
@@ -251,7 +251,7 @@ pub struct LabelBody {
     description: Option<String>,
 }
 
-/// `POST /api/labels` — define a new label (auto-colored if no color given).
+/// `POST /api/labels` - define a new label (auto-colored if no color given).
 pub async fn create_label(State(state): State<AppState>, Json(b): Json<LabelBody>) -> ApiResult {
     let store = store_for(&state, b.project)?;
     let label = ops::create_label(&store, &b.name, b.color, b.description)?;
@@ -266,7 +266,7 @@ pub struct LabelColorBody {
     color: String,
 }
 
-/// `PATCH /api/labels/{name}` — change a label's color.
+/// `PATCH /api/labels/{name}` - change a label's color.
 pub async fn recolor_label(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -278,7 +278,7 @@ pub async fn recolor_label(
     Ok(Json(serde_json::to_value(label)?))
 }
 
-/// `DELETE /api/labels/{name}` — delete a label and strip it from all tickets.
+/// `DELETE /api/labels/{name}` - delete a label and strip it from all tickets.
 pub async fn delete_label(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -309,7 +309,7 @@ pub struct PatchBody {
     actor: Option<String>,
 }
 
-/// `PATCH /api/tickets/{id}` — update ticket fields.
+/// `PATCH /api/tickets/{id}` - update ticket fields.
 pub async fn patch_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -329,7 +329,7 @@ pub async fn patch_ticket(
     Ok(Json(serde_json::to_value(ticket)?))
 }
 
-/// `GET /api/identities` — humans (from git) + agents (registry).
+/// `GET /api/identities` - humans (from git) + agents (registry).
 pub async fn identities(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
     let store = store_for(&state, q.project)?;
     Ok(Json(json!({ "identities": ops::list_identities(&store)? })))
@@ -344,7 +344,7 @@ pub struct IdentityBody {
     kind: Option<String>,
 }
 
-/// `PUT /api/identities/{id}` — set an identity's display name / kind.
+/// `PUT /api/identities/{id}` - set an identity's display name / kind.
 pub async fn put_identity(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -361,7 +361,7 @@ pub async fn put_identity(
     Ok(Json(serde_json::to_value(ident)?))
 }
 
-/// `DELETE /api/identities/{id}` — remove an identity from the registry (agents /
+/// `DELETE /api/identities/{id}` - remove an identity from the registry (agents /
 /// manual overrides; git-discovered humans reappear from history).
 pub async fn delete_identity(
     State(state): State<AppState>,
@@ -374,7 +374,7 @@ pub async fn delete_identity(
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
-/// `POST /api/tickets/{id}/attachments` — multipart file upload (field `file`).
+/// `POST /api/tickets/{id}/attachments` - multipart file upload (field `file`).
 pub async fn upload_attachment(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -425,7 +425,7 @@ pub struct DetachBody {
     actor: Option<String>,
 }
 
-/// `DELETE /api/tickets/{id}/attachments` — detach by repo-relative path.
+/// `DELETE /api/tickets/{id}/attachments` - detach by repo-relative path.
 pub async fn delete_attachment(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -438,7 +438,7 @@ pub async fn delete_attachment(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `GET /api/media/{*path}` — serve an attachment for preview/download.
+/// `GET /api/media/{*path}` - serve an attachment for preview/download.
 pub async fn serve_media(
     State(state): State<AppState>,
     Query(q): Query<ProjectQuery>,
@@ -471,7 +471,7 @@ pub async fn serve_media(
     }
 }
 
-/// `GET /api/graph` — the commit graph (all branches) with board checkpoints.
+/// `GET /api/graph` - the commit graph (all branches) with board checkpoints.
 pub async fn graph(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
     let store = store_for(&state, q.project)?;
     let commits = git::graph(store.root(), Some(300))?;
@@ -485,7 +485,7 @@ pub struct AddListBody {
     name: String,
 }
 
-/// `POST /api/lists` — add a list to the board.
+/// `POST /api/lists` - add a list to the board.
 pub async fn add_list(State(state): State<AppState>, Json(b): Json<AddListBody>) -> ApiResult {
     let store = store_for(&state, b.project)?;
     let id = ops::add_list(&store, &b.name, Utc::now())?;
@@ -500,7 +500,7 @@ pub struct RenameListBody {
     name: String,
 }
 
-/// `PATCH /api/lists/{id}` — rename a list.
+/// `PATCH /api/lists/{id}` - rename a list.
 pub async fn rename_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -519,7 +519,7 @@ pub struct MoveListBody {
     index: usize,
 }
 
-/// `POST /api/lists/{id}/move` — reorder a list to a new index.
+/// `POST /api/lists/{id}/move` - reorder a list to a new index.
 pub async fn move_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -539,7 +539,7 @@ pub struct RemoveListQuery {
     force: bool,
 }
 
-/// `DELETE /api/lists/{id}` — remove a list (use `?force=true` to delete its cards).
+/// `DELETE /api/lists/{id}` - remove a list (use `?force=true` to delete its cards).
 pub async fn remove_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -553,7 +553,7 @@ pub async fn remove_list(
 
 // --- websocket -------------------------------------------------------------
 
-/// `GET /ws` — upgrade to a WebSocket that streams change notifications.
+/// `GET /ws` - upgrade to a WebSocket that streams change notifications.
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| ws_loop(socket, state))
 }

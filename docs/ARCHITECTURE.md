@@ -51,14 +51,14 @@ together. wipe's workspace has three crates under `crates/`:
 
 ## The two frontends (JavaScript, built with pnpm)
 
-These are normal web apps built with **pnpm** (a Node package manager) — separate
+These are normal web apps built with **pnpm** (a Node package manager) - separate
 toolchain from Rust.
 
-- **`apps/desktop`** — the human board UI (SvelteKit). Its production build is
+- **`apps/desktop`** - the human board UI (SvelteKit). Its production build is
   *embedded into the `wipe` binary* by `scripts/embed-ui`, so `wipe serve` can
   serve it with no extra install. It also has a `src-tauri/` folder to optionally
   wrap it as a native desktop app.
-- **`apps/web`** — the public website/docs (React). Deployed as a static site.
+- **`apps/web`** - the public website/docs (React). Deployed as a static site.
 
 ## The `.wipe/` data format
 
@@ -79,7 +79,7 @@ Because each ticket is its own file and card *ordering* is kept separately in
 
 ## Every root file, explained
 
-Most of these are standard, required config files — they look like clutter but
+Most of these are standard, required config files - they look like clutter but
 each has a specific job and generally must live at the repo root.
 
 ### Rust / build
@@ -95,8 +95,8 @@ each has a specific job and generally must live at the repo root.
 
 | File | Why it exists |
 | --- | --- |
-| `dist-workspace.toml` | Config for **cargo-dist** — a tool that, when you push a version tag, builds the `wipe` binary for every OS (Linux/macOS/Windows), makes install scripts, and attaches them to a GitHub Release. |
-| `release-plz.toml` | Config for **release-plz** — see "What is release-plz" below. |
+| `dist-workspace.toml` | Config for **cargo-dist** - a tool that, when you push a version tag, builds the `wipe` binary for every OS (Linux/macOS/Windows), makes install scripts, and attaches them to a GitHub Release. |
+| `release-plz.toml` | Config for **release-plz** - see "What is release-plz" below. |
 
 ### Community / legal / meta
 
@@ -117,7 +117,7 @@ each has a specific job and generally must live at the repo root.
 | `crates/` | The three Rust crates (see above). |
 | `apps/` | The two frontends: `desktop/` (board UI) and `web/` (docs site). |
 | `scripts/` | Helper scripts, e.g. `embed-ui` (build the UI into the binary). |
-| `skills/` | `SKILL.md` — the guide that teaches AI agents how to drive the CLI. |
+| `skills/` | `SKILL.md` - the guide that teaches AI agents how to drive the CLI. |
 | `tests/` | Cross-cutting tests & fixtures: `mock-projects/` (demo boards) and `agent-supervision/` (the agent-to-agent harness). Per-crate unit tests live inside each crate. |
 | `docs/` | This guide and `RELEASE.md`. |
 | `.github/` | GitHub config: CI/release **workflows** (automation that runs on GitHub) and issue/PR templates. |

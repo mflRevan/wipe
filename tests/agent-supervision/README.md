@@ -1,15 +1,15 @@
 # Agent-to-agent supervision harness
 
 wipe is explicitly built to be a **communication bottleneck for spec-driven
-development** — between humans and agents, and between agents. This harness
+development** - between humans and agents, and between agents. This harness
 proves that story end-to-end: a **supervisor** encodes work as wipe tickets, a
-**subordinate** agent (running in a *different* harness — [opencode](https://opencode.ai)
+**subordinate** agent (running in a *different* harness - [opencode](https://opencode.ai)
 with a DeepSeek model) discovers the work through the `wipe` CLI, does it, and
 reports back by moving tickets and adding comments. The supervisor then verifies
 the board state.
 
 This is intentionally cross-harness: the subordinate only ever talks to wipe
-through the CLI and `wipe skill`, never by reading `.wipe/` directly — exactly how
+through the CLI and `wipe skill`, never by reading `.wipe/` directly - exactly how
 a real foreign agent would.
 
 ## What it exercises
@@ -56,5 +56,5 @@ transcript varies run to run; the *acceptance checks* are what must hold.
 
 ## Files
 
-- `run.ps1` / `run.sh` — the harness (provision → run subordinate → verify).
-- `scenario.md` — the human-readable spec the supervisor encodes into tickets.
+- `run.ps1` / `run.sh` - the harness (provision → run subordinate → verify).
+- `scenario.md` - the human-readable spec the supervisor encodes into tickets.

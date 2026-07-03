@@ -19,7 +19,7 @@ export const definitions = writable<Definitions>({
 });
 export const identities = writable<Identity[]>([]);
 
-// Rewind / history state — driven by the repository-wide commit graph.
+// Rewind / history state - driven by the repository-wide commit graph.
 export const graph = writable<GraphCommit[]>([]);
 export const rewindCommit = writable<GraphCommit | null>(null);
 export const rewinding = derived(rewindCommit, ($c) => $c !== null);

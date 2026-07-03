@@ -13,7 +13,7 @@ assignees: ''
 
 ## Describe the solution you'd like
 
-<!-- A clear and concise description of what you want to happen — e.g. a new
+<!-- A clear and concise description of what you want to happen - e.g. a new
 `wipe` subcommand, a change to the `.wipe` layout, or a desktop UI feature. -->
 
 ## Describe alternatives you've considered

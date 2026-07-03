@@ -1,4 +1,4 @@
-# Publish crates to crates.io — triggered ONLY by pushing a release tag.
+# Publish crates to crates.io - triggered ONLY by pushing a release tag.
 #
 # Releases happen exclusively on `v*` tags (no auto "release PRs" on push to
 # main). On a tag, this publishes the workspace crates (in dependency order,

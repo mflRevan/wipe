@@ -2,7 +2,7 @@
 #
 # We use release-plz ONLY to publish crates to crates.io, and only when a `v*`
 # tag is pushed (see .github/workflows/release-plz.yml). It does NOT create git
-# tags or GitHub Releases here — cargo-dist (`release.yml`) owns the GitHub
+# tags or GitHub Releases here - cargo-dist (`release.yml`) owns the GitHub
 # Release, binaries, and npm package. Versions are bumped by hand in
 # `Cargo.toml` before tagging (no auto "release PRs").
 

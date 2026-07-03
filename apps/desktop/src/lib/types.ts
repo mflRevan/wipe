@@ -86,7 +86,7 @@ export interface GraphCommit {
   author_name: string;
   date: string;
   subject: string;
-  /** True when this commit changed `.wipe/` — i.e. a board checkpoint. */
+  /** True when this commit changed `.wipe/` - i.e. a board checkpoint. */
   board: boolean;
 }
 
@@ -121,7 +121,7 @@ export interface CreateTicketInput {
 
 /**
  * Partial ticket update. Omit a key to leave it unchanged. For `priority`,
- * pass `null` to CLEAR the value (JSON.stringify keeps null, drops undefined —
+ * pass `null` to CLEAR the value (JSON.stringify keeps null, drops undefined -
  * which is exactly the daemon's Option<Option<String>> semantics).
  */
 export interface TicketPatch {
