@@ -18,14 +18,10 @@
   class="avatar"
   style="--c:{color}; width:{size}px; height:{size}px; font-size:{Math.round(size * 0.42)}px"
   title={identity ? `${name} (${id})` : id}
->
-  {initials(name)}
-  {#if isAgent}
-    <span class="bot" style="width:{Math.round(size * 0.5)}px; height:{Math.round(size * 0.5)}px">
-      <Bot size={Math.round(size * 0.34)} />
-    </span>
-  {/if}
-</span>
+><span class="ini">{initials(name)}</span>{#if isAgent}<span
+    class="bot"
+    style="width:{Math.round(size * 0.5)}px; height:{Math.round(size * 0.5)}px"
+  ><Bot size={Math.round(size * 0.34)} /></span>{/if}</span>
 
 <style>
   .avatar {
@@ -41,6 +37,14 @@
     font-weight: 600;
     flex: none;
     user-select: none;
+    overflow: hidden;
+  }
+  .ini {
+    display: block;
+    line-height: 1;
+    text-align: center;
+    /* Optical centering: initials sit a hair high due to font ascent metrics. */
+    transform: translateY(0.03em);
   }
   .bot {
     position: absolute;

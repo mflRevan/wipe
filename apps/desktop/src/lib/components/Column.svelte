@@ -148,13 +148,16 @@
         {/if}
       </div>
     {/each}
-
-    {#if tickets.length === 0 && !dragDisabled}
-      <button class="empty-add" onclick={() => onadd(listId, name)}>
-        <Plus size={14} /> Add a card
-      </button>
-    {/if}
   </div>
+
+  <!-- Kept OUTSIDE the dndzone: svelte-dnd-action treats every direct child of
+       the zone as a draggable item, so an add-card control living inside it
+       would be grabbable and corrupt the item list on drag. -->
+  {#if !dragDisabled}
+    <button class="add-card" onclick={() => onadd(listId, name)}>
+      <Plus size={14} /> Add a card
+    </button>
+  {/if}
 </section>
 
 <style>
@@ -275,20 +278,21 @@
     border-radius: var(--wp-r-md);
     background: color-mix(in srgb, var(--wp-accent) 6%, transparent);
   }
-  .empty-add {
-    display: inline-flex;
+  .add-card {
+    display: flex;
     align-items: center;
-    justify-content: center;
     gap: 6px;
-    padding: 12px;
-    border: 1px dashed var(--wp-border);
+    margin: 0 8px 8px;
+    padding: 8px 10px;
+    border: none;
     border-radius: var(--wp-r-md);
     background: none;
     color: var(--wp-text-subtle);
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
   }
-  .empty-add:hover {
+  .add-card:hover {
     background: var(--wp-elevated);
     color: var(--wp-text);
   }

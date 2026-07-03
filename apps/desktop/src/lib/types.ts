@@ -8,6 +8,18 @@ export interface Comment {
   edited?: string;
 }
 
+/** A structured change event on a ticket (see wipe-core `Activity`). */
+export interface Activity {
+  ts: string;
+  actor: string;
+  /**
+   * One of: created, moved, renamed, edited, priority, label-added,
+   * label-removed, assigned, unassigned, attached, detached.
+   */
+  kind: string;
+  detail?: string;
+}
+
 export type AttachmentSource = 'media' | 'repo';
 
 export interface Attachment {
@@ -28,6 +40,7 @@ export interface Ticket {
   assignees: string[];
   attachments: Attachment[];
   comments: Comment[];
+  activity: Activity[];
   created: string;
   updated: string;
 }

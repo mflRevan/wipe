@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Users, Check, Plus, Pencil, Bot, User } from 'lucide-svelte';
+  import { Users, Check, Plus, Pencil, Bot, User, Trash2 } from 'lucide-svelte';
   import { get } from 'svelte/store';
   import Popover from './ui/Popover.svelte';
   import Avatar from './Avatar.svelte';
@@ -41,6 +41,17 @@
       }
     }
     editingId = null;
+  }
+
+  async function removeIdentity(i: Identity) {
+    error = null;
+    try {
+      await api.deleteIdentity(i.id, get(currentProject) ?? undefined);
+      if (selected.includes(i.id)) onchange(selected.filter((a) => a !== i.id));
+      await loadIdentities();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
   }
 
   async function addAgent() {
@@ -113,6 +124,19 @@
               >
                 <Pencil size={13} />
               </button>
+              {#if i.kind === 'agent'}
+                <button
+                  class="pencil danger"
+                  aria-label="Remove identity"
+                  title="Remove agent identity"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    removeIdentity(i);
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              {/if}
             {/if}
           </div>
         {/each}
@@ -257,6 +281,9 @@
   }
   .pencil:hover {
     color: var(--wp-text);
+  }
+  .pencil.danger:hover {
+    color: var(--wp-error);
   }
   .divider {
     height: 1px;

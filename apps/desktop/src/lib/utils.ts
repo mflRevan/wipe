@@ -83,6 +83,43 @@ export function formatDate(iso: string): string {
   });
 }
 
+/**
+ * Render an activity event as a human phrase. `resolveName` maps an identity id
+ * to a display name (for assign/unassign events); defaults to the raw id.
+ */
+export function activityPhrase(
+  kind: string,
+  detail = '',
+  resolveName: (id: string) => string = (id) => id
+): string {
+  switch (kind) {
+    case 'created':
+      return 'created this card';
+    case 'moved':
+      return `moved this to ${detail}`;
+    case 'renamed':
+      return `renamed this to “${detail}”`;
+    case 'edited':
+      return 'updated the description';
+    case 'priority':
+      return detail ? `set priority to ${detail}` : 'cleared the priority';
+    case 'label-added':
+      return `added label ${detail}`;
+    case 'label-removed':
+      return `removed label ${detail}`;
+    case 'assigned':
+      return `assigned ${resolveName(detail)}`;
+    case 'unassigned':
+      return `unassigned ${resolveName(detail)}`;
+    case 'attached':
+      return `attached ${detail}`;
+    case 'detached':
+      return `removed attachment ${detail}`;
+    default:
+      return kind;
+  }
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ['KB', 'MB', 'GB'];

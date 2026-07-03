@@ -11,8 +11,12 @@
   import Attachments from './Attachments.svelte';
   import { api, mediaUrl } from '$lib/api';
   import { board, definitions, identities, currentProject, rewinding } from '$lib/stores/board';
-  import { formatDate, mediaKind, priorityColor } from '$lib/utils';
-  import type { Attachment, Ticket, TicketPatch } from '$lib/types';
+  import { formatDate, mediaKind, priorityColor, activityPhrase } from '$lib/utils';
+  import type { Activity, Attachment, Comment, Ticket, TicketPatch } from '$lib/types';
+
+  type FeedItem =
+    | { type: 'comment'; ts: string; comment: Comment }
+    | { type: 'event'; ts: string; event: Activity };
 
   let { ticketId = $bindable(null) }: { ticketId: string | null } = $props();
 
@@ -28,6 +32,19 @@
   // First image attachment becomes the modal cover.
   let cover = $derived<Attachment | undefined>(
     ticket?.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
+  );
+
+  // Comments and activity events, interleaved and sorted newest-first — the
+  // Trello-style timeline in the right pane.
+  let feed = $derived<FeedItem[]>(
+    ticket
+      ? [
+          ...ticket.comments.map(
+            (c): FeedItem => ({ type: 'comment', ts: c.created, comment: c })
+          ),
+          ...ticket.activity.map((a): FeedItem => ({ type: 'event', ts: a.ts, event: a }))
+        ].sort((x, y) => new Date(y.ts).getTime() - new Date(x.ts).getTime())
+      : []
   );
 
   let saveError = $state<string | null>(null);
@@ -90,6 +107,23 @@
   function identityFor(id: string) {
     return $identities.find((i) => i.id === id);
   }
+  // Activity actors and CLI comment authors are stored as the full git identity
+  // (`Name <email>`), while identities are keyed by email — so resolve either form.
+  function identityForActor(actor: string) {
+    const direct = identityFor(actor);
+    if (direct) return direct;
+    const m = actor.match(/<([^>]+)>/);
+    return m ? identityFor(m[1]) : undefined;
+  }
+  function displayActor(actor: string) {
+    const found = identityForActor(actor);
+    if (found) return found.display_name;
+    const m = actor.match(/^(.*?)\s*<[^>]+>$/);
+    return m && m[1] ? m[1] : actor;
+  }
+  function resolveName(id: string) {
+    return identityFor(id)?.display_name ?? displayActor(id);
+  }
   function close() {
     ticketId = null;
   }
@@ -117,6 +151,7 @@
       <button class="close" aria-label="Close" onclick={close}><X size={18} /></button>
 
       <div class="pad">
+       <div class="main">
         <div class="idrow">
           {#if currentList}<span class="listtag">{currentList.name}</span>{/if}
           <span class="tid">{ticket.id}</span>
@@ -233,42 +268,6 @@
           <Attachments ticketId={ticket.id} attachments={ticket.attachments} {readOnly} />
         </div>
 
-        <!-- comments -->
-        <div class="field">
-          <span class="flabel">Comments ({ticket.comments.length})</span>
-          <div class="comments">
-            {#each ticket.comments as c (c.id)}
-              <div class="comment">
-                <div class="c-head">
-                  <Avatar id={c.author} identity={identityFor(c.author)} size={20} />
-                  <span class="c-author">{identityFor(c.author)?.display_name ?? c.author}</span>
-                  <span class="c-time">{formatDate(c.created)}{c.edited ? ' · edited' : ''}</span>
-                </div>
-                <div class="c-body"><Markdown source={c.body} /></div>
-              </div>
-            {/each}
-            {#if ticket.comments.length === 0}
-              <span class="dim">No comments yet.</span>
-            {/if}
-          </div>
-          {#if !readOnly}
-            <div class="c-add">
-              <textarea
-                class="c-input"
-                rows="2"
-                placeholder="Write a comment…"
-                bind:value={commentDraft}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addComment();
-                }}
-              ></textarea>
-              <button class="c-send" aria-label="Send comment" onclick={addComment}>
-                <Send size={15} />
-              </button>
-            </div>
-          {/if}
-        </div>
-
         {#if saveError}<div class="err">{saveError}</div>{/if}
 
         <footer class="d-foot">
@@ -276,6 +275,66 @@
             >Created {formatDate(ticket.created)} · Updated {formatDate(ticket.updated)}</span
           >
         </footer>
+       </div>
+
+       <!-- activity: comments + events, interleaved, newest first -->
+       <aside class="side">
+         <div class="side-head">Activity</div>
+         {#if !readOnly}
+           <div class="c-add">
+             <textarea
+               class="c-input"
+               rows="2"
+               placeholder="Write a comment…"
+               bind:value={commentDraft}
+               onkeydown={(e) => {
+                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addComment();
+               }}
+             ></textarea>
+             <button class="c-send" aria-label="Send comment" onclick={addComment}>
+               <Send size={15} />
+             </button>
+           </div>
+         {/if}
+         <div class="feed">
+           {#each feed as item (item.type + item.ts + (item.type === 'comment' ? item.comment.id : item.event.kind + item.event.detail))}
+             {#if item.type === 'comment'}
+               <div class="comment">
+                 <div class="c-head">
+                   <Avatar
+                     id={identityForActor(item.comment.author)?.id ?? item.comment.author}
+                     identity={identityForActor(item.comment.author)}
+                     size={22}
+                   />
+                   <span class="c-author">{displayActor(item.comment.author)}</span>
+                   <span class="c-time"
+                     >{formatDate(item.comment.created)}{item.comment.edited
+                       ? ' · edited'
+                       : ''}</span
+                   >
+                 </div>
+                 <div class="c-body"><Markdown source={item.comment.body} /></div>
+               </div>
+             {:else}
+               <div class="event">
+                 <Avatar
+                   id={identityForActor(item.event.actor)?.id ?? item.event.actor}
+                   identity={identityForActor(item.event.actor)}
+                   size={22}
+                 />
+                 <div class="e-text">
+                   <span class="e-actor">{displayActor(item.event.actor)}</span>
+                   {activityPhrase(item.event.kind, item.event.detail, resolveName)}
+                   <span class="e-time">{formatDate(item.event.ts)}</span>
+                 </div>
+               </div>
+             {/if}
+           {/each}
+           {#if feed.length === 0}
+             <span class="dim">No activity yet.</span>
+           {/if}
+         </div>
+       </aside>
       </div>
     </div>
   </div>
@@ -302,7 +361,7 @@
   .modal {
     position: relative;
     pointer-events: auto;
-    width: min(720px, 100%);
+    width: min(920px, 100%);
     max-height: 90vh;
     overflow-y: auto;
     background: var(--wp-card);
@@ -343,9 +402,68 @@
   }
   .pad {
     padding: 20px 24px 22px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 24px;
+  }
+  .main {
     display: flex;
     flex-direction: column;
     gap: 18px;
+    min-width: 0;
+  }
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-left: 1px solid var(--wp-border);
+    padding-left: 20px;
+  }
+  @media (max-width: 720px) {
+    .pad {
+      grid-template-columns: 1fr;
+    }
+    .side {
+      border-left: none;
+      border-top: 1px solid var(--wp-border);
+      padding-left: 0;
+      padding-top: 16px;
+    }
+  }
+  .side-head {
+    font-family: var(--wp-font-display);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--wp-text-muted);
+  }
+  .feed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .event {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .e-text {
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--wp-text-muted);
+    padding-top: 2px;
+  }
+  .e-actor {
+    font-weight: 600;
+    color: var(--wp-text);
+  }
+  .e-time {
+    display: block;
+    margin-top: 1px;
+    font-family: var(--wp-font-mono);
+    font-size: 10.5px;
+    color: var(--wp-text-subtle);
   }
   .idrow {
     display: flex;
@@ -528,11 +646,6 @@
     border-radius: var(--wp-r-pill);
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);
-  }
-  .comments {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
   }
   .comment {
     border: 1px solid var(--wp-border);

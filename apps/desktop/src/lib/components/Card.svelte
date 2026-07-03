@@ -2,13 +2,18 @@
   import { MessageSquare, Paperclip } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
-  import { definitions, identities } from '$lib/stores/board';
-  import { labelColorFor, priorityColor } from '$lib/utils';
-  import type { Ticket } from '$lib/types';
+  import { definitions, identities, currentProject } from '$lib/stores/board';
+  import { mediaUrl } from '$lib/api';
+  import { labelColorFor, priorityColor, mediaKind } from '$lib/utils';
+  import type { Attachment, Ticket } from '$lib/types';
 
   let { ticket, onopen }: { ticket: Ticket; onopen: (t: Ticket) => void } = $props();
 
   let dot = $derived(priorityColor(ticket.priority));
+  // First image attachment becomes a compact card cover, like Trello.
+  let cover = $derived<Attachment | undefined>(
+    ticket.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
+  );
   function identityFor(id: string) {
     return $identities.find((i) => i.id === id);
   }
@@ -21,14 +26,15 @@
   onclick={() => onopen(ticket)}
   onkeydown={(e) => (e.key === 'Enter' ? onopen(ticket) : null)}
 >
-  <div class="top">
-    <span class="id">{ticket.id}</span>
-    {#if ticket.priority}
-      <span class="prio" style="--d:{dot}" title="Priority: {ticket.priority}"></span>
-    {/if}
-  </div>
-
-  <div class="title">{ticket.title}</div>
+  {#if cover}
+    <div class="cover">
+      <img
+        src={mediaUrl(cover.path, $currentProject ?? undefined)}
+        alt={cover.name}
+        loading="lazy"
+      />
+    </div>
+  {/if}
 
   {#if ticket.labels.length}
     <div class="chips">
@@ -37,6 +43,13 @@
       {/each}
     </div>
   {/if}
+
+  <div class="title">
+    {#if ticket.priority}
+      <span class="prio" style="--d:{dot}" title="Priority: {ticket.priority}"></span>
+    {/if}
+    <span class="ttext">{ticket.title}</span>
+  </div>
 
   <div class="footer">
     <div class="avatars">
@@ -77,29 +90,38 @@
     background: var(--wp-elevated);
     box-shadow: var(--wp-shadow);
   }
-  .top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  .cover {
+    margin: -12px -12px 0;
+    max-height: 120px;
+    overflow: hidden;
+    border-radius: var(--wp-r-md) var(--wp-r-md) 0 0;
+    background: var(--wp-surface);
   }
-  .id {
-    font-family: var(--wp-font-mono);
-    font-size: 12px;
-    color: var(--wp-text-subtle);
+  .cover img {
+    display: block;
+    width: 100%;
+    max-height: 120px;
+    object-fit: cover;
   }
   .prio {
     width: 8px;
     height: 8px;
+    margin-top: 5px;
     border-radius: 50%;
     background: var(--d);
     flex: none;
   }
   .title {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
     font-size: 14px;
     font-weight: 500;
     letter-spacing: -0.005em;
     line-height: 1.4;
     color: var(--wp-text);
+  }
+  .ttext {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     line-clamp: 3;

@@ -81,7 +81,8 @@ function fillTicket(t: Ticket): Ticket {
     labels: t.labels ?? [],
     assignees: t.assignees ?? [],
     comments: t.comments ?? [],
-    attachments: t.attachments ?? []
+    attachments: t.attachments ?? [],
+    activity: t.activity ?? []
   };
 }
 
@@ -146,6 +147,12 @@ export const api = {
     return req<Identity>(`/api/identities/${encodeURIComponent(id)}${qs({ project })}`, {
       method: 'PUT',
       body: JSON.stringify({ display_name, kind })
+    });
+  },
+
+  deleteIdentity(id: string, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/identities/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'DELETE'
     });
   },
 
