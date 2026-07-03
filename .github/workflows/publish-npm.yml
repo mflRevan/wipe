@@ -37,6 +37,14 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.28.2/cargo-dist-installer.sh | sh
       - name: Build the npm installer package
         run: dist build --artifacts=global
+      - name: Patch installer for Windows tar drive letters
+        # cargo-dist's installer extracts with `tar xf C:\...`, which GNU tar (on
+        # PATH ahead of bsdtar, e.g. Git for Windows) rejects. Make it use a
+        # relative archive path + cwd so `npm i -g` works on those machines too.
+        run: |
+          f="$(find target/distrib -name binary-install.js -path '*npm-package*' | head -1)"
+          test -n "$f" || { echo "binary-install.js not found"; exit 1; }
+          node scripts/patch-npm-installer.mjs "$f"
       - name: Publish via OIDC trusted publisher
         run: |
           pkgdir="$(dirname "$(find target/distrib -name package.json -path '*npm-package*' | head -1)")"
