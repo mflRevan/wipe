@@ -295,8 +295,17 @@ pub fn update_ticket(
         t.priority = v;
     }
     if let Some(v) = patch.labels {
-        let added: Vec<String> = v.iter().filter(|l| !t.labels.contains(l)).cloned().collect();
-        let removed: Vec<String> = t.labels.iter().filter(|l| !v.contains(l)).cloned().collect();
+        let added: Vec<String> = v
+            .iter()
+            .filter(|l| !t.labels.contains(l))
+            .cloned()
+            .collect();
+        let removed: Vec<String> = t
+            .labels
+            .iter()
+            .filter(|l| !v.contains(l))
+            .cloned()
+            .collect();
         for l in added {
             t.log_activity(actor, "label-added", l, now);
         }
@@ -826,14 +835,30 @@ mod tests {
         git(&["commit", "-q", "-m", "add logo"]);
 
         // Identical bytes -> reference the tracked repo file (no copy).
-        let a =
-            add_attachment(&s, "T-1", "logo.png", b"PNGDATA", "image/png", "tester", now()).unwrap();
+        let a = add_attachment(
+            &s,
+            "T-1",
+            "logo.png",
+            b"PNGDATA",
+            "image/png",
+            "tester",
+            now(),
+        )
+        .unwrap();
         assert_eq!(a.source, AttachmentSource::Repo);
         assert_eq!(a.path, "logo.png");
 
         // Novel bytes -> copied into .wipe/media/.
-        let b = add_attachment(&s, "T-1", "new.txt", b"hello world", "text/plain", "tester", now())
-            .unwrap();
+        let b = add_attachment(
+            &s,
+            "T-1",
+            "new.txt",
+            b"hello world",
+            "text/plain",
+            "tester",
+            now(),
+        )
+        .unwrap();
         assert_eq!(b.source, AttachmentSource::Media);
         assert!(b.path.starts_with(".wipe/media/"));
         assert!(root.join(&b.path).exists());
