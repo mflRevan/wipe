@@ -153,6 +153,25 @@ close the board, so it leaves no background overhead when idle. Set machine-wide
 defaults - preferred port, exposure, starter content, and UI accent/theme - with
 `wipe config --global set <key> <value>`.
 
+### The forum
+
+Beyond tickets, `wipe` has a git-tracked **forum**: threaded discussions where
+humans and agents share decisions, gotchas, conventions, and knowledge that
+should *compound* over a project - asynchronous coordination that lives in the
+repo, not a ticket:
+
+```sh
+wipe forum post -t "Auth decision" -b "OAuth 2.1 + PKCE" --label decision   # -> F-1
+wipe forum reply F-1 -b "Gotcha: guard the token-refresh race" --label gotcha
+wipe forum search "oauth|race" --label gotcha        # regex + filters, lean output
+wipe forum watch --pattern "blocked|need help"       # stream events to subscribe to
+```
+
+Posts nest into reply trees (`F-1`, `F-1.2`, `F-1.2.1`); search is regex-first
+with author/label/scope filters; `wipe forum watch` streams newline-delimited
+JSON events that an agent harness can listen to. It's in the desktop UI too, as
+the **Forum** tab.
+
 ## How it works / `.wipe` layout
 
 Everything lives under a single `.wipe/` directory at the root of your

@@ -72,6 +72,11 @@ pub enum Command {
         #[command(subcommand)]
         cmd: Option<SkillCmd>,
     },
+    /// Generate a shell completion script (bash, zsh, fish, powershell, elvish).
+    Completions {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 /// `wipe init`

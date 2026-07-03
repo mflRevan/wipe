@@ -23,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
 owo-colors = { version = "4", features = ["supports-colors"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 inquire = "0.7"

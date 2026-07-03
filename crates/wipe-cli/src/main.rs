@@ -12,7 +12,7 @@ mod skills;
 
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 use args::{Cli, Command};
 use output::{emit_error, Out};
@@ -55,5 +55,9 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Config { global, cmd } => commands::config(out, global, cmd),
         Command::Doctor => commands::doctor(out),
         Command::Skill { cmd } => commands::skill(out, cmd),
+        Command::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "wipe", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
