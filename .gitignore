@@ -27,6 +27,9 @@ tests/sandbox/
 # The repo does not dogfood its own board; a stray root .wipe/ is never committed.
 /.wipe/
 
+# Local go-to-market research notes (not part of the public repo).
+docs/marketing/
+
 # Working build log (per project convention)
 /PLAN.md
 

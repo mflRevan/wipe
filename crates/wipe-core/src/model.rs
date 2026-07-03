@@ -40,6 +40,9 @@ pub struct Board {
     pub lists: Vec<List>,
     /// Next ticket counter; `T-<next_ticket>` is the next ID to allocate.
     pub next_ticket: u64,
+    /// Next forum-thread counter; `F-<next_thread>` is the next thread ID.
+    #[serde(default = "one")]
+    pub next_thread: u64,
     /// When the board was created.
     pub created: DateTime<Utc>,
     /// When the board was last modified.
@@ -69,6 +72,7 @@ impl Board {
             description: String::new(),
             lists: default_lists(),
             next_ticket: 1,
+            next_thread: 1,
             created: now,
             updated: now,
         }
@@ -338,6 +342,119 @@ pub enum AttachmentSource {
     Media,
     /// References a file already tracked in the repository.
     Repo,
+}
+
+// ---------------------------------------------------------------------------
+// forum/<id>.json  - the project's git-tracked discussion forum
+// ---------------------------------------------------------------------------
+
+/// A forum thread: a root [`Post`] plus its nested reply tree. Stored as one file
+/// per thread under `.wipe/forum/<id>.json`, so replies to different threads never
+/// conflict and deleting a thread is deleting a file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Thread {
+    /// On-disk format version.
+    pub version: u32,
+    /// Thread ID, e.g. `F-1` (also the ID of its root post).
+    pub id: String,
+    /// Thread title (the headline of the root post).
+    pub title: String,
+    /// The root post and, nested within it, the whole reply tree.
+    pub root: Post,
+    /// When the thread was created.
+    pub created: DateTime<Utc>,
+    /// When anything in the thread last changed.
+    pub updated: DateTime<Utc>,
+}
+
+/// A single forum post: the root of a thread, or a reply at any depth. IDs are
+/// dotted and self-describing (`F-1`, `F-1.1`, `F-1.1.2`), so the tree is legible
+/// from the ID alone and a subtree is "every ID under this prefix".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Post {
+    /// Dotted post ID (`F-1`, `F-1.2`, `F-1.2.1`).
+    pub id: String,
+    /// Author identity (git `Name <email>` or agent ID), same pool as tickets.
+    pub author: String,
+    /// Message body (Markdown allowed).
+    pub body: String,
+    /// Labels, drawn from the same board label pool as tickets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// Attached media/files (same storage as ticket attachments).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+    /// Free-form references (ticket IDs like `T-3`, other post IDs, or URLs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<String>,
+    /// When the post was created.
+    pub created: DateTime<Utc>,
+    /// When the post was last edited, if ever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited: Option<DateTime<Utc>>,
+    /// Next child index; the next reply gets `<id>.<next_reply>` (never reused).
+    #[serde(default = "one")]
+    pub next_reply: u64,
+    /// Direct replies (each may have its own replies, forming the tree).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<Post>,
+}
+
+impl Post {
+    /// Create a fresh post with no replies.
+    pub fn new(
+        id: impl Into<String>,
+        author: impl Into<String>,
+        body: impl Into<String>,
+        now: DateTime<Utc>,
+    ) -> Self {
+        Post {
+            id: id.into(),
+            author: author.into(),
+            body: body.into(),
+            labels: Vec::new(),
+            attachments: Vec::new(),
+            refs: Vec::new(),
+            created: now,
+            edited: None,
+            next_reply: 1,
+            replies: Vec::new(),
+        }
+    }
+
+    /// Find a post by ID anywhere in this subtree (including `self`).
+    pub fn find(&self, id: &str) -> Option<&Post> {
+        if self.id == id {
+            return Some(self);
+        }
+        self.replies.iter().find_map(|r| r.find(id))
+    }
+
+    /// Find a post by ID anywhere in this subtree (mutable).
+    pub fn find_mut(&mut self, id: &str) -> Option<&mut Post> {
+        if self.id == id {
+            return Some(self);
+        }
+        self.replies.iter_mut().find_map(|r| r.find_mut(id))
+    }
+
+    /// Remove the direct child with `id` (not recursive). Returns true if removed.
+    pub fn remove_child(&mut self, id: &str) -> bool {
+        let before = self.replies.len();
+        self.replies.retain(|r| r.id != id);
+        if self.replies.len() != before {
+            return true;
+        }
+        self.replies.iter_mut().any(|r| r.remove_child(id))
+    }
+
+    /// Visit every post in this subtree (pre-order) with its depth (root = 0).
+    pub fn walk<'a>(&'a self, depth: usize, f: &mut dyn FnMut(&'a Post, usize)) {
+        f(self, depth);
+        for r in &self.replies {
+            r.walk(depth + 1, f);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

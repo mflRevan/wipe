@@ -1,6 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { RefreshCw, Settings, History, RotateCcw, WifiOff } from 'lucide-svelte';
+  import {
+    RefreshCw,
+    Settings,
+    History,
+    RotateCcw,
+    WifiOff,
+    LayoutGrid,
+    MessagesSquare
+  } from 'lucide-svelte';
   import {
     board,
     boardError,
@@ -21,6 +29,7 @@
   import { getApiBase } from '$lib/api';
   import { formatDate } from '$lib/utils';
   import Board from '$lib/components/Board.svelte';
+  import Forum from '$lib/components/Forum.svelte';
   import ProjectSwitcher from '$lib/components/ProjectSwitcher.svelte';
   import TicketModal from '$lib/components/TicketModal.svelte';
   import NewTicketDialog from '$lib/components/NewTicketDialog.svelte';
@@ -37,6 +46,7 @@
 
   let settingsOpen = $state(false);
   let historyOpen = $state(false);
+  let view = $state<'board' | 'forum'>('board');
 
   onMount(() => {
     void bootstrap();
@@ -72,6 +82,15 @@
     </div>
     <div class="sep"></div>
     <ProjectSwitcher onselect={selectProject} />
+
+    <div class="viewtabs">
+      <button class:on={view === 'board'} onclick={() => (view = 'board')}>
+        <LayoutGrid size={14} /> Board
+      </button>
+      <button class:on={view === 'forum'} onclick={() => (view = 'forum')}>
+        <MessagesSquare size={14} /> Forum
+      </button>
+    </div>
 
     <div class="right">
       {#if $health}
@@ -115,6 +134,8 @@
           </div>
         </div>
       </div>
+    {:else if view === 'forum'}
+      <div class="boardwrap"><Forum /></div>
     {:else}
       {#if $rewinding && $rewindCommit}
         <div class="banner rewind">
@@ -172,6 +193,36 @@
     width: 1px;
     height: 20px;
     background: var(--wp-border);
+  }
+  .viewtabs {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--wp-r-md);
+    background: var(--wp-surface);
+    border: 1px solid var(--wp-border);
+  }
+  .viewtabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--wp-r-sm);
+    background: none;
+    color: var(--wp-text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .viewtabs button:hover {
+    color: var(--wp-text);
+  }
+  .viewtabs button.on {
+    background: var(--wp-card);
+    color: var(--wp-text);
+    box-shadow: var(--wp-shadow);
   }
   .right {
     margin-left: auto;

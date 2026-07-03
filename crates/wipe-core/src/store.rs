@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::model::{Board, Definitions, Identity, Settings, Ticket};
+use crate::model::{Board, Definitions, Identity, Settings, Thread, Ticket};
 
 /// Name of the per-project board directory.
 pub const WIPE_DIR: &str = ".wipe";
@@ -125,11 +125,13 @@ impl Store {
         }
         fs::create_dir_all(wipe.join("tickets"))?;
         fs::create_dir_all(wipe.join("media"))?;
+        fs::create_dir_all(wipe.join("forum"))?;
         fs::create_dir_all(wipe.join(".cache"))?;
         // Keep the local cache out of version control.
         write_bytes_atomic(&wipe.join(".gitignore"), b"/.cache/\n")?;
-        // Keep the media directory in git even when empty.
+        // Keep the media and forum directories in git even when empty.
         write_bytes_atomic(&wipe.join("media").join(".gitkeep"), b"")?;
+        write_bytes_atomic(&wipe.join("forum").join(".gitkeep"), b"")?;
 
         let board = match starter {
             Starter::Standard | Starter::ListsOnly => Board::new(name, now),
@@ -258,6 +260,76 @@ impl Store {
             .map(|id| self.load_ticket(id))
             .collect()
     }
+
+    // --- forum -------------------------------------------------------------
+
+    /// Path to the forum directory (`.wipe/forum`).
+    pub fn forum_dir(&self) -> PathBuf {
+        self.wipe_dir().join("forum")
+    }
+
+    fn thread_path(&self, thread_id: &str) -> PathBuf {
+        self.forum_dir().join(format!("{thread_id}.json"))
+    }
+
+    /// Load a forum thread by its thread ID (e.g. `F-1`).
+    pub fn load_thread(&self, thread_id: &str) -> Result<Thread> {
+        let path = self.thread_path(thread_id);
+        if !path.exists() {
+            return Err(Error::ThreadNotFound(thread_id.to_string()));
+        }
+        read_json(&path)
+    }
+
+    /// Write a forum thread file.
+    pub fn save_thread(&self, thread: &Thread) -> Result<()> {
+        write_json_atomic(&self.thread_path(&thread.id), thread)
+    }
+
+    /// Delete a forum thread file. Errors if it does not exist.
+    pub fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        let path = self.thread_path(thread_id);
+        if !path.exists() {
+            return Err(Error::ThreadNotFound(thread_id.to_string()));
+        }
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    /// All forum thread IDs on disk, sorted numerically by counter.
+    pub fn thread_ids(&self) -> Result<Vec<String>> {
+        let dir = self.forum_dir();
+        let mut ids: Vec<String> = Vec::new();
+        if !dir.exists() {
+            return Ok(ids);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+        ids.sort_by_key(|id| thread_counter(id).unwrap_or(u64::MAX));
+        Ok(ids)
+    }
+
+    /// Load every forum thread on disk, ordered by ID counter.
+    pub fn load_all_threads(&self) -> Result<Vec<Thread>> {
+        self.thread_ids()?
+            .iter()
+            .map(|id| self.load_thread(id))
+            .collect()
+    }
+}
+
+/// Parse the numeric counter out of an `F-<n>` thread ID (ignoring any `.x` tail).
+fn thread_counter(id: &str) -> Option<u64> {
+    id.strip_prefix("F-")
+        .map(|rest| rest.split('.').next().unwrap_or(rest))
+        .and_then(|n| n.parse().ok())
 }
 
 /// Parse the numeric counter out of a `T-<n>` ticket ID.

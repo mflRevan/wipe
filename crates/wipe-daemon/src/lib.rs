@@ -76,6 +76,15 @@ fn router(state: AppState) -> Router {
             post(api::upload_attachment).delete(api::delete_attachment),
         )
         .route("/api/media/{*path}", get(api::serve_media))
+        .route("/api/forum", get(api::forum_list).post(api::forum_create))
+        .route("/api/forum/search", get(api::forum_search))
+        .route(
+            "/api/forum/{id}",
+            get(api::forum_thread)
+                .patch(api::forum_edit)
+                .delete(api::forum_delete),
+        )
+        .route("/api/forum/{id}/reply", post(api::forum_reply))
         .route("/ws", get(api::ws_handler))
         .fallback(assets::static_handler)
         .layer(CorsLayer::permissive())

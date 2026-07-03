@@ -5,6 +5,10 @@ import type {
   Board,
   CreateTicketInput,
   Definitions,
+  ForumMatch,
+  ForumPost,
+  ForumThread,
+  ForumThreadSummary,
   GraphCommit,
   Health,
   Identity,
@@ -91,6 +95,22 @@ function fillBoard(b: Board): Board {
     ...b,
     lists: (b.lists ?? []).map((l) => ({ ...l, tickets: (l.tickets ?? []).map(fillTicket) }))
   };
+}
+
+/** The daemon omits empty arrays; a leaf post arrives with no `replies`. Restore
+ *  every array so the tree is safe to walk. */
+function fillPost(p: ForumPost): ForumPost {
+  return {
+    ...p,
+    labels: p.labels ?? [],
+    refs: p.refs ?? [],
+    attachments: p.attachments ?? [],
+    replies: (p.replies ?? []).map(fillPost)
+  };
+}
+
+function fillThread(t: ForumThread): ForumThread {
+  return { ...t, root: fillPost(t.root) };
 }
 
 /** Build a media URL, preserving path slashes but encoding each segment. */
@@ -262,6 +282,68 @@ export const api = {
       `/api/tickets/${encodeURIComponent(id)}/attachments${qs({ project })}`,
       { method: 'DELETE', body: JSON.stringify({ path }) }
     );
+  },
+
+  // --- forum ---------------------------------------------------------------
+
+  async forumThreads(project?: string): Promise<ForumThreadSummary[]> {
+    const r = await req<{ threads: ForumThreadSummary[] }>(`/api/forum${qs({ project })}`);
+    return r.threads ?? [];
+  },
+
+  async forumThread(id: string, project?: string): Promise<ForumThread> {
+    return fillThread(await req<ForumThread>(`/api/forum/${encodeURIComponent(id)}${qs({ project })}`));
+  },
+
+  async forumPost(
+    input: { title: string; body?: string; labels?: string[] },
+    project?: string
+  ): Promise<ForumThread> {
+    return fillThread(
+      await req<ForumThread>(`/api/forum${qs({ project })}`, {
+        method: 'POST',
+        body: JSON.stringify(input)
+      })
+    );
+  },
+
+  forumReply(
+    id: string,
+    input: { body: string; labels?: string[] },
+    project?: string
+  ): Promise<{ ok: boolean; id: string; parent: string }> {
+    return req(`/api/forum/${encodeURIComponent(id)}/reply${qs({ project })}`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+  },
+
+  forumEdit(id: string, body: string, project?: string): Promise<{ ok: boolean }> {
+    return req(`/api/forum/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ body })
+    });
+  },
+
+  forumDelete(id: string, project?: string): Promise<{ ok: boolean }> {
+    return req(`/api/forum/${encodeURIComponent(id)}${qs({ project })}`, { method: 'DELETE' });
+  },
+
+  async forumSearch(
+    params: { q?: string; author?: string; label?: string; scope?: string; titles?: boolean },
+    project?: string
+  ): Promise<ForumMatch[]> {
+    const r = await req<{ posts: ForumMatch[] }>(
+      `/api/forum/search${qs({
+        project,
+        q: params.q,
+        author: params.author,
+        label: params.label,
+        scope: params.scope,
+        titles: params.titles ? 'true' : undefined
+      })}`
+    );
+    return r.posts ?? [];
   }
 };
 

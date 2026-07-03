@@ -102,6 +102,53 @@ export interface Definitions {
   priorities: string[];
 }
 
+/** A forum post: the root of a thread or a reply at any depth. */
+export interface ForumPost {
+  id: string;
+  author: string;
+  body: string;
+  labels: string[];
+  refs: string[];
+  attachments: Attachment[];
+  created: string;
+  edited?: string;
+  replies: ForumPost[];
+}
+
+export interface ForumThread {
+  version: number;
+  id: string;
+  title: string;
+  root: ForumPost;
+  created: string;
+  updated: string;
+}
+
+export interface ForumThreadSummary {
+  id: string;
+  title: string;
+  author: string;
+  labels: string[];
+  posts: number;
+  created: string;
+}
+
+/** A flattened post returned by forum search. */
+export interface ForumMatch {
+  id: string;
+  thread_id: string;
+  thread_title: string;
+  author: string;
+  body: string;
+  labels: string[];
+  refs: string[];
+  depth: number;
+  replies: number;
+  attachments: number;
+  created: string;
+  edited?: string;
+}
+
 export type IdentityKind = 'human' | 'agent';
 
 export interface Identity {

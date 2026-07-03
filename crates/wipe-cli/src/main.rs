@@ -4,6 +4,7 @@
 
 mod args;
 mod commands;
+mod forum_cmd;
 mod identity;
 mod onboard;
 mod output;
@@ -49,6 +50,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Comment(c) => commands::comment(out, c),
         Command::Label(c) => commands::label(out, c),
         Command::Media(c) => commands::media(out, c),
+        Command::Forum(c) => forum_cmd::run(out, c),
         Command::Serve(a) => commands::serve(out, a),
         Command::Config { global, cmd } => commands::config(out, global, cmd),
         Command::Doctor => commands::doctor(out),

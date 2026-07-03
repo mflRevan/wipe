@@ -2014,6 +2014,7 @@ version = "0.2.2"
 dependencies = [
  "chrono",
  "directories",
+ "regex",
  "serde",
  "serde_json",
  "sha1",

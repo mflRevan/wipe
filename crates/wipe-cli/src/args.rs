@@ -52,6 +52,9 @@ pub enum Command {
     /// Manage media/attachments referenced by tickets.
     #[command(subcommand)]
     Media(MediaCmd),
+    /// Post to and search the project forum (git-tracked discussion threads).
+    #[command(subcommand)]
+    Forum(ForumCmd),
     /// Start the local web UI daemon.
     Serve(ServeArgs),
     /// Get or set settings (project by default; `--global` for user defaults).
@@ -348,6 +351,154 @@ pub enum MediaCmd {
         /// Attachment file name.
         name: String,
     },
+}
+
+/// `wipe forum ...`
+#[derive(Debug, Subcommand)]
+pub enum ForumCmd {
+    /// Open a new thread with a root post.
+    Post(ForumPostArgs),
+    /// Reply to a post at any depth (parent is a post ID like F-1 or F-1.2).
+    Reply(ForumReplyArgs),
+    /// Show a thread (or a subtree) as an indented tree.
+    Show {
+        /// Thread or post ID (e.g. F-1 or F-1.2).
+        id: String,
+        /// Limit how deep to render (relative to the shown post).
+        #[arg(long)]
+        depth: Option<usize>,
+    },
+    /// List threads, newest first.
+    List {
+        /// Only threads whose root carries this label.
+        #[arg(long)]
+        label: Option<String>,
+        /// Only threads whose root was posted by this author (substring).
+        #[arg(long)]
+        author: Option<String>,
+        /// Cap the number of threads shown.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Search posts by regex pattern and/or filters.
+    Search(ForumSearchArgs),
+    /// Edit a post's body.
+    Edit {
+        /// Post ID.
+        id: String,
+        /// New body (Markdown allowed).
+        #[arg(long, short)]
+        body: String,
+    },
+    /// Delete a post and its entire subtree (root deletes the whole thread).
+    Delete {
+        /// Post or thread ID.
+        id: String,
+        /// Required to actually delete (subtree deletion is irreversible).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Watch the forum and stream new posts as newline-delimited JSON events.
+    ///
+    /// Blocks and prints one JSON object per new matching post; agent harnesses
+    /// run this and react to each line. Stop it with Ctrl-C.
+    Watch(ForumWatchArgs),
+}
+
+/// `wipe forum post`
+#[derive(Debug, Args)]
+pub struct ForumPostArgs {
+    /// Thread title (headline).
+    #[arg(long, short)]
+    pub title: String,
+    /// Message body (Markdown allowed).
+    #[arg(long, short)]
+    pub body: Option<String>,
+    /// Label to apply (repeatable), from the board's label pool.
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Reference to include (ticket ID, post ID, or URL; repeatable).
+    #[arg(long = "ref", value_name = "REF")]
+    pub refs: Vec<String>,
+    /// File to attach (repeatable).
+    #[arg(long = "attach", value_name = "PATH")]
+    pub attach: Vec<PathBuf>,
+    /// Override the author identity (defaults to git config / $WIPE_AUTHOR).
+    #[arg(long)]
+    pub author: Option<String>,
+}
+
+/// `wipe forum reply`
+#[derive(Debug, Args)]
+pub struct ForumReplyArgs {
+    /// Parent post ID (e.g. F-1 or F-1.2).
+    pub id: String,
+    /// Reply body (Markdown allowed).
+    #[arg(long, short)]
+    pub body: String,
+    /// Label to apply (repeatable).
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Reference to include (repeatable).
+    #[arg(long = "ref", value_name = "REF")]
+    pub refs: Vec<String>,
+    /// File to attach (repeatable).
+    #[arg(long = "attach", value_name = "PATH")]
+    pub attach: Vec<PathBuf>,
+    /// Override the author identity.
+    #[arg(long)]
+    pub author: Option<String>,
+}
+
+/// `wipe forum search`
+#[derive(Debug, Args)]
+pub struct ForumSearchArgs {
+    /// Regex to match against post bodies (or titles with --titles). Optional.
+    pub pattern: Option<String>,
+    /// Only posts by this author (substring, case-insensitive).
+    #[arg(long)]
+    pub author: Option<String>,
+    /// Require this label (repeatable; all must be present).
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Restrict to a thread or subtree by ID (e.g. F-1 or F-1.2).
+    #[arg(long)]
+    pub scope: Option<String>,
+    /// Only match posts at this depth or shallower (root = 0).
+    #[arg(long)]
+    pub depth: Option<usize>,
+    /// Match only thread titles (root posts).
+    #[arg(long)]
+    pub titles: bool,
+    /// Cap the number of results.
+    #[arg(long)]
+    pub limit: Option<usize>,
+    /// Make the pattern case-sensitive (default: case-insensitive).
+    #[arg(long = "case-sensitive")]
+    pub case_sensitive: bool,
+}
+
+/// `wipe forum watch`
+#[derive(Debug, Args)]
+pub struct ForumWatchArgs {
+    /// Only emit posts whose body matches this regex.
+    #[arg(long)]
+    pub pattern: Option<String>,
+    /// Only emit posts by this author (substring).
+    #[arg(long)]
+    pub author: Option<String>,
+    /// Only emit posts carrying this label (repeatable).
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Only emit posts within this thread/subtree.
+    #[arg(long)]
+    pub scope: Option<String>,
+    /// Poll interval in milliseconds.
+    #[arg(long, default_value = "1000")]
+    pub interval: u64,
+    /// Emit all currently-matching posts once before watching for new ones.
+    #[arg(long)]
+    pub replay: bool,
 }
 
 /// `wipe serve`

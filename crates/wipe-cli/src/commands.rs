@@ -552,7 +552,7 @@ pub fn media(out: &Out, cmd: MediaCmd) -> Result<()> {
 }
 
 /// Best-effort MIME type from a file extension.
-fn guess_mime(name: &str) -> &'static str {
+pub(crate) fn guess_mime(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "png" => "image/png",

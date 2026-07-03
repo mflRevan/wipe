@@ -57,6 +57,24 @@ impl Project {
         serde_json::from_str(&stdout)
             .unwrap_or_else(|e| panic!("bad json from {args:?}: {e}\n{stdout}"))
     }
+
+    /// Run a `--json` command as a specific author (each `wipe` call is a distinct
+    /// process, mirroring how independent agents drive the same board).
+    fn json_as(&self, author: &str, args: &[&str]) -> Value {
+        let mut v = args.to_vec();
+        v.push("--json");
+        let mut c = self.cmd(&v);
+        c.env("WIPE_AUTHOR", author);
+        let out = c.output().unwrap();
+        assert!(
+            out.status.success(),
+            "command {args:?} as {author} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("bad json from {args:?}: {e}\n{stdout}"))
+    }
 }
 
 #[test]
@@ -247,6 +265,193 @@ fn global_config_roundtrip() {
     let v = p.json(&["init", ".", "--name", "G", "--yes"]);
     assert_eq!(v["starter"], "empty");
     assert_eq!(v["autoserve"], true);
+}
+
+#[test]
+fn forum_threads_replies_and_search() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "F"]);
+
+    let t = p.json(&[
+        "forum",
+        "post",
+        "-t",
+        "Auth",
+        "-b",
+        "use OAuth 2.1",
+        "--label",
+        "decision",
+    ]);
+    assert_eq!(t["id"], "F-1");
+    let r = p.json(&[
+        "forum",
+        "reply",
+        "F-1",
+        "-b",
+        "watch token races",
+        "--label",
+        "gotcha",
+    ]);
+    assert_eq!(r["id"], "F-1.1");
+    let nested = p.json(&["forum", "reply", "F-1.1", "-b", "use a mutex"]);
+    assert_eq!(nested["id"], "F-1.1.1");
+
+    // regex over bodies
+    let hits = p.json(&["forum", "search", "token|mutex"]);
+    assert_eq!(hits.as_array().unwrap().len(), 2);
+    // by label
+    let g = p.json(&["forum", "search", "--label", "gotcha"]);
+    assert_eq!(g.as_array().unwrap().len(), 1);
+    assert_eq!(g[0]["id"], "F-1.1");
+    // titles only
+    let titles = p.json(&["forum", "search", "auth", "--titles"]);
+    assert_eq!(titles.as_array().unwrap().len(), 1);
+    assert_eq!(titles[0]["id"], "F-1");
+    // scoped to a subtree
+    let scoped = p.json(&["forum", "search", "--scope", "F-1"]);
+    assert_eq!(scoped.as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn forum_delete_removes_subtree_and_requires_yes() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "F"]);
+    p.json(&["forum", "post", "-t", "T", "-b", "root"]);
+    p.json(&["forum", "reply", "F-1", "-b", "a"]); // F-1.1
+    p.json(&["forum", "reply", "F-1.1", "-b", "aa"]); // F-1.1.1
+    p.json(&["forum", "reply", "F-1", "-b", "b"]); // F-1.2
+
+    // Delete refuses without --yes.
+    assert!(!p
+        .cmd(&["forum", "delete", "F-1.1"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    p.json(&["forum", "delete", "F-1.1", "--yes"]);
+
+    let ids: Vec<String> = p
+        .json(&["forum", "search"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(ids.contains(&"F-1".to_string()));
+    assert!(ids.contains(&"F-1.2".to_string()));
+    assert!(!ids.iter().any(|i| i.starts_with("F-1.1")));
+}
+
+/// Multi-agent collaboration through the forum, each agent a separate process
+/// (as real harnesses are). This is the flagship guard that project knowledge
+/// posted by one agent is discoverable by another, and that the on-disk search
+/// cache stays correct ACROSS processes. Bugs here (stale cache, cross-author
+/// search misses, subtree corruption) surface as failures.
+#[test]
+fn multi_agent_forum_collaboration() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "Calc Service"]);
+
+    // The architect records a durable decision and a gotcha (compounding knowledge).
+    let dec = p.json_as(
+        "architect",
+        &[
+            "forum",
+            "post",
+            "-t",
+            "Money handling",
+            "-b",
+            "All money is integer cents; never floats.",
+            "--label",
+            "decision",
+        ],
+    );
+    assert_eq!(dec["id"], "F-1");
+    p.json_as(
+        "architect",
+        &[
+            "forum",
+            "reply",
+            "F-1",
+            "-b",
+            "Gotcha: JSON serializes big ints as strings; parse carefully.",
+            "--label",
+            "gotcha",
+        ],
+    );
+
+    // A supervisor files work that points at the forum.
+    p.json(&[
+        "ticket",
+        "create",
+        "--title",
+        "Implement add()",
+        "--list",
+        "todo",
+        "--body",
+        "Follow the money rules in the forum.",
+    ]);
+
+    // The coder starts a FRESH process and, as the skill teaches, searches the
+    // forum first - and must find the architect's decision (cross-agent, cross-process).
+    let rules = p.json_as("coder", &["forum", "search", "cents|float|money"]);
+    let rules = rules.as_array().unwrap();
+    assert!(
+        !rules.is_empty(),
+        "coder must discover the architect's decision via search"
+    );
+    assert!(rules.iter().any(|r| r["author"] == "architect"));
+    let thread = rules[0]["thread_id"].as_str().unwrap().to_string();
+    assert_eq!(thread, "F-1");
+
+    // The coder confirms understanding in-thread and records a NEW discovered rule.
+    p.json_as(
+        "coder",
+        &[
+            "forum",
+            "reply",
+            "F-1",
+            "-b",
+            "Confirmed. Using i64 cents in add().",
+        ],
+    );
+    p.json_as(
+        "coder",
+        &[
+            "forum",
+            "post",
+            "-t",
+            "Rounding",
+            "-b",
+            "Round half-up at display only.",
+            "--label",
+            "rule",
+        ],
+    );
+
+    // A reviewer (third process) searches and finds insights from BOTH agents -
+    // the forum is the shared, compounding project memory.
+    let all_rules = p.json_as("reviewer", &["forum", "search", "--label", "decision"]);
+    assert!(all_rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["author"] == "architect"));
+    let authors: std::collections::HashSet<String> = p
+        .json_as("reviewer", &["forum", "search", "."])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["author"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        authors.contains("architect") && authors.contains("coder"),
+        "the reviewer should see contributions from every agent: {authors:?}"
+    );
+
+    // The reviewer can scope a search to one thread and dive in.
+    let in_thread = p.json_as("reviewer", &["forum", "search", "--scope", "F-1"]);
+    assert_eq!(in_thread.as_array().unwrap().len(), 3); // decision + gotcha + coder confirm
 }
 
 /// Deterministic mirror of the agent-to-agent supervision loop (no LLM), so CI

@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
+use wipe_core::forum::{self, NewReply, NewThread, SearchQuery};
 use wipe_core::model::{Board, IdentityKind, Ticket};
 use wipe_core::ops::{self, NewTicket, TicketPatch};
 use wipe_core::{git, Store};
@@ -561,6 +562,188 @@ pub async fn remove_list(
     ops::remove_list(&store, &id, q.force, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+// --- forum -----------------------------------------------------------------
+
+/// `GET /api/forum` - thread summaries (root posts + total post counts), newest first.
+pub async fn forum_list(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    let all = forum::index(&store)?;
+    let threads: Vec<Value> = all
+        .iter()
+        .filter(|p| p.depth == 0)
+        .map(|r| {
+            let posts = all.iter().filter(|p| p.thread_id == r.thread_id).count();
+            json!({
+                "id": r.thread_id,
+                "title": r.thread_title,
+                "author": r.author,
+                "labels": r.labels,
+                "posts": posts,
+                "created": r.created,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "threads": threads })))
+}
+
+/// `GET /api/forum/{id}` - a whole thread (root + nested reply tree).
+pub async fn forum_thread(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    Ok(Json(serde_json::to_value(forum::get_thread(&store, &id)?)?))
+}
+
+/// Body for creating a thread.
+#[derive(Debug, Deserialize)]
+pub struct ForumPostBody {
+    project: Option<String>,
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    refs: Vec<String>,
+    #[serde(default)]
+    actor: Option<String>,
+}
+
+/// `POST /api/forum` - open a new thread.
+pub async fn forum_create(
+    State(state): State<AppState>,
+    Json(b): Json<ForumPostBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let actor = resolve_actor(&store, b.actor);
+    let t = forum::create_thread(
+        &store,
+        NewThread {
+            title: b.title,
+            body: b.body,
+            labels: b.labels,
+            refs: b.refs,
+            attachments: Vec::new(),
+        },
+        &actor,
+        Utc::now(),
+    )?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(t)?))
+}
+
+/// Body for replying to a post.
+#[derive(Debug, Deserialize)]
+pub struct ForumReplyBody {
+    project: Option<String>,
+    body: String,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    refs: Vec<String>,
+    #[serde(default)]
+    actor: Option<String>,
+}
+
+/// `POST /api/forum/{id}/reply` - reply to a post at any depth.
+pub async fn forum_reply(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ForumReplyBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let actor = resolve_actor(&store, b.actor);
+    let child = forum::reply(
+        &store,
+        &id,
+        NewReply {
+            body: b.body,
+            labels: b.labels,
+            refs: b.refs,
+            attachments: Vec::new(),
+        },
+        &actor,
+        Utc::now(),
+    )?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": child, "parent": id })))
+}
+
+/// Body for editing a post.
+#[derive(Debug, Deserialize)]
+pub struct ForumEditBody {
+    project: Option<String>,
+    body: String,
+}
+
+/// `PATCH /api/forum/{id}` - edit a post's body.
+pub async fn forum_edit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ForumEditBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    forum::edit_post(&store, &id, &b.body, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+/// `DELETE /api/forum/{id}` - delete a post and its subtree.
+pub async fn forum_delete(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    forum::delete_post(&store, &id, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+/// Query for a forum search.
+#[derive(Debug, Deserialize)]
+pub struct ForumSearchParams {
+    project: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    titles: Option<bool>,
+    #[serde(default)]
+    depth: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /api/forum/search` - regex + filter search over posts.
+pub async fn forum_search(
+    State(state): State<AppState>,
+    Query(p): Query<ForumSearchParams>,
+) -> ApiResult {
+    let store = store_for(&state, p.project)?;
+    let pattern = match p.q.as_deref() {
+        Some(s) if !s.trim().is_empty() => Some(forum::compile_pattern(s, true)?),
+        _ => None,
+    };
+    let query = SearchQuery {
+        pattern,
+        author: p.author,
+        labels: p.label.into_iter().collect(),
+        scope: p.scope,
+        max_depth: p.depth,
+        titles_only: p.titles.unwrap_or(false),
+        limit: p.limit,
+    };
+    Ok(Json(json!({ "posts": forum::search(&store, &query)? })))
 }
 
 // --- websocket -------------------------------------------------------------

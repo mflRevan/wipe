@@ -452,6 +452,45 @@ pub fn delete_identity(store: &Store, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stage bytes as an [`Attachment`] without binding it to any ticket/post: if a
+/// file with identical content is already tracked in the repo it is referenced in
+/// place (no copy); otherwise the bytes are written under `.wipe/media/`. Shared by
+/// ticket and forum attachments.
+pub fn stage_media(store: &Store, name: &str, bytes: &[u8], mime: &str) -> Result<Attachment> {
+    let root = store.root();
+    let hash = git::blob_hash(bytes);
+
+    // Prefer referencing an already-tracked file with identical content.
+    let existing = if git::is_repo(root) {
+        git::tracked_blobs(root)
+            .ok()
+            .and_then(|blobs| blobs.into_iter().find(|(h, _)| *h == hash).map(|(_, p)| p))
+    } else {
+        None
+    };
+
+    if let Some(path) = existing {
+        Ok(Attachment {
+            name: name.to_string(),
+            path,
+            source: AttachmentSource::Repo,
+            size: bytes.len() as u64,
+            mime: mime.to_string(),
+        })
+    } else {
+        let file_name = format!("{}-{}", &hash[..8.min(hash.len())], sanitize(name));
+        fs::create_dir_all(store.media_dir())?;
+        fs::write(store.media_dir().join(&file_name), bytes)?;
+        Ok(Attachment {
+            name: name.to_string(),
+            path: format!(".wipe/media/{file_name}"),
+            source: AttachmentSource::Media,
+            size: bytes.len() as u64,
+            mime: mime.to_string(),
+        })
+    }
+}
+
 /// Attach a file to a ticket. If a file with identical content is already tracked
 /// in the repo, it is referenced in place (no copy); otherwise the bytes are
 /// stored under `.wipe/media/`. Returns the created [`Attachment`].
@@ -465,38 +504,7 @@ pub fn add_attachment(
     now: DateTime<Utc>,
 ) -> Result<Attachment> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    let root = store.root();
-    let hash = git::blob_hash(bytes);
-
-    // Prefer referencing an already-tracked file with identical content.
-    let existing = if git::is_repo(root) {
-        git::tracked_blobs(root)
-            .ok()
-            .and_then(|blobs| blobs.into_iter().find(|(h, _)| *h == hash).map(|(_, p)| p))
-    } else {
-        None
-    };
-
-    let attachment = if let Some(path) = existing {
-        Attachment {
-            name: name.to_string(),
-            path,
-            source: AttachmentSource::Repo,
-            size: bytes.len() as u64,
-            mime: mime.to_string(),
-        }
-    } else {
-        let file_name = format!("{}-{}", &hash[..8.min(hash.len())], sanitize(name));
-        fs::create_dir_all(store.media_dir())?;
-        fs::write(store.media_dir().join(&file_name), bytes)?;
-        Attachment {
-            name: name.to_string(),
-            path: format!(".wipe/media/{file_name}"),
-            source: AttachmentSource::Media,
-            size: bytes.len() as u64,
-            mime: mime.to_string(),
-        }
-    };
+    let attachment = stage_media(store, name, bytes, mime)?;
 
     if !ticket.attachments.iter().any(|a| a.path == attachment.path) {
         ticket.attachments.push(attachment.clone());

@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod error;
+pub mod forum;
 pub mod git;
 pub mod id;
 pub mod model;

@@ -24,6 +24,14 @@ pub enum Error {
     #[error("list `{0}` not found")]
     ListNotFound(String),
 
+    /// A forum thread with the given ID does not exist.
+    #[error("forum thread `{0}` not found")]
+    ThreadNotFound(String),
+
+    /// A forum post with the given ID does not exist.
+    #[error("forum post `{0}` not found")]
+    PostNotFound(String),
+
     /// A generic, contextual error message.
     #[error("{0}")]
     Message(String),
