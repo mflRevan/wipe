@@ -274,6 +274,9 @@ impl Store {
 
     /// Load a forum thread by its thread ID (e.g. `F-1`).
     pub fn load_thread(&self, thread_id: &str) -> Result<Thread> {
+        if !valid_thread_id(thread_id) {
+            return Err(Error::ThreadNotFound(thread_id.to_string()));
+        }
         let path = self.thread_path(thread_id);
         if !path.exists() {
             return Err(Error::ThreadNotFound(thread_id.to_string()));
@@ -283,11 +286,17 @@ impl Store {
 
     /// Write a forum thread file.
     pub fn save_thread(&self, thread: &Thread) -> Result<()> {
+        if !valid_thread_id(&thread.id) {
+            return Err(Error::msg(format!("invalid thread id `{}`", thread.id)));
+        }
         write_json_atomic(&self.thread_path(&thread.id), thread)
     }
 
     /// Delete a forum thread file. Errors if it does not exist.
     pub fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        if !valid_thread_id(thread_id) {
+            return Err(Error::ThreadNotFound(thread_id.to_string()));
+        }
         let path = self.thread_path(thread_id);
         if !path.exists() {
             return Err(Error::ThreadNotFound(thread_id.to_string()));
@@ -323,6 +332,13 @@ impl Store {
             .map(|id| self.load_thread(id))
             .collect()
     }
+}
+
+/// A thread ID must be `F-` followed by digits only. Rejecting anything else
+/// (path separators, `..`, dots) guarantees a caller-supplied ID can never be
+/// turned into a path that escapes the forum directory.
+fn valid_thread_id(id: &str) -> bool {
+    matches!(id.strip_prefix("F-"), Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Parse the numeric counter out of an `F-<n>` thread ID (ignoring any `.x` tail).

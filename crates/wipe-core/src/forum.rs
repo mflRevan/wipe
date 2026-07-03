@@ -555,6 +555,44 @@ mod tests {
     }
 
     #[test]
+    fn path_traversal_ids_are_rejected() {
+        let (_d, s) = project();
+        create_thread(
+            &s,
+            NewThread {
+                title: "T".into(),
+                body: "x".into(),
+                ..Default::default()
+            },
+            "a",
+            now(),
+        )
+        .unwrap();
+        for bad in [
+            "F-1/../../secret",
+            "..",
+            "F-1/../F-1",
+            "/etc/passwd",
+            "F-1\\..\\x",
+        ] {
+            assert!(
+                get_thread(&s, bad).is_err(),
+                "get_thread({bad}) should error"
+            );
+            assert!(
+                reply(&s, bad, post("x"), "a", now()).is_err(),
+                "reply({bad}) should error"
+            );
+            assert!(
+                delete_post(&s, bad, now()).is_err(),
+                "delete_post({bad}) should error"
+            );
+        }
+        // The legitimate thread is untouched.
+        assert!(get_thread(&s, "F-1").is_ok());
+    }
+
+    #[test]
     fn index_cache_reflects_new_posts() {
         let (_d, s) = project();
         create_thread(
