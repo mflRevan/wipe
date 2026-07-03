@@ -9,6 +9,17 @@
 //! Reads go through a small on-disk cache (`.wipe/.cache/forum-index.json`) that is
 //! rebuilt only when the forum files actually change, so search / list / watch stay
 //! fast and cheap even as the forum grows.
+//!
+//! Concurrency, honestly: like the rest of wipe, thread files are written with a
+//! last-writer-wins atomic rename and no cross-process lock. Replies to *different*
+//! threads (even on different git branches) never conflict; two writers racing on
+//! the *same* thread can lose one update, exactly like two edits to one ticket -
+//! git is the merge/audit layer. Thread-id allocation is guarded against reuse so a
+//! crash or branch divergence can never overwrite an existing thread. The read
+//! cache keys off each file's size + mtime; on filesystems with coarse mtime
+//! resolution (e.g. some removable/network mounts) a same-length edit landing in
+//! the same tick can serve a stale search result until the next change - deleting
+//! `.cache/` always forces a clean rebuild.
 
 use std::time::UNIX_EPOCH;
 
