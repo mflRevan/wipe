@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use wipe_core::model::Exposure;
-use wipe_core::ops::{self, NewTicket};
+use wipe_core::ops::{self, NewTicket, TicketPatch};
 use wipe_core::Store;
 
 use crate::args::*;
@@ -174,7 +174,7 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 labels: a.labels,
                 assignees: a.assignees,
             };
-            let t = ops::create_ticket(&s, spec, Utc::now())?;
+            let t = ops::create_ticket(&s, spec, &identity::resolve(None), Utc::now())?;
             out.ok(format!("created {} — {}", t.id, t.title), to_value(&t));
         }
         TicketCmd::Show { id } => {
@@ -192,22 +192,19 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             }
         }
         TicketCmd::Edit(a) => {
-            let mut t = s.load_ticket(&a.id)?;
-            if let Some(v) = a.title {
-                t.title = v;
-            }
-            if let Some(v) = a.body {
-                t.body = v;
-            }
-            if a.priority.is_some() {
-                t.priority = a.priority;
-            }
-            t.updated = Utc::now();
-            s.save_ticket(&t)?;
+            let patch = TicketPatch {
+                title: a.title,
+                body: a.body,
+                // Provided priority sets it; absent leaves it unchanged (CLI edit
+                // has no "clear" form, matching prior behavior).
+                priority: a.priority.map(Some),
+                ..Default::default()
+            };
+            let t = ops::update_ticket(&s, &a.id, patch, &identity::resolve(None), Utc::now())?;
             out.ok(format!("updated {}", t.id), to_value(&t));
         }
         TicketCmd::Move { id, to, pos } => {
-            ops::move_ticket(&s, &id, &to, pos, Utc::now())?;
+            ops::move_ticket(&s, &id, &to, pos, &identity::resolve(None), Utc::now())?;
             out.ok(
                 format!("moved {id} to {to}"),
                 json!({ "ok": true, "id": id, "list": to }),
@@ -215,20 +212,24 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
         }
         TicketCmd::Assign { id, who, remove } => {
             let mut t = s.load_ticket(&id)?;
+            let mut assignees = t.assignees.clone();
             if remove {
-                t.assignees.retain(|a| a != &who);
-            } else if !t.assignees.contains(&who) {
-                t.assignees.push(who.clone());
+                assignees.retain(|a| a != &who);
+            } else if !assignees.contains(&who) {
+                assignees.push(who.clone());
             }
-            t.updated = Utc::now();
-            s.save_ticket(&t)?;
+            let patch = TicketPatch {
+                assignees: Some(assignees),
+                ..Default::default()
+            };
+            t = ops::update_ticket(&s, &id, patch, &identity::resolve(None), Utc::now())?;
             let verb = if remove { "unassigned" } else { "assigned" };
             out.ok(format!("{verb} {who} on {id}"), to_value(&t));
         }
         TicketCmd::Close { id } => {
             let board = s.load_board()?;
             let target = done_list(&board).ok_or_else(|| anyhow!("board has no lists"))?;
-            ops::move_ticket(&s, &id, &target, None, Utc::now())?;
+            ops::move_ticket(&s, &id, &target, None, &identity::resolve(None), Utc::now())?;
             out.ok(
                 format!("closed {id} (moved to {target})"),
                 json!({ "ok": true, "id": id, "list": target }),
@@ -241,7 +242,7 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 .first()
                 .map(|l| l.id.clone())
                 .ok_or_else(|| anyhow!("board has no lists"))?;
-            ops::move_ticket(&s, &id, &target, None, Utc::now())?;
+            ops::move_ticket(&s, &id, &target, None, &identity::resolve(None), Utc::now())?;
             out.ok(
                 format!("reopened {id} (moved to {target})"),
                 json!({ "ok": true, "id": id, "list": target }),
@@ -370,19 +371,26 @@ pub fn label(out: &Out, cmd: LabelCmd) -> Result<()> {
             );
         }
         LabelCmd::Assign { ticket, name } => {
-            let mut t = s.load_ticket(&ticket)?;
-            if !t.labels.contains(&name) {
-                t.labels.push(name.clone());
-                t.updated = Utc::now();
-                s.save_ticket(&t)?;
+            let t = s.load_ticket(&ticket)?;
+            let mut labels = t.labels.clone();
+            if !labels.contains(&name) {
+                labels.push(name.clone());
             }
+            let patch = TicketPatch {
+                labels: Some(labels),
+                ..Default::default()
+            };
+            let t = ops::update_ticket(&s, &ticket, patch, &identity::resolve(None), Utc::now())?;
             out.ok(format!("labeled {ticket} '{name}'"), to_value(&t));
         }
         LabelCmd::Remove { ticket, name } => {
-            let mut t = s.load_ticket(&ticket)?;
-            t.labels.retain(|l| l != &name);
-            t.updated = Utc::now();
-            s.save_ticket(&t)?;
+            let t = s.load_ticket(&ticket)?;
+            let labels: Vec<String> = t.labels.iter().filter(|l| *l != &name).cloned().collect();
+            let patch = TicketPatch {
+                labels: Some(labels),
+                ..Default::default()
+            };
+            let t = ops::update_ticket(&s, &ticket, patch, &identity::resolve(None), Utc::now())?;
             out.ok(
                 format!("removed label '{name}' from {ticket}"),
                 to_value(&t),
@@ -413,8 +421,15 @@ pub fn media(out: &Out, cmd: MediaCmd) -> Result<()> {
                     limit / 1024 / 1024
                 );
             }
-            let att =
-                ops::add_attachment(&s, &ticket, &name, &bytes, guess_mime(&name), Utc::now())?;
+            let att = ops::add_attachment(
+                &s,
+                &ticket,
+                &name,
+                &bytes,
+                guess_mime(&name),
+                &identity::resolve(None),
+                Utc::now(),
+            )?;
             let where_ = match att.source {
                 wipe_core::model::AttachmentSource::Repo => "referenced from repo",
                 wipe_core::model::AttachmentSource::Media => "stored in .wipe/media",
@@ -442,7 +457,7 @@ pub fn media(out: &Out, cmd: MediaCmd) -> Result<()> {
                 .find(|a| a.name == name || a.path == name)
                 .map(|a| a.path.clone())
                 .ok_or_else(|| anyhow!("no attachment `{name}` on {ticket}"))?;
-            ops::remove_attachment(&s, &ticket, &path, Utc::now())?;
+            ops::remove_attachment(&s, &ticket, &path, &identity::resolve(None), Utc::now())?;
             out.ok(
                 format!("detached {name} from {ticket}"),
                 json!({ "ok": true, "ticket": ticket }),

@@ -60,6 +60,16 @@ fn notify(state: &AppState) {
     let _ = state.tx.send("changed".to_string());
 }
 
+/// Who to attribute a UI-driven mutation to for the activity timeline: an explicit
+/// `actor` from the request if given, else the repo's configured git identity, else
+/// a generic fallback.
+fn resolve_actor(store: &Store, provided: Option<String>) -> String {
+    provided
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| git::config_identity(store.root()))
+        .unwrap_or_else(|| "someone".to_string())
+}
+
 fn board_json(board: &Board, view: &[(String, Vec<Ticket>)]) -> Value {
     let lists: Vec<Value> = view
         .iter()
@@ -151,6 +161,8 @@ pub struct CreateTicketBody {
     labels: Vec<String>,
     #[serde(default)]
     assignees: Vec<String>,
+    #[serde(default)]
+    actor: Option<String>,
 }
 
 /// `POST /api/tickets`
@@ -159,6 +171,7 @@ pub async fn create_ticket(
     Json(b): Json<CreateTicketBody>,
 ) -> ApiResult {
     let store = store_for(&state, b.project)?;
+    let actor = resolve_actor(&store, b.actor);
     let spec = NewTicket {
         title: b.title,
         body: b.body,
@@ -167,7 +180,7 @@ pub async fn create_ticket(
         labels: b.labels,
         assignees: b.assignees,
     };
-    let ticket = ops::create_ticket(&store, spec, Utc::now())?;
+    let ticket = ops::create_ticket(&store, spec, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(serde_json::to_value(ticket)?))
 }
@@ -179,6 +192,8 @@ pub struct MoveBody {
     to: String,
     #[serde(default)]
     pos: Option<usize>,
+    #[serde(default)]
+    actor: Option<String>,
 }
 
 /// `POST /api/tickets/{id}/move`
@@ -188,7 +203,8 @@ pub async fn move_ticket(
     Json(b): Json<MoveBody>,
 ) -> ApiResult {
     let store = store_for(&state, b.project)?;
-    ops::move_ticket(&store, &id, &b.to, b.pos, Utc::now())?;
+    let actor = resolve_actor(&store, b.actor);
+    ops::move_ticket(&store, &id, &b.to, b.pos, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id, "list": b.to })))
 }
@@ -289,6 +305,8 @@ pub struct PatchBody {
     labels: Option<Vec<String>>,
     #[serde(default)]
     assignees: Option<Vec<String>>,
+    #[serde(default)]
+    actor: Option<String>,
 }
 
 /// `PATCH /api/tickets/{id}` — update ticket fields.
@@ -298,6 +316,7 @@ pub async fn patch_ticket(
     Json(b): Json<PatchBody>,
 ) -> ApiResult {
     let store = store_for(&state, b.project)?;
+    let actor = resolve_actor(&store, b.actor);
     let patch = TicketPatch {
         title: b.title,
         body: b.body,
@@ -305,7 +324,7 @@ pub async fn patch_ticket(
         labels: b.labels,
         assignees: b.assignees,
     };
-    let ticket = ops::update_ticket(&store, &id, patch, Utc::now())?;
+    let ticket = ops::update_ticket(&store, &id, patch, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(serde_json::to_value(ticket)?))
 }
@@ -342,6 +361,19 @@ pub async fn put_identity(
     Ok(Json(serde_json::to_value(ident)?))
 }
 
+/// `DELETE /api/identities/{id}` — remove an identity from the registry (agents /
+/// manual overrides; git-discovered humans reappear from history).
+pub async fn delete_identity(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    ops::delete_identity(&store, &id)?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
 /// `POST /api/tickets/{id}/attachments` — multipart file upload (field `file`).
 pub async fn upload_attachment(
     State(state): State<AppState>,
@@ -350,6 +382,7 @@ pub async fn upload_attachment(
     mut multipart: Multipart,
 ) -> ApiResult {
     let store = store_for(&state, q.project)?;
+    let actor = resolve_actor(&store, None);
     let max = store.load_settings()?.max_attachment_mb * 1024 * 1024;
 
     while let Some(field) = multipart
@@ -376,7 +409,7 @@ pub async fn upload_attachment(
                 max / 1024 / 1024
             )));
         }
-        let att = ops::add_attachment(&store, &id, &name, &bytes, &mime, Utc::now())?;
+        let att = ops::add_attachment(&store, &id, &name, &bytes, &mime, &actor, Utc::now())?;
         notify(&state);
         return Ok(Json(serde_json::to_value(att)?));
     }
@@ -388,6 +421,8 @@ pub async fn upload_attachment(
 pub struct DetachBody {
     project: Option<String>,
     path: String,
+    #[serde(default)]
+    actor: Option<String>,
 }
 
 /// `DELETE /api/tickets/{id}/attachments` — detach by repo-relative path.
@@ -397,7 +432,8 @@ pub async fn delete_attachment(
     Json(b): Json<DetachBody>,
 ) -> ApiResult {
     let store = store_for(&state, b.project)?;
-    ops::remove_attachment(&store, &id, &b.path, Utc::now())?;
+    let actor = resolve_actor(&store, b.actor);
+    ops::remove_attachment(&store, &id, &b.path, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true })))
 }

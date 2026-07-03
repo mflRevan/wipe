@@ -58,7 +58,10 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/lists/{id}/move", post(api::move_list))
         .route("/api/identities", get(api::identities))
-        .route("/api/identities/{id}", put(api::put_identity))
+        .route(
+            "/api/identities/{id}",
+            put(api::put_identity).delete(api::delete_identity),
+        )
         .route("/api/tickets", post(api::create_ticket))
         .route("/api/tickets/{id}", patch(api::patch_ticket))
         .route("/api/tickets/{id}/move", post(api::move_ticket))
@@ -153,6 +156,7 @@ mod tests {
                 title: "Hello".into(),
                 ..Default::default()
             },
+            "tester",
             chrono::Utc::now(),
         )
         .unwrap();

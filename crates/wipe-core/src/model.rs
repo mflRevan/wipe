@@ -156,6 +156,10 @@ pub struct Ticket {
     /// Inline comment thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Activity log (moves, label/assignee/priority changes, attachments). Shown
+    /// interleaved with comments in the ticket's activity timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity: Vec<Activity>,
     /// Next comment counter for this ticket.
     #[serde(default = "one")]
     pub next_comment: u64,
@@ -183,6 +187,7 @@ impl Ticket {
             relations: Vec::new(),
             attachments: Vec::new(),
             comments: Vec::new(),
+            activity: Vec::new(),
             next_comment: 1,
             created: now,
             updated: now,
@@ -207,6 +212,22 @@ impl Ticket {
         });
         self.updated = now;
         id
+    }
+
+    /// Append an activity event. `detail` may be empty when `kind` is self-explanatory.
+    pub fn log_activity(
+        &mut self,
+        actor: impl Into<String>,
+        kind: impl Into<String>,
+        detail: impl Into<String>,
+        now: DateTime<Utc>,
+    ) {
+        self.activity.push(Activity {
+            ts: now,
+            actor: actor.into(),
+            kind: kind.into(),
+            detail: detail.into(),
+        });
     }
 }
 
@@ -249,6 +270,25 @@ pub struct Comment {
     /// When the comment was last edited, if ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited: Option<DateTime<Utc>>,
+}
+
+/// A recorded change to a ticket, shown in the activity timeline alongside
+/// comments. Kept deliberately small and pre-classified so any front-end can
+/// render a phrase from `kind` + `detail` without re-deriving it from diffs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Activity {
+    /// When it happened.
+    pub ts: DateTime<Utc>,
+    /// Who did it (git `Name <email>` or agent ID).
+    pub actor: String,
+    /// Event kind: one of `created`, `moved`, `renamed`, `edited`, `priority`,
+    /// `label-added`, `label-removed`, `assigned`, `unassigned`, `attached`,
+    /// `detached`.
+    pub kind: String,
+    /// Event-specific detail (destination list, label, assignee, attachment
+    /// name, priority value). Empty when the `kind` alone says everything.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
 }
 
 /// A file attached to a ticket.

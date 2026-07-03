@@ -125,6 +125,23 @@ pub fn authors(root: &Path) -> Result<Vec<(String, String)>> {
     Ok(authors)
 }
 
+/// The configured git identity for this repo (`Name <email>`), if set. Used to
+/// attribute UI-driven changes in the activity timeline to the human at the keyboard.
+pub fn config_identity(root: &Path) -> Option<String> {
+    let get = |key: &str| {
+        run(root, &["config", key])
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    match (get("user.name"), get("user.email")) {
+        (Some(name), Some(email)) => Some(format!("{name} <{email}>")),
+        (Some(name), None) => Some(name),
+        (None, Some(email)) => Some(email),
+        (None, None) => None,
+    }
+}
+
 /// A commit in the repository graph, with parent links and ref decorations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GraphCommit {

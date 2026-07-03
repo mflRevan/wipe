@@ -47,6 +47,7 @@ fn concurrent_edits_to_different_tickets_merge_cleanly() {
             title: "Alpha".into(),
             ..Default::default()
         },
+        "tester",
         now(),
     )
     .unwrap();
@@ -56,6 +57,7 @@ fn concurrent_edits_to_different_tickets_merge_cleanly() {
             title: "Beta".into(),
             ..Default::default()
         },
+        "tester",
         now(),
     )
     .unwrap();

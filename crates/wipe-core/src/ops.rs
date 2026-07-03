@@ -35,7 +35,12 @@ pub struct NewTicket {
 
 /// Create a ticket, allocate its ID, place it on a list, and persist both the
 /// ticket file and the board. Returns the created ticket.
-pub fn create_ticket(store: &Store, spec: NewTicket, now: DateTime<Utc>) -> Result<Ticket> {
+pub fn create_ticket(
+    store: &Store,
+    spec: NewTicket,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<Ticket> {
     let mut board = store.load_board()?;
 
     let list_id = match spec.list {
@@ -60,6 +65,7 @@ pub fn create_ticket(store: &Store, spec: NewTicket, now: DateTime<Utc>) -> Resu
     ticket.priority = spec.priority;
     ticket.labels = spec.labels;
     ticket.assignees = spec.assignees;
+    ticket.log_activity(actor, "created", "", now);
 
     board
         .list_mut(&list_id)
@@ -80,14 +86,23 @@ pub fn move_ticket(
     ticket_id: &str,
     to_list: &str,
     position: Option<usize>,
+    actor: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
     // Ensure the ticket exists.
     let _ = store.load_ticket(ticket_id)?;
     let mut board = store.load_board()?;
-    if board.list(to_list).is_none() {
-        return Err(Error::ListNotFound(to_list.to_string()));
-    }
+    let dest_name = match board.list(to_list) {
+        Some(l) => l.name.clone(),
+        None => return Err(Error::ListNotFound(to_list.to_string())),
+    };
+
+    // Where is it now? (skip logging a no-op move within the same list)
+    let from_list = board
+        .lists
+        .iter()
+        .find(|l| l.cards.iter().any(|c| c == ticket_id))
+        .map(|l| l.id.clone());
 
     // Remove from current list (if present).
     for list in &mut board.lists {
@@ -99,9 +114,13 @@ pub fn move_ticket(
     dest.cards.insert(pos, ticket_id.to_string());
     board.updated = now;
 
-    // Touch the ticket so its own `updated` reflects the move.
+    // Touch the ticket so its own `updated` reflects the move; log it as activity
+    // only when the containing list actually changed.
     let mut ticket = store.load_ticket(ticket_id)?;
     ticket.updated = now;
+    if from_list.as_deref() != Some(to_list) {
+        ticket.log_activity(actor, "moved", dest_name, now);
+    }
     store.save_ticket(&ticket)?;
     store.save_board(&board)?;
     Ok(())
@@ -253,22 +272,57 @@ pub fn update_ticket(
     store: &Store,
     id: &str,
     patch: TicketPatch,
+    actor: &str,
     now: DateTime<Utc>,
 ) -> Result<Ticket> {
     let mut t = store.load_ticket(id)?;
     if let Some(v) = patch.title {
+        if v != t.title {
+            t.log_activity(actor, "renamed", v.clone(), now);
+        }
         t.title = v;
     }
     if let Some(v) = patch.body {
+        if v != t.body {
+            t.log_activity(actor, "edited", "", now);
+        }
         t.body = v;
     }
     if let Some(v) = patch.priority {
+        if v != t.priority {
+            t.log_activity(actor, "priority", v.clone().unwrap_or_default(), now);
+        }
         t.priority = v;
     }
     if let Some(v) = patch.labels {
+        let added: Vec<String> = v.iter().filter(|l| !t.labels.contains(l)).cloned().collect();
+        let removed: Vec<String> = t.labels.iter().filter(|l| !v.contains(l)).cloned().collect();
+        for l in added {
+            t.log_activity(actor, "label-added", l, now);
+        }
+        for l in removed {
+            t.log_activity(actor, "label-removed", l, now);
+        }
         t.labels = v;
     }
     if let Some(v) = patch.assignees {
+        let added: Vec<String> = v
+            .iter()
+            .filter(|a| !t.assignees.contains(a))
+            .cloned()
+            .collect();
+        let removed: Vec<String> = t
+            .assignees
+            .iter()
+            .filter(|a| !v.contains(a))
+            .cloned()
+            .collect();
+        for a in added {
+            t.log_activity(actor, "assigned", a, now);
+        }
+        for a in removed {
+            t.log_activity(actor, "unassigned", a, now);
+        }
         t.assignees = v;
     }
     t.updated = now;
@@ -376,6 +430,19 @@ pub fn upsert_identity(
     }
 }
 
+/// Remove an identity from the saved registry. Git-derived humans that aren't in
+/// the registry can't be removed (they're re-discovered from history); this is
+/// meant for pruning agent identities and manual overrides.
+pub fn delete_identity(store: &Store, id: &str) -> Result<()> {
+    let mut registry = store.load_identities()?;
+    let before = registry.len();
+    registry.retain(|i| i.id != id);
+    if registry.len() != before {
+        store.save_identities(&registry)?;
+    }
+    Ok(())
+}
+
 /// Attach a file to a ticket. If a file with identical content is already tracked
 /// in the repo, it is referenced in place (no copy); otherwise the bytes are
 /// stored under `.wipe/media/`. Returns the created [`Attachment`].
@@ -385,6 +452,7 @@ pub fn add_attachment(
     name: &str,
     bytes: &[u8],
     mime: &str,
+    actor: &str,
     now: DateTime<Utc>,
 ) -> Result<Attachment> {
     let mut ticket = store.load_ticket(ticket_id)?;
@@ -423,6 +491,7 @@ pub fn add_attachment(
 
     if !ticket.attachments.iter().any(|a| a.path == attachment.path) {
         ticket.attachments.push(attachment.clone());
+        ticket.log_activity(actor, "attached", attachment.name.clone(), now);
         ticket.updated = now;
         store.save_ticket(&ticket)?;
     }
@@ -435,10 +504,19 @@ pub fn remove_attachment(
     store: &Store,
     ticket_id: &str,
     path: &str,
+    actor: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let mut ticket = store.load_ticket(ticket_id)?;
+    let name = ticket
+        .attachments
+        .iter()
+        .find(|a| a.path == path)
+        .map(|a| a.name.clone());
     ticket.attachments.retain(|a| a.path != path);
+    if let Some(name) = name {
+        ticket.log_activity(actor, "detached", name, now);
+    }
     ticket.updated = now;
     store.save_ticket(&ticket)?;
     Ok(())
@@ -492,6 +570,7 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -501,6 +580,7 @@ mod tests {
                 title: "B".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -520,10 +600,11 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
-        move_ticket(&s, "T-1", "done", None, now()).unwrap();
+        move_ticket(&s, "T-1", "done", None, "tester", now()).unwrap();
         let board = s.load_board().unwrap();
         assert!(board.list("backlog").unwrap().cards.is_empty());
         assert_eq!(board.list("done").unwrap().cards, vec!["T-1"]);
@@ -538,11 +619,12 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
         assert!(matches!(
-            move_ticket(&s, "T-1", "nope", None, now()),
+            move_ticket(&s, "T-1", "nope", None, "tester", now()),
             Err(Error::ListNotFound(_))
         ));
     }
@@ -556,6 +638,7 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -591,6 +674,7 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -611,6 +695,7 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -621,7 +706,7 @@ mod tests {
             assignees: Some(vec!["ada@example.com".into()]),
             ..Default::default()
         };
-        let t = update_ticket(&s, "T-1", patch, now()).unwrap();
+        let t = update_ticket(&s, "T-1", patch, "tester", now()).unwrap();
         assert_eq!(t.title, "A2");
         assert_eq!(t.priority.as_deref(), Some("high"));
         assert_eq!(t.labels, vec!["blocked"]);
@@ -632,10 +717,68 @@ mod tests {
                 priority: Some(None),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
         assert_eq!(cleared.priority, None);
+    }
+
+    #[test]
+    fn activity_is_logged_for_create_move_and_patch() {
+        let (_d, s) = project();
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "A".into(),
+                ..Default::default()
+            },
+            "ada",
+            now(),
+        )
+        .unwrap();
+        move_ticket(&s, "T-1", "done", None, "ada", now()).unwrap();
+        update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                labels: Some(vec!["blocked".into()]),
+                assignees: Some(vec!["ada@example.com".into()]),
+                priority: Some(Some("high".into())),
+                ..Default::default()
+            },
+            "ada",
+            now(),
+        )
+        .unwrap();
+
+        let t = s.load_ticket("T-1").unwrap();
+        let kinds: Vec<&str> = t.activity.iter().map(|a| a.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["created", "moved", "priority", "label-added", "assigned"]
+        );
+        // Moved event carries the destination list's display name, not its id.
+        let moved = t.activity.iter().find(|a| a.kind == "moved").unwrap();
+        assert_eq!(moved.detail, "Done");
+        assert!(t.activity.iter().all(|a| a.actor == "ada"));
+
+        // Removing the label/assignee logs the inverse events.
+        update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                labels: Some(vec![]),
+                assignees: Some(vec![]),
+                ..Default::default()
+            },
+            "ada",
+            now(),
+        )
+        .unwrap();
+        let t = s.load_ticket("T-1").unwrap();
+        assert!(t.activity.iter().any(|a| a.kind == "label-removed"));
+        assert!(t.activity.iter().any(|a| a.kind == "unassigned"));
     }
 
     #[test]
@@ -673,6 +816,7 @@ mod tests {
                 title: "A".into(),
                 ..Default::default()
             },
+            "tester",
             now(),
         )
         .unwrap();
@@ -682,12 +826,14 @@ mod tests {
         git(&["commit", "-q", "-m", "add logo"]);
 
         // Identical bytes -> reference the tracked repo file (no copy).
-        let a = add_attachment(&s, "T-1", "logo.png", b"PNGDATA", "image/png", now()).unwrap();
+        let a =
+            add_attachment(&s, "T-1", "logo.png", b"PNGDATA", "image/png", "tester", now()).unwrap();
         assert_eq!(a.source, AttachmentSource::Repo);
         assert_eq!(a.path, "logo.png");
 
         // Novel bytes -> copied into .wipe/media/.
-        let b = add_attachment(&s, "T-1", "new.txt", b"hello world", "text/plain", now()).unwrap();
+        let b = add_attachment(&s, "T-1", "new.txt", b"hello world", "text/plain", "tester", now())
+            .unwrap();
         assert_eq!(b.source, AttachmentSource::Media);
         assert!(b.path.starts_with(".wipe/media/"));
         assert!(root.join(&b.path).exists());
