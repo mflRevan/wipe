@@ -497,6 +497,15 @@ pub const LABEL_PALETTE: &[&str] = &[
     "#BF4D43", // clay
     "#D4A27F", // kraft
     "#9A7AA0", // plum
+    "#3E9C93", // teal
+    "#E0A33B", // amber
+    "#C77C93", // rose
+    "#4F7A55", // forest
+    "#9E8FC2", // lavender
+    "#B0455A", // ruby
+    "#8A9A5B", // olive
+    "#7C8AA0", // steel
+    "#8C6A54", // cocoa
     "#EBDBBC", // manilla
     "#666663", // slate
 ];

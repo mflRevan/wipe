@@ -6,12 +6,21 @@ import type { LabelDef } from './types';
 export const LABEL_COLORS: Record<string, string> = {
   terracotta: '#CC785C',
   kraft: '#D4A27F',
+  amber: '#E0A33B',
   manilla: '#EBDBBC',
-  sky: '#61AAF2',
-  clay: '#BF4D43',
+  olive: '#8A9A5B',
   sage: '#7E9B7A',
+  forest: '#4F7A55',
+  teal: '#3E9C93',
+  sky: '#61AAF2',
+  steel: '#7C8AA0',
   indigo: '#6C7BA8',
+  lavender: '#9E8FC2',
   plum: '#9A7AA0',
+  rose: '#C77C93',
+  clay: '#BF4D43',
+  ruby: '#B0455A',
+  cocoa: '#8C6A54',
   slate: '#666663'
 };
 

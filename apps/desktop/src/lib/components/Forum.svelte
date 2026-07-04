@@ -1,14 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { MessageSquarePlus, Search, Send, Trash2, CornerDownRight, X } from 'lucide-svelte';
-  import Avatar from './Avatar.svelte';
-  import Markdown from './Markdown.svelte';
-  import Chip from './ui/Chip.svelte';
+  import { MessageSquarePlus, Search, Send, X } from 'lucide-svelte';
+  import ForumPost from './ForumPost.svelte';
   import { api, subscribeChanges } from '$lib/api';
   import { currentProject, identities, definitions } from '$lib/stores/board';
-  import { formatDate, labelColorFor } from '$lib/utils';
-  import type { ForumMatch, ForumPost, ForumThread, ForumThreadSummary } from '$lib/types';
+  import { labelColor } from '$lib/utils';
+  import type { ForumMatch, ForumPost as Post, ForumThread, ForumThreadSummary } from '$lib/types';
 
   let threads = $state<ForumThreadSummary[]>([]);
   let selectedId = $state<string | null>(null);
@@ -23,6 +21,7 @@
   let composingThread = $state(false);
   let ntTitle = $state('');
   let ntBody = $state('');
+  let ntLabels = $state<string[]>([]);
   let replyTo = $state<string | null>(null);
   let replyBody = $state('');
 
@@ -42,6 +41,22 @@
     return m && m[1] ? m[1] : id;
   }
 
+  function findPost(root: Post | undefined, id: string): Post | undefined {
+    if (!root) return undefined;
+    if (root.id === id) return root;
+    for (const r of root.replies ?? []) {
+      const hit = findPost(r, id);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  // The person you're replying to, by name - never the raw post ID.
+  let replyTargetName = $derived(
+    replyTo && thread && replyTo !== thread.id
+      ? displayName(findPost(thread.root, replyTo)?.author ?? '')
+      : null
+  );
+
   async function loadThreads() {
     try {
       threads = await api.forumThreads(proj());
@@ -56,13 +71,11 @@
     selectedId = id;
     results = null;
     // Only reset the reply target when actually switching threads, so a background
-    // WS refresh of the current thread doesn't clobber an in-progress reply aimed
-    // at a nested post.
+    // WS refresh doesn't clobber an in-progress reply aimed at a nested post.
     if (switching) replyTo = id;
     try {
       const t = await api.forumThread(id, proj());
-      // Drop a stale response if the selection changed while awaiting.
-      if (id !== selectedId) return;
+      if (id !== selectedId) return; // drop a stale response
       thread = t;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -72,7 +85,6 @@
   async function refresh() {
     await loadThreads();
     if (selectedId) {
-      // Thread may have been deleted out from under us.
       if (threads.some((t) => t.id === selectedId)) await openThread(selectedId);
       else {
         selectedId = null;
@@ -95,19 +107,32 @@
     }
   }
 
+  function toggleNewLabel(name: string) {
+    ntLabels = ntLabels.includes(name) ? ntLabels.filter((l) => l !== name) : [...ntLabels, name];
+  }
+
   async function createThread() {
     const title = ntTitle.trim();
     if (!title) return;
     try {
-      const t = await api.forumPost({ title, body: ntBody.trim() || undefined }, proj());
+      const t = await api.forumPost(
+        { title, body: ntBody.trim() || undefined, labels: ntLabels },
+        proj()
+      );
       ntTitle = '';
       ntBody = '';
+      ntLabels = [];
       composingThread = false;
       await loadThreads();
       await openThread(t.id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
+  }
+
+  function startReply(id: string) {
+    replyTo = id;
+    replyBody = '';
   }
 
   async function sendReply() {
@@ -136,16 +161,8 @@
     }
   }
 
-  // Flatten a thread into depth-annotated posts for rendering.
-  function flatten(root: ForumPost, depth = 0, acc: { post: ForumPost; depth: number }[] = []) {
-    acc.push({ post: root, depth });
-    for (const r of root.replies) flatten(r, depth + 1, acc);
-    return acc;
-  }
-  let posts = $derived(thread ? flatten(thread.root) : []);
-
-  // Reload (and reset selection) whenever the current project changes; this also
-  // performs the initial load on mount.
+  // Reload (and reset selection) whenever the current project changes; also the
+  // initial load on mount.
   $effect(() => {
     void $currentProject;
     selectedId = null;
@@ -176,6 +193,21 @@
         <input class="in" placeholder="Thread title" bind:value={ntTitle} />
         <textarea class="in ta" rows="3" placeholder="Say something… (Markdown)" bind:value={ntBody}
         ></textarea>
+        {#if $definitions.labels.length}
+          <div class="pool">
+            {#each $definitions.labels as label (label.name)}
+              <button
+                type="button"
+                class="pchip"
+                class:on={ntLabels.includes(label.name)}
+                style="--c:{labelColor(label.name, label.color)}"
+                onclick={() => toggleNewLabel(label.name)}
+              >
+                {label.name}
+              </button>
+            {/each}
+          </div>
+        {/if}
         <div class="crow">
           <button class="ghost" onclick={() => (composingThread = false)}>Cancel</button>
           <button class="prim" disabled={!ntTitle.trim()} onclick={createThread}>Post thread</button>
@@ -198,10 +230,7 @@
       <div class="reslabel">{results.length} match(es)</div>
       {#each results as r (r.id)}
         <button class="threadrow" onclick={() => openThread(r.thread_id)}>
-          <div class="tr-top">
-            <span class="tr-id">{r.id}</span>
-            <span class="tr-author">{displayName(r.author)}</span>
-          </div>
+          <div class="tr-meta">{displayName(r.author)}</div>
           <div class="tr-snip">{r.body}</div>
         </button>
       {/each}
@@ -212,12 +241,11 @@
           class:active={t.id === selectedId}
           onclick={() => openThread(t.id)}
         >
-          <div class="tr-top">
-            <span class="tr-id">{t.id}</span>
+          <div class="tr-title">{t.title}</div>
+          <div class="tr-sub">
+            <span class="tr-meta">{displayName(t.author)}</span>
             <span class="tr-count">{t.posts}</span>
           </div>
-          <div class="tr-title">{t.title}</div>
-          <div class="tr-meta">{displayName(t.author)}</div>
         </button>
       {:else}
         <div class="empty">No threads yet. Start one with <b>New</b>.</div>
@@ -230,52 +258,14 @@
     {#if thread}
       <header class="th-head">
         <h2>{thread.title}</h2>
-        <span class="th-id">{thread.id}</span>
       </header>
       <div class="feed wp-scroll">
-        {#each posts as { post, depth } (post.id)}
-          <div class="post" style="--indent:{Math.min(depth, 6)}">
-            {#if depth > 0}<span class="thread-line"></span>{/if}
-            <Avatar
-              id={identityFor(post.author)?.id ?? post.author}
-              identity={identityFor(post.author)}
-              size={26}
-            />
-            <div class="bubble">
-              <div class="p-head">
-                <span class="p-author">{displayName(post.author)}</span>
-                <span class="p-id">{post.id}</span>
-                <span class="p-time">{formatDate(post.created)}{post.edited ? ' · edited' : ''}</span>
-                <div class="p-actions">
-                  <button
-                    class="pa"
-                    title="Reply"
-                    onclick={() => {
-                      replyTo = post.id;
-                      replyBody = '';
-                    }}><CornerDownRight size={13} /></button
-                  >
-                  <button class="pa danger" title="Delete (and replies)" onclick={() => del(post.id)}>
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
-              {#if post.labels.length}
-                <div class="p-labels">
-                  {#each post.labels as l (l)}
-                    <Chip color={labelColorFor(l, $definitions.labels)}>{l}</Chip>
-                  {/each}
-                </div>
-              {/if}
-              <div class="p-body"><Markdown source={post.body} /></div>
-            </div>
-          </div>
-        {/each}
+        <ForumPost post={thread.root} onreply={startReply} ondelete={del} />
       </div>
       <div class="replybar">
-        {#if replyTo && replyTo !== thread.id}
+        {#if replyTargetName}
           <div class="replying">
-            replying to {replyTo}
+            replying to {replyTargetName}
             <button class="rx" aria-label="Reply to thread instead" onclick={() => (replyTo = thread!.id)}>
               <X size={12} />
             </button>
@@ -285,7 +275,7 @@
           <textarea
             class="c-input"
             rows="2"
-            placeholder={replyTo === thread.id ? 'Reply to this thread…' : `Reply to ${replyTo}…`}
+            placeholder={replyTargetName ? `Reply to ${replyTargetName}…` : 'Reply to this thread…'}
             bind:value={replyBody}
             onkeydown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendReply();
@@ -366,6 +356,37 @@
     border-radius: var(--wp-r-md);
     background: var(--wp-surface);
   }
+  .pool {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .pchip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: var(--wp-r-pill);
+    border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+    background: none;
+    color: var(--wp-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .pchip::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c);
+    margin-right: 6px;
+  }
+  .pchip.on {
+    background: color-mix(in srgb, var(--c) 16%, transparent);
+    border-color: var(--c);
+    color: var(--wp-text);
+  }
   .crow {
     display: flex;
     justify-content: flex-end;
@@ -411,9 +432,9 @@
   .threadrow {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     text-align: left;
-    padding: 8px;
+    padding: 9px 10px;
     border: 1px solid var(--wp-border);
     border-radius: var(--wp-r-md);
     background: var(--wp-card);
@@ -427,13 +448,17 @@
     border-color: var(--wp-accent);
     background: color-mix(in srgb, var(--wp-accent) 8%, transparent);
   }
-  .tr-top {
+  .tr-title {
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.3;
+  }
+  .tr-sub {
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
-  .tr-id {
-    font-family: var(--wp-font-mono);
+  .tr-meta {
     font-size: 11px;
     color: var(--wp-text-subtle);
   }
@@ -446,15 +471,6 @@
     border-radius: var(--wp-r-pill);
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);
-    color: var(--wp-text-subtle);
-  }
-  .tr-title {
-    font-size: 13px;
-    font-weight: 500;
-  }
-  .tr-meta,
-  .tr-author {
-    font-size: 11px;
     color: var(--wp-text-subtle);
   }
   .tr-snip {
@@ -482,9 +498,6 @@
     min-height: 0;
   }
   .th-head {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--wp-border);
   }
@@ -493,96 +506,10 @@
     font-size: 18px;
     font-weight: 600;
   }
-  .th-id {
-    font-family: var(--wp-font-mono);
-    font-size: 12px;
-    color: var(--wp-text-subtle);
-  }
   .feed {
     flex: 1;
     overflow-y: auto;
-    padding: 12px 2px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .post {
-    position: relative;
-    display: flex;
-    gap: 8px;
-    margin-left: calc(var(--indent) * 22px);
-  }
-  .thread-line {
-    position: absolute;
-    left: -12px;
-    top: -8px;
-    bottom: 12px;
-    width: 2px;
-    background: var(--wp-border);
-    border-radius: 2px;
-  }
-  .bubble {
-    flex: 1;
-    min-width: 0;
-    border: 1px solid var(--wp-border);
-    border-radius: var(--wp-r-md);
-    background: var(--wp-surface);
-    padding: 8px 10px;
-  }
-  .p-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .p-author {
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .p-id {
-    font-family: var(--wp-font-mono);
-    font-size: 11px;
-    color: var(--wp-text-subtle);
-  }
-  .p-time {
-    font-family: var(--wp-font-mono);
-    font-size: 11px;
-    color: var(--wp-text-subtle);
-  }
-  .p-actions {
-    margin-left: auto;
-    display: flex;
-    gap: 2px;
-    opacity: 0;
-    transition: opacity var(--wp-fast) var(--wp-ease);
-  }
-  .post:hover .p-actions {
-    opacity: 1;
-  }
-  .pa {
-    display: inline-flex;
-    padding: 4px;
-    border: none;
-    background: none;
-    color: var(--wp-text-subtle);
-    cursor: pointer;
-    border-radius: var(--wp-r-sm);
-  }
-  .pa:hover {
-    color: var(--wp-text);
-    background: var(--wp-elevated);
-  }
-  .pa.danger:hover {
-    color: var(--wp-error);
-  }
-  .p-labels {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin: 4px 0;
-  }
-  .p-body {
-    font-size: 13px;
-    line-height: 1.5;
+    padding: 14px 2px;
   }
   .replybar {
     border-top: 1px solid var(--wp-border);

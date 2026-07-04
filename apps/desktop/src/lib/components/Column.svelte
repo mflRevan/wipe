@@ -166,9 +166,8 @@
     flex-direction: column;
     width: 300px;
     flex: none;
-    /* Fill the board height (see Board.svelte .board align-items: stretch) so the
-       card list below is a tall drop target even when the list is empty. */
-    height: 100%;
+    /* Height follows the cards (grows with the list); capped at the board height,
+       past which the card area scrolls internally. */
     max-height: 100%;
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);
@@ -267,19 +266,24 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 4px 8px 12px;
+    padding: 4px 8px 14px;
     overflow-y: auto;
-    min-height: 40px;
-    flex: 1;
+    /* Comfortable floor so an empty list is still an easy drop target, without
+       stretching the column to the board floor. `flex: 0 1 auto` lets the area
+       shrink and scroll when the column hits its height cap, but never grow past
+       its contents. */
+    min-height: 52px;
+    flex: 0 1 auto;
   }
   .item {
     position: relative;
   }
   .placeholder {
     height: 64px;
-    border: 1px dashed var(--wp-border-strong);
+    border: 2px dashed color-mix(in srgb, var(--wp-accent) 45%, transparent);
     border-radius: var(--wp-r-md);
-    background: color-mix(in srgb, var(--wp-accent) 6%, transparent);
+    background: color-mix(in srgb, var(--wp-accent) 9%, transparent);
+    transition: all var(--wp-fast) var(--wp-ease);
   }
   .add-card {
     display: flex;

@@ -146,12 +146,22 @@ Launch the local desktop UI:
 wipe serve
 ```
 
-`wipe serve` notices if a daemon is already serving the board and points you at
-it instead of failing. With auto-serve enabled (from the wizard, or
+`wipe serve` is a global convenience, not tied to one board: run it inside a
+project and it opens that board; run it anywhere and it starts a viewer over every
+board you've opened, and each edit targets whichever board is on screen. It
+notices if a daemon is already serving the port and points you at it instead of
+failing. With auto-serve enabled (from the wizard, or
 `wipe config set daemon.autoserve true`), the daemon shuts itself down once you
-close the board, so it leaves no background overhead when idle. Set machine-wide
-defaults - preferred port, exposure, starter content, and UI accent/theme - with
-`wipe config --global set <key> <value>`.
+close the board, so it leaves no background overhead when idle.
+
+Set machine-wide defaults once with a guided flow - preferred port, exposure,
+auto-serve, login autostart, starter content, and UI accent/theme:
+
+```sh
+wipe onboard
+```
+
+Or set any single default directly with `wipe config --global set <key> <value>`.
 
 ### The forum
 

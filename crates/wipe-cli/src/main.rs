@@ -3,6 +3,7 @@
 //! object on stdout).
 
 mod args;
+mod autostart;
 mod commands;
 mod forum_cmd;
 mod identity;
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
 fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
     match command {
         Command::Init(a) => commands::init(out, a),
+        Command::Onboard(a) => commands::onboard(out, a),
         Command::Status => commands::status(out),
         Command::Board(c) => commands::board(out, c),
         Command::List(c) => commands::list(out, c),

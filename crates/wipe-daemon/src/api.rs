@@ -22,8 +22,11 @@ use wipe_core::{git, Store};
 /// Shared server state.
 #[derive(Clone)]
 pub struct AppState {
-    /// The project the daemon was started in (default target).
-    pub current: PathBuf,
+    /// The project the daemon was started in, if any. Used only as the default
+    /// target when a request omits `?project=`; every UI request names its project
+    /// explicitly, so this is just a convenience for CLI-less callers. `None` when
+    /// `wipe serve` runs outside a board (a purely global viewer).
+    pub current: Option<PathBuf>,
     /// Broadcast channel for live-update notifications.
     pub tx: broadcast::Sender<String>,
     /// Number of live UI WebSocket clients. Drives idle-shutdown: when this is 0
@@ -55,10 +58,14 @@ pub struct ProjectQuery {
     project: Option<String>,
 }
 
+/// Resolve which board a request targets. Prefer the explicit `project` (every UI
+/// request sends one); fall back to the daemon's launch project. Erroring when
+/// neither is available keeps a stray request from silently hitting the wrong board.
 fn store_for(state: &AppState, project: Option<String>) -> Result<Store, ApiError> {
     let root = project
         .map(PathBuf::from)
-        .unwrap_or_else(|| state.current.clone());
+        .or_else(|| state.current.clone())
+        .ok_or_else(|| ApiError(anyhow::anyhow!("no project selected")))?;
     Ok(Store::open(root)?)
 }
 
@@ -105,9 +112,22 @@ pub async fn app_config() -> Json<Value> {
 }
 
 /// `GET /api/projects`
+///
+/// Reports every registered board plus `current` - the project the daemon was
+/// launched in - so the UI can default-open that board rather than an arbitrary
+/// one. `current` is null when `wipe serve` was started outside any board.
 pub async fn projects(State(state): State<AppState>) -> ApiResult {
-    crate::registry::register(&state.current);
-    Ok(Json(json!({ "projects": crate::registry::list() })))
+    let current = state
+        .current
+        .as_ref()
+        .filter(|root| Store::open(root).is_ok())
+        .map(|root| root.display().to_string());
+    if let Some(root) = &state.current {
+        crate::registry::register(root);
+    }
+    Ok(Json(
+        json!({ "projects": crate::registry::list(), "current": current }),
+    ))
 }
 
 /// `GET /api/board`
@@ -181,9 +201,10 @@ pub struct CreateTicketBody {
 /// `POST /api/tickets`
 pub async fn create_ticket(
     State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<CreateTicketBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     let spec = NewTicket {
         title: b.title,
@@ -213,9 +234,10 @@ pub struct MoveBody {
 pub async fn move_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<MoveBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     ops::move_ticket(&store, &id, &b.to, b.pos, &actor, Utc::now())?;
     notify(&state);
@@ -235,9 +257,10 @@ pub struct CommentBody {
 pub async fn add_comment(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<CommentBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let author = b.author.unwrap_or_else(|| "ui".to_string());
     let cid = ops::add_comment(&store, &id, &author, &b.body, Utc::now())?;
     notify(&state);
@@ -265,8 +288,12 @@ pub struct LabelBody {
 }
 
 /// `POST /api/labels` - define a new label (auto-colored if no color given).
-pub async fn create_label(State(state): State<AppState>, Json(b): Json<LabelBody>) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+pub async fn create_label(
+    State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
+    Json(b): Json<LabelBody>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project.or(b.project))?;
     let label = ops::create_label(&store, &b.name, b.color, b.description)?;
     notify(&state);
     Ok(Json(serde_json::to_value(label)?))
@@ -283,9 +310,10 @@ pub struct LabelColorBody {
 pub async fn recolor_label(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<LabelColorBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let label = ops::set_label_color(&store, &name, &b.color)?;
     notify(&state);
     Ok(Json(serde_json::to_value(label)?))
@@ -326,9 +354,10 @@ pub struct PatchBody {
 pub async fn patch_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<PatchBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     let patch = TicketPatch {
         title: b.title,
@@ -361,9 +390,10 @@ pub struct IdentityBody {
 pub async fn put_identity(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<IdentityBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let kind = match b.kind.as_deref() {
         Some("agent") => Some(IdentityKind::Agent),
         Some("human") => Some(IdentityKind::Human),
@@ -442,9 +472,10 @@ pub struct DetachBody {
 pub async fn delete_attachment(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<DetachBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     ops::remove_attachment(&store, &id, &b.path, &actor, Utc::now())?;
     notify(&state);
@@ -499,8 +530,12 @@ pub struct AddListBody {
 }
 
 /// `POST /api/lists` - add a list to the board.
-pub async fn add_list(State(state): State<AppState>, Json(b): Json<AddListBody>) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+pub async fn add_list(
+    State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
+    Json(b): Json<AddListBody>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project.or(b.project))?;
     let id = ops::add_list(&store, &b.name, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id, "name": b.name })))
@@ -517,9 +552,10 @@ pub struct RenameListBody {
 pub async fn rename_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<RenameListBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     ops::rename_list(&store, &id, &b.name, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id, "name": b.name })))
@@ -536,9 +572,10 @@ pub struct MoveListBody {
 pub async fn move_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<MoveListBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     ops::move_list(&store, &id, b.index, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id, "index": b.index })))
@@ -616,9 +653,10 @@ pub struct ForumPostBody {
 /// `POST /api/forum` - open a new thread.
 pub async fn forum_create(
     State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<ForumPostBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     let t = forum::create_thread(
         &store,
@@ -653,9 +691,10 @@ pub struct ForumReplyBody {
 pub async fn forum_reply(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<ForumReplyBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     let actor = resolve_actor(&store, b.actor);
     let child = forum::reply(
         &store,
@@ -684,9 +723,10 @@ pub struct ForumEditBody {
 pub async fn forum_edit(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
     Json(b): Json<ForumEditBody>,
 ) -> ApiResult {
-    let store = store_for(&state, b.project)?;
+    let store = store_for(&state, pq.project.or(b.project))?;
     forum::edit_post(&store, &id, &b.body, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id })))

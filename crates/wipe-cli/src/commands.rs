@@ -12,6 +12,7 @@ use wipe_core::ops::{self, NewTicket, TicketPatch};
 use wipe_core::{GlobalConfig, Store};
 
 use crate::args::*;
+use crate::autostart;
 use crate::identity;
 use crate::onboard;
 use crate::output::{dim, id_style, Out};
@@ -125,6 +126,52 @@ pub fn init(out: &Out, args: InitArgs) -> Result<()> {
         if plan.skill.is_none() {
             println!("    wipe skill install              teach coding agents to drive this board");
         }
+    }
+    Ok(())
+}
+
+/// `wipe onboard` - a guided, machine-wide setup that records your global
+/// defaults (port, exposure, autoserve, login autostart, starter, skill, styling).
+pub fn onboard(out: &Out, args: OnboardArgs) -> Result<()> {
+    let g = GlobalConfig::load();
+    let interactive =
+        !args.yes && !out.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if !interactive {
+        // Non-interactive: show the current config rather than prompting.
+        return config_global(out, ConfigCmd::Show);
+    }
+
+    let updated = onboard::global_wizard(&g)?;
+
+    // Apply the login-autostart toggle against the OS's real state (best-effort).
+    let want = updated.autostart.unwrap_or(false);
+    let mut autostart_note: Option<String> = None;
+    if want && !autostart::is_enabled() {
+        match autostart::enable() {
+            Ok(note) => autostart_note = Some(note),
+            Err(e) => out.line(format!("  (autostart not enabled: {e})")),
+        }
+    } else if !want && autostart::is_enabled() {
+        match autostart::disable() {
+            Ok(note) => autostart_note = Some(note),
+            Err(e) => out.line(format!("  (autostart not disabled: {e})")),
+        }
+    }
+
+    updated.save().context("saving global config")?;
+    let path = GlobalConfig::path()
+        .map(|p| clean_path(&p))
+        .unwrap_or_else(|| "(unavailable)".into());
+    out.ok(
+        "saved your global wipe preferences",
+        json!({ "ok": true, "path": path, "autostart": want }),
+    );
+    if !out.json {
+        if let Some(n) = autostart_note {
+            println!("  {n}");
+        }
+        println!("  config: {path}");
+        println!("\n  run `wipe serve` to open the UI, or `wipe init` to start a board.");
     }
     Ok(())
 }
@@ -684,6 +731,18 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 println!("autoserve      {}", opt(g.autoserve));
                 println!("idle           {}", opt(g.idle_timeout_secs));
                 println!(
+                    "autostart      {} {}",
+                    opt(g.autostart),
+                    dim(&format!(
+                        "(login entry {})",
+                        if autostart::is_enabled() {
+                            "present"
+                        } else {
+                            "absent"
+                        }
+                    ))
+                );
+                println!(
                     "starter        {}",
                     g.starter.map(starter_slug).unwrap_or("-")
                 );
@@ -703,6 +762,7 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 "default.expose" => json!(g.default_expose.map(expose_slug)),
                 "autoserve" => json!(g.autoserve),
                 "idle" => json!(g.idle_timeout_secs),
+                "autostart" => json!(g.autostart),
                 "starter" => json!(g.starter.map(starter_slug)),
                 "skill.target" => json!(g.skill_target),
                 "skill.global" => json!(g.skill_global),
@@ -726,6 +786,21 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 "autoserve" => g.autoserve = Some(parse_bool(&value)?),
                 "idle" => {
                     g.idle_timeout_secs = Some(value.parse().context("idle must be seconds")?)
+                }
+                "autostart" => {
+                    let on = parse_bool(&value)?;
+                    g.autostart = Some(on);
+                    // Reflect the choice in the OS login entry immediately.
+                    let r = if on {
+                        autostart::enable()
+                    } else {
+                        autostart::disable()
+                    };
+                    match r {
+                        Ok(note) if !out.json => out.line(format!("  {note}")),
+                        Ok(_) => {}
+                        Err(e) => out.line(format!("  (autostart change failed: {e})")),
+                    }
                 }
                 "starter" => g.starter = Some(onboard::parse_starter(&value)?),
                 "skill.target" => {
@@ -864,9 +939,28 @@ pub fn skill(out: &Out, cmd: Option<SkillCmd>) -> Result<()> {
 }
 
 /// `wipe serve` - start the local daemon serving the board UI + API.
+///
+/// `serve` is a global human convenience, not bound to one board: run inside a
+/// project and it opens that board by default; run anywhere else and it starts a
+/// viewer over every board you have opened before. Either way the UI can switch
+/// between projects and every edit targets whichever board is on screen.
 pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
-    let s = store()?;
-    let settings = s.load_settings()?;
+    let g = GlobalConfig::load();
+    // A board here is optional. When present it supplies the default project and
+    // its saved daemon settings; when absent we fall back to the global defaults.
+    let board = Store::discover(".").ok();
+    let settings = match &board {
+        Some(s) => s.load_settings()?,
+        None => {
+            let mut d = wipe_core::model::Settings::default();
+            if let Some(p) = g.default_port {
+                d.daemon.port = p;
+            }
+            d.daemon.autoserve = g.autoserve.unwrap_or(d.daemon.autoserve);
+            d.daemon.idle_timeout_secs = g.idle_timeout_secs.unwrap_or(d.daemon.idle_timeout_secs);
+            d
+        }
+    };
     let port = args.port.unwrap_or(settings.daemon.port);
 
     // If a wipe daemon is already serving this port, don't fail with a bind error;
@@ -890,16 +984,21 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
     };
 
     let cfg = wipe_daemon::ServeConfig {
-        root: s.root().to_path_buf(),
+        root: board.as_ref().map(|s| s.root().to_path_buf()),
         port,
         expose: settings.daemon.expose,
         open: args.open,
         idle_timeout: idle,
     };
-    out.line(format!(
-        "starting wipe UI for '{}' on port {port}…",
-        s.load_board()?.name
-    ));
+    match &board {
+        Some(s) => out.line(format!(
+            "starting wipe UI for '{}' on port {port}…",
+            s.load_board()?.name
+        )),
+        None => out.line(format!(
+            "starting wipe UI on port {port}… (no board here; pick one in the UI)"
+        )),
+    }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -17,7 +17,7 @@
     $props();
 
   const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const flipMs = reduced ? 0 : 180;
+  const flipMs = reduced ? 0 : 150;
 
   let cols = $state<List[]>([]);
   let dragging = false;
@@ -132,10 +132,11 @@
     height: 100%;
     padding-bottom: 8px;
     overflow-x: auto;
-    /* Stretch columns to the full board height so each list's drop zone is a
-       large, consistent target. With flex-start, empty lists collapse to their
-       min-height (~40px) and dropped cards land below the zone and snap back. */
-    align-items: stretch;
+    /* Columns size to their contents and grow with the cards they hold (rather
+       than stretching to the board floor). Each column caps at the board height
+       and scrolls internally; its drop zone keeps a comfortable min-height so
+       even an empty list is an easy, reliable drop target. */
+    align-items: flex-start;
   }
   .empty {
     color: var(--wp-text-muted);

@@ -28,6 +28,10 @@ pub struct GlobalConfig {
     /// Default idle timeout in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_timeout_secs: Option<u64>,
+    /// Start the wipe UI daemon automatically at login (an always-on, lightweight
+    /// viewer). Backed by a per-OS login entry managed by the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<bool>,
     /// How much content a fresh board is seeded with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starter: Option<Starter>,

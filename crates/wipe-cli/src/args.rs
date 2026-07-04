@@ -32,6 +32,8 @@ pub struct Cli {
 pub enum Command {
     /// Initialize a new wipe board in a directory.
     Init(InitArgs),
+    /// Configure machine-wide defaults (a guided global setup).
+    Onboard(OnboardArgs),
     /// Show the board at a glance.
     Status,
     /// Inspect and manage the board itself.
@@ -94,6 +96,14 @@ pub struct InitArgs {
     /// Starter content: `standard` (lists+labels), `lists`, or `empty`.
     #[arg(long, value_name = "KIND")]
     pub starter: Option<String>,
+}
+
+/// `wipe onboard`
+#[derive(Debug, Args)]
+pub struct OnboardArgs {
+    /// Skip the interactive flow and just print the current global config.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 /// `wipe skill ...`

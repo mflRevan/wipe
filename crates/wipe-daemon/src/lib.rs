@@ -27,8 +27,10 @@ pub use registry::{list as list_projects, ProjectEntry};
 /// Configuration for a `wipe serve` invocation.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
-    /// Project root to serve (the directory containing `.wipe`).
-    pub root: PathBuf,
+    /// Project root to open by default (the directory containing `.wipe`). `None`
+    /// when serving purely as a global viewer from outside any board - the UI then
+    /// lists every registered project and the user picks one.
+    pub root: Option<PathBuf>,
     /// TCP port to bind.
     pub port: u16,
     /// How the daemon is exposed beyond localhost.
@@ -93,7 +95,9 @@ fn router(state: AppState) -> Router {
 
 /// Start the daemon and serve until the process is stopped (Ctrl-C).
 pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
-    registry::register(&cfg.root);
+    if let Some(root) = &cfg.root {
+        registry::register(root);
+    }
 
     let (tx, _rx) = broadcast::channel::<String>(64);
     let clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -103,9 +107,14 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         clients: clients.clone(),
     };
 
-    // Watch `.wipe` for live updates; keep the watcher alive for the whole serve.
-    let _watcher = watch::spawn(&cfg.root.join(".wipe"), tx.clone());
-    if _watcher.is_err() {
+    // Watch the launch project's `.wipe` for live updates; keep the watcher alive
+    // for the whole serve. (Global-viewer mode has no single dir to watch; the UI
+    // still refetches on demand.)
+    let _watcher = cfg
+        .root
+        .as_ref()
+        .map(|root| watch::spawn(&root.join(".wipe"), tx.clone()));
+    if matches!(_watcher, Some(Err(_))) {
         eprintln!("warning: file watching unavailable; live updates disabled");
     }
 
@@ -203,7 +212,7 @@ mod tests {
     fn test_state(root: PathBuf) -> AppState {
         let (tx, _rx) = broadcast::channel(8);
         AppState {
-            current: root,
+            current: Some(root),
             tx,
             clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
@@ -257,4 +266,80 @@ mod tests {
     }
 
     use wipe_core::Store;
+
+    /// Percent-encode a string for use as a query-parameter value.
+    fn enc(s: &str) -> String {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect()
+    }
+
+    async fn board_titles(app: &Router, project: &str) -> Vec<String> {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/board?project={}", enc(project)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        v["lists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|l| l["tickets"].as_array().unwrap().clone())
+            .map(|t| t["title"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// A mutation naming a project via `?project=` must hit THAT board, never the
+    /// daemon's launch project. Guards the silent-write-to-served-board bug.
+    #[tokio::test]
+    async fn mutations_target_the_requested_project_not_the_served_one() {
+        let served = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let served_store = Store::init(served.path(), "Served", chrono::Utc::now()).unwrap();
+        let other_store = Store::init(other.path(), "Other", chrono::Utc::now()).unwrap();
+        let other_root = other_store.root().display().to_string();
+
+        // Daemon launched in the "Served" board.
+        let app = router(test_state(served_store.root().to_path_buf()));
+
+        // Create a ticket while viewing the OTHER board (project passed in query).
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tickets?project={}", enc(&other_root)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"title":"lands in other"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // It must appear in "Other" and leave "Served" empty.
+        assert_eq!(
+            board_titles(&app, &other_root).await,
+            vec!["lands in other".to_string()]
+        );
+        assert!(
+            board_titles(&app, &served_store.root().display().to_string())
+                .await
+                .is_empty()
+        );
+    }
 }

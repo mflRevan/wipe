@@ -132,9 +132,11 @@ export const api = {
     return req<{ accent?: string | null; theme?: string | null }>('/api/config');
   },
 
-  async projects(): Promise<Project[]> {
-    const r = await req<{ projects: Project[] }>('/api/projects');
-    return r.projects ?? [];
+  /** Registered boards plus `current` - the board the daemon was launched in
+   *  (null when served globally), so the UI can default-open it. */
+  async projects(): Promise<{ projects: Project[]; current: string | null }> {
+    const r = await req<{ projects: Project[]; current?: string | null }>('/api/projects');
+    return { projects: r.projects ?? [], current: r.current ?? null };
   },
 
   async board(project?: string): Promise<Board> {

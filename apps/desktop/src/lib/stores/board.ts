@@ -53,11 +53,14 @@ export async function checkHealth(): Promise<boolean> {
 /** Load the project list and pick a current project if none is set. */
 export async function loadProjects(): Promise<void> {
   try {
-    const list = await api.projects();
+    const { projects: list, current: served } = await api.projects();
     projects.set(list);
     const cur = get(currentProject);
-    if ((!cur || !list.some((p) => p.path === cur)) && list.length > 0) {
-      currentProject.set(list[0].path);
+    if (!cur || !list.some((p) => p.path === cur)) {
+      // Prefer the board `wipe serve` was launched in; otherwise fall back to the
+      // first registered board.
+      const pick = served && list.some((p) => p.path === served) ? served : (list[0]?.path ?? null);
+      if (pick) currentProject.set(pick);
     }
   } catch (e) {
     boardError.set(e instanceof Error ? e.message : String(e));
