@@ -68,6 +68,14 @@ export interface Health {
   version: string;
 }
 
+/** User-global preferences surfaced by `GET/PATCH /api/config`. */
+export interface AppConfig {
+  accent?: string | null;
+  theme?: string | null;
+  default_identity?: string | null;
+  prefer_default_identity?: boolean;
+}
+
 export interface CommitInfo {
   hash: string;
   short: string;

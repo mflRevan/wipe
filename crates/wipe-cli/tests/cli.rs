@@ -499,3 +499,68 @@ fn supervision_protocol_offline() {
     assert_eq!(done["list"], "done");
     assert!(!done["comments"].as_array().unwrap().is_empty());
 }
+
+/// Identity resolution: a non-git board never attributes to "unknown"; a
+/// session-bound identity and a one-shot `--agentid` override both attribute
+/// correctly; and `identity list` surfaces the agent as active.
+#[test]
+fn identity_session_and_agentid_override() {
+    let p = Project::new();
+    p.run(&["init", "--yes", "--name", "Ids"]);
+
+    let base = p.path().to_path_buf();
+    // Run with NO WIPE_AUTHOR, a fixed session, and isolated global config, so we
+    // exercise the real resolution chain rather than the env override.
+    let run = |args: &[&str]| -> Value {
+        let mut v = args.to_vec();
+        v.push("--json");
+        let mut c = StdCommand::cargo_bin("wipe").unwrap();
+        c.current_dir(&base);
+        c.env_remove("WIPE_AUTHOR");
+        c.env("WIPE_CONFIG_DIR", &base);
+        c.env("WIPE_SESSION", "sess-A");
+        c.args(&v);
+        let out = c.output().unwrap();
+        assert!(
+            out.status.success(),
+            "command {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+
+    // No session identity yet: author is a real default, never "unknown"/empty.
+    let t1 = run(&["ticket", "create", "-t", "one"]);
+    let a1 = t1["activity"][0]["actor"].as_str().unwrap();
+    assert!(
+        !a1.is_empty() && a1 != "unknown",
+        "default author was '{a1}'"
+    );
+
+    // Bind a session identity; the next ticket is authored by it.
+    run(&["identity", "use", "claude", "--agent", "--name", "Claude"]);
+    let t2 = run(&["ticket", "create", "-t", "two"]);
+    assert_eq!(t2["activity"][0]["actor"], "claude");
+
+    // whoami reflects the bound identity.
+    assert_eq!(run(&["identity", "whoami"])["identity"], "claude");
+
+    // A single-command --agentid override wins over the session.
+    let t3 = run(&["--agentid", "gizmo", "ticket", "create", "-t", "three"]);
+    assert_eq!(t3["activity"][0]["actor"], "gizmo");
+
+    // The agent shows up in the identity list, marked active.
+    let list = run(&["identity", "list"]);
+    assert_eq!(list["active"], "claude");
+    let has_agent = list["identities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["id"] == "claude" && i["kind"] == "agent");
+    assert!(has_agent, "claude should be listed as an agent");
+
+    // Clearing the session reverts to the default author.
+    run(&["identity", "clear"]);
+    let t4 = run(&["ticket", "create", "-t", "four"]);
+    assert_ne!(t4["activity"][0]["actor"], "claude");
+}

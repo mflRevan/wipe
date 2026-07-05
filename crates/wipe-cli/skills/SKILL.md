@@ -28,6 +28,43 @@ wipe init .            # create a board in the current project (once)
 wipe status --json     # see lists and tickets
 ```
 
+## Identity - do this first
+
+Everything you author (tickets, comments, forum posts) is attributed to an
+identity. **Establish yours before you start** so your work isn't mislabeled - in
+non-git repos (e.g. Plastic/Unity VCS) an unset identity would otherwise fall back
+to a generic default.
+
+1. **Look before you create.** List existing identities to see if one is already
+   meant for you:
+
+   ```bash
+   wipe identity list --json     # -> {"active":..,"default":..,"identities":[{id,display_name,kind}]}
+   ```
+
+2. **Bind your identity to this session.** This registers it (as an agent) and
+   attributes every later command in this terminal to it:
+
+   ```bash
+   wipe identity use claude --agent --name "Claude" --json
+   # prints an `export`/`$env:` line - eval it so tool-spawned subshells inherit it too
+   ```
+
+3. **Confirm** who you are and where it came from:
+
+   ```bash
+   wipe identity whoami --json   # -> {"identity":"claude","source":"session (wipe identity use)"}
+   ```
+
+Alternatively, attribute a **single** command without binding a session by passing
+the global `--agentid` flag: `wipe --agentid claude ticket create -t "…" --json`.
+
+Resolution order (highest first): `--author`/`--agentid` → session identity
+(`wipe identity use`) → `$WIPE_AUTHOR` → the project's VCS user → the board/global
+default. (If the user set `identity.prefer`, the configured default overrides the
+VCS user.) Sessions are keyed by `$WIPE_SESSION`; if your harness sets a unique value
+per terminal, concurrent agents never clash.
+
 ## Everyday flows
 
 Create and place a ticket:

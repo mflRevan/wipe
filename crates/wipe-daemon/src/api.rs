@@ -74,13 +74,10 @@ fn notify(state: &AppState) {
 }
 
 /// Who to attribute a UI-driven mutation to for the activity timeline: an explicit
-/// `actor` from the request if given, else the repo's configured git identity, else
-/// a generic fallback.
+/// `actor` from the request if given, else the repo's VCS user (git, Plastic, …),
+/// the board default, or the configured global default - never "unknown".
 fn resolve_actor(store: &Store, provided: Option<String>) -> String {
-    provided
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| git::config_identity(store.root()))
-        .unwrap_or_else(|| "someone".to_string())
+    ops::resolve_identity(Some(store), provided.as_deref())
 }
 
 fn board_json(board: &Board, view: &[(String, Vec<Ticket>)]) -> Value {
@@ -104,11 +101,79 @@ pub async fn health() -> Json<Value> {
     Json(json!({ "ok": true, "service": "wipe-daemon", "version": env!("CARGO_PKG_VERSION") }))
 }
 
-/// `GET /api/config` - user-global UI preferences (accent/theme) so the board can
-/// honor the styling chosen via `wipe config --global`.
+/// `GET /api/config` - user-global preferences (styling + default identity) so the
+/// board UI can honor the choices made via `wipe config --global` / `wipe onboard`.
 pub async fn app_config() -> Json<Value> {
     let g = wipe_core::GlobalConfig::load();
-    Json(json!({ "accent": g.ui_accent, "theme": g.ui_theme }))
+    Json(json!({
+        "accent": g.ui_accent,
+        "theme": g.ui_theme,
+        "default_identity": g.default_identity,
+        "prefer_default_identity": g.prefer_default_identity.unwrap_or(false),
+    }))
+}
+
+/// Body for updating user-global preferences. Absent fields are left unchanged.
+#[derive(Debug, Deserialize)]
+pub struct ConfigPatch {
+    #[serde(default)]
+    accent: Option<String>,
+    #[serde(default)]
+    theme: Option<String>,
+    #[serde(default)]
+    default_identity: Option<String>,
+    #[serde(default)]
+    prefer_default_identity: Option<bool>,
+}
+
+/// `PATCH /api/config` - update user-global preferences from the UI.
+pub async fn patch_config(Json(b): Json<ConfigPatch>) -> ApiResult {
+    let mut g = wipe_core::GlobalConfig::load();
+    if let Some(a) = b.accent {
+        g.ui_accent = Some(a);
+    }
+    if let Some(t) = b.theme {
+        g.ui_theme = Some(t);
+    }
+    if let Some(id) = b.default_identity {
+        let id = id.trim().to_string();
+        if !id.is_empty() {
+            g.default_identity = Some(id);
+        }
+    }
+    if let Some(p) = b.prefer_default_identity {
+        g.prefer_default_identity = Some(p);
+    }
+    g.save()
+        .map_err(|e| ApiError(anyhow::anyhow!("saving config: {e}")))?;
+    Ok(Json(json!({
+        "ok": true,
+        "accent": g.ui_accent,
+        "theme": g.ui_theme,
+        "default_identity": g.default_identity,
+        "prefer_default_identity": g.prefer_default_identity.unwrap_or(false),
+    })))
+}
+
+/// `POST /api/scan` - discover boards on disk and refresh the registry, returning
+/// the updated project list (so the UI can offer a "rescan" action).
+pub async fn rescan() -> ApiResult {
+    // A blocking full-disk walk - keep it off the async worker threads.
+    let (found, projects) = tokio::task::spawn_blocking(|| {
+        crate::registry::prune();
+        let roots: Vec<std::path::PathBuf> = {
+            let g = wipe_core::GlobalConfig::load();
+            match g.scan_roots {
+                Some(r) if !r.is_empty() => r.into_iter().map(std::path::PathBuf::from).collect(),
+                _ => crate::registry::default_scan_roots(),
+            }
+        };
+        let found = crate::registry::scan(&roots, 7).len();
+        (found, crate::registry::list())
+    })
+    .await
+    .map_err(|e| ApiError(anyhow::anyhow!("scan task failed: {e}")))?;
+    Ok(Json(json!({ "found": found, "projects": projects })))
 }
 
 /// `GET /api/projects`

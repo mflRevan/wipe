@@ -248,13 +248,9 @@ fn parse_log(out: &str) -> Vec<CommitInfo> {
         .collect()
 }
 
-/// Strip Windows' `\\?\` verbatim prefix, which `git -C` does not accept.
+/// Strip Windows' `\\?\` verbatim prefix, which `git -C` does not accept (UNC-aware).
 fn plain(root: &Path) -> std::path::PathBuf {
-    let s = root.to_string_lossy();
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) => std::path::PathBuf::from(rest),
-        None => root.to_path_buf(),
-    }
+    crate::vcs::plain(root)
 }
 
 /// Run a git command in `root`, returning stdout on success or an

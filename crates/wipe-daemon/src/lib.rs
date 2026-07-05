@@ -46,7 +46,8 @@ pub struct ServeConfig {
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
-        .route("/api/config", get(api::app_config))
+        .route("/api/config", get(api::app_config).patch(api::patch_config))
+        .route("/api/scan", post(api::rescan))
         .route("/api/projects", get(api::projects))
         .route("/api/board", get(api::board))
         .route("/api/history", get(api::history))

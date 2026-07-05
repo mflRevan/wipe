@@ -173,7 +173,7 @@ fn step(i: usize, n: usize, label: &str) -> String {
 /// machine-wide default once, returning the updated [`GlobalConfig`]. The caller
 /// persists it and applies the autostart toggle.
 pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
-    const N: usize = 9;
+    const N: usize = 11;
     println!("\n  wipe global setup - these become the defaults for every board on this machine.");
     println!("  Press Enter to accept a default.\n");
     let mut out = g.clone();
@@ -328,6 +328,40 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
         .map_err(cancel)?
         .index]
             .to_string(),
+    );
+
+    // Default identity: used when a project's VCS reports no user. Mandatory - it
+    // must never be empty, so a blank answer falls back to "human".
+    let id_default = g
+        .default_identity
+        .clone()
+        .or_else(wipe_core::vcs::system_user)
+        .unwrap_or_else(|| "human".to_string());
+    let default_id = Text::new(&step(
+        10,
+        N,
+        "Default identity when your version control reports none",
+    ))
+    .with_default(&id_default)
+    .with_help_message("e.g. \"Ada <ada@example.com>\" or just \"human\"")
+    .prompt()
+    .map_err(cancel)?;
+    let default_id = default_id.trim();
+    out.default_identity = Some(if default_id.is_empty() {
+        "human".to_string()
+    } else {
+        default_id.to_string()
+    });
+
+    out.prefer_default_identity = Some(
+        Confirm::new(&step(
+            11,
+            N,
+            "Always use that identity, even when version control reports one?",
+        ))
+        .with_default(g.prefer_default_identity.unwrap_or(false))
+        .prompt()
+        .map_err(cancel)?,
     );
 
     Ok(out)

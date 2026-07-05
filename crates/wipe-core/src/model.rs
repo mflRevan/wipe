@@ -597,6 +597,11 @@ pub struct Settings {
     /// match git/GitHub's soft warning threshold; larger uploads are rejected.
     #[serde(default = "default_max_attachment_mb")]
     pub max_attachment_mb: u64,
+    /// Fallback author for this board when neither an explicit override nor the
+    /// repo's VCS supplies an identity. Captured at `wipe init` from the VCS (or
+    /// the global default), so attribution is never "unknown".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_author: Option<String>,
 }
 
 fn default_max_attachment_mb() -> u64 {
@@ -609,6 +614,7 @@ impl Default for Settings {
             version: FORMAT_VERSION,
             daemon: DaemonSettings::default(),
             max_attachment_mb: default_max_attachment_mb(),
+            default_author: None,
         }
     }
 }

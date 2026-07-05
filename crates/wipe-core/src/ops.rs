@@ -392,23 +392,54 @@ pub fn delete_label(store: &Store, name: &str, now: DateTime<Utc>) -> Result<()>
 }
 
 /// List identities: the saved registry merged with human authors discovered from
-/// git (so contributors show up without manual setup).
+/// the repo's VCS (git, Mercurial, …) so contributors show up without manual setup.
 pub fn list_identities(store: &Store) -> Result<Vec<Identity>> {
     let mut registry = store.load_identities()?;
-    if git::is_repo(store.root()) {
-        if let Ok(authors) = git::authors(store.root()) {
-            for (name, email) in authors {
-                if !registry.iter().any(|i| i.id == email) {
-                    registry.push(Identity {
-                        id: email,
-                        display_name: name,
-                        kind: IdentityKind::Human,
-                    });
-                }
-            }
+    for (name, email) in crate::vcs::authors(store.root()) {
+        if !registry.iter().any(|i| i.id == email) {
+            registry.push(Identity {
+                id: email,
+                display_name: name,
+                kind: IdentityKind::Human,
+            });
         }
     }
     Ok(registry)
+}
+
+/// Resolve the acting identity for an authored action, VCS-agnostic and honoring
+/// the user's default-identity preference. Precedence:
+/// explicit → (prefer-default) → VCS user → board default → global default →
+/// system user → `"unknown"`. Session/env overrides are layered on by the CLI.
+pub fn resolve_identity(store: Option<&Store>, explicit: Option<&str>) -> String {
+    if let Some(e) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        return e.to_string();
+    }
+    let g = crate::GlobalConfig::load();
+    let default_identity = g.default_identity.filter(|s| !s.trim().is_empty());
+    if g.prefer_default_identity.unwrap_or(false) {
+        if let Some(d) = &default_identity {
+            return d.clone();
+        }
+    }
+    let root = store
+        .map(|s| s.root().to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    if let Some(v) = crate::vcs::identity(&root) {
+        return v;
+    }
+    if let Some(s) = store {
+        if let Ok(settings) = s.load_settings() {
+            if let Some(a) = settings.default_author.filter(|s| !s.trim().is_empty()) {
+                return a;
+            }
+        }
+    }
+    if let Some(d) = default_identity {
+        return d;
+    }
+    // Never attribute to "unknown": fall back to the OS user, then to "human".
+    crate::vcs::system_user().unwrap_or_else(|| "human".to_string())
 }
 
 /// Create or update an identity's display name (and optionally its kind).

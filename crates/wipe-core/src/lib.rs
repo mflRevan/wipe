@@ -15,7 +15,9 @@ pub mod git;
 pub mod id;
 pub mod model;
 pub mod ops;
+pub mod registry;
 pub mod store;
+pub mod vcs;
 
 pub use config::GlobalConfig;
 pub use error::{Error, Result};

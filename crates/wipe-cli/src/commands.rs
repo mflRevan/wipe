@@ -7,9 +7,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use wipe_core::model::{Exposure, Starter};
+use wipe_core::model::{Exposure, IdentityKind, Starter};
 use wipe_core::ops::{self, NewTicket, TicketPatch};
-use wipe_core::{GlobalConfig, Store};
+use wipe_core::{registry, vcs, GlobalConfig, Store};
 
 use crate::args::*;
 use crate::autostart;
@@ -77,7 +77,19 @@ pub fn init(out: &Out, args: InitArgs) -> Result<()> {
     settings.daemon.expose = plan.expose;
     settings.daemon.autoserve = plan.autoserve;
     settings.daemon.idle_timeout_secs = plan.idle_timeout_secs;
+    // The board's shared fallback author must be GENERIC, not the creator's personal
+    // identity: settings.json is git-tracked, so baking a specific person in would
+    // misattribute every collaborator whose VCS reports no user. Each user's own VCS
+    // identity is resolved at runtime and takes precedence over this fallback.
+    settings.default_author = Some(
+        g.default_identity
+            .clone()
+            .unwrap_or_else(|| "human".to_string()),
+    );
     store.save_settings(&settings)?;
+
+    // Record this board in the registry so `wipe serve` from anywhere lists it.
+    registry::register(store.root());
 
     // Install the agent skill if the wizard asked for it (best-effort).
     let mut skill_path: Option<String> = None;
@@ -172,6 +184,137 @@ pub fn onboard(out: &Out, args: OnboardArgs) -> Result<()> {
         }
         println!("  config: {path}");
         println!("\n  run `wipe serve` to open the UI, or `wipe init` to start a board.");
+    }
+    Ok(())
+}
+
+/// `wipe identity ...` - see and manage who actions are attributed to.
+pub fn identity(out: &Out, cmd: IdentityCmd) -> Result<()> {
+    match cmd {
+        IdentityCmd::List => {
+            let store = Store::discover(".").ok();
+            let ids = match &store {
+                Some(s) => ops::list_identities(s)?,
+                None => Vec::new(),
+            };
+            let active = crate::identity::active();
+            if out.json {
+                out.json_value(&json!({
+                    "active": active,
+                    "default": crate::identity::effective_default(),
+                    "identities": ids.iter().map(to_value).collect::<Vec<_>>(),
+                }));
+            } else {
+                if ids.is_empty() {
+                    out.line("no identities yet - `wipe identity use <id>` to create one");
+                }
+                for i in &ids {
+                    let mark = if active.as_deref() == Some(&i.id) {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    let kind = match i.kind {
+                        IdentityKind::Agent => "agent",
+                        IdentityKind::Human => "human",
+                    };
+                    println!(
+                        "{mark} {}  {}  {}",
+                        id_style(&i.id),
+                        i.display_name,
+                        dim(kind)
+                    );
+                }
+                if let Some(a) = &active {
+                    if !ids.iter().any(|i| &i.id == a) {
+                        println!("* {}  {}", id_style(a), dim("(session)"));
+                    }
+                }
+            }
+        }
+        IdentityCmd::Use(a) => {
+            if a.id.trim().is_empty() {
+                bail!("identity id cannot be empty");
+            }
+            let is_email = a.id.contains('@');
+            let agent = a.agent || (!a.human && !is_email);
+            let name = a.name.clone().unwrap_or_else(|| a.id.clone());
+            if let Ok(store) = Store::discover(".") {
+                let kind = if agent {
+                    IdentityKind::Agent
+                } else {
+                    IdentityKind::Human
+                };
+                let _ = ops::upsert_identity(&store, &a.id, &name, Some(kind));
+            }
+            crate::identity::set_active(&a.id)?;
+            let hint = crate::identity::export_hint(&a.id);
+            out.ok(
+                format!("actions in this session are now by {}", a.id),
+                json!({ "ok": true, "id": a.id, "name": name, "agent": agent, "export": hint }),
+            );
+            if !out.json {
+                println!("  to pin it across tool-spawned shells, run:");
+                println!("    {hint}");
+            }
+        }
+        IdentityCmd::Whoami => {
+            let who = crate::identity::resolve(None);
+            let src = crate::identity::source(None);
+            out.ok(
+                format!("{who}  ({src})"),
+                json!({ "identity": who, "source": src }),
+            );
+        }
+        IdentityCmd::Clear => {
+            let cleared = crate::identity::clear_active()?;
+            out.ok(
+                if cleared {
+                    "cleared this session's identity"
+                } else {
+                    "no session identity was set"
+                },
+                json!({ "ok": true, "cleared": cleared }),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Scan roots to search for boards: explicit paths, else configured roots, else home.
+fn configured_scan_roots() -> Vec<std::path::PathBuf> {
+    let g = GlobalConfig::load();
+    match g.scan_roots {
+        Some(roots) if !roots.is_empty() => {
+            roots.into_iter().map(std::path::PathBuf::from).collect()
+        }
+        _ => registry::default_scan_roots(),
+    }
+}
+
+/// `wipe scan` - discover boards on disk and add them to the local registry.
+pub fn scan(out: &Out, args: ScanArgs) -> Result<()> {
+    let roots = if args.paths.is_empty() {
+        configured_scan_roots()
+    } else {
+        args.paths.clone()
+    };
+    registry::prune();
+    let found = registry::scan(&roots, args.depth);
+    let all = registry::list();
+    if out.json {
+        out.json_value(&json!({
+            "found": found,
+            "total": all.len(),
+            "projects": all.iter().map(to_value).collect::<Vec<_>>(),
+        }));
+    } else if found.is_empty() {
+        out.line(format!("no new boards found ({} already known)", all.len()));
+    } else {
+        println!("found {} new board(s):", found.len());
+        for p in &found {
+            println!("  {}", clean_path(std::path::Path::new(p)));
+        }
     }
     Ok(())
 }
@@ -753,6 +896,19 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 println!("skill.global   {}", opt(g.skill_global));
                 println!("ui.accent      {}", g.ui_accent.as_deref().unwrap_or("-"));
                 println!("ui.theme       {}", g.ui_theme.as_deref().unwrap_or("-"));
+                println!(
+                    "identity.default {}",
+                    g.default_identity.as_deref().unwrap_or("-")
+                );
+                println!("identity.prefer  {}", opt(g.prefer_default_identity));
+                println!(
+                    "scan.roots       {}",
+                    g.scan_roots
+                        .as_ref()
+                        .filter(|r| !r.is_empty())
+                        .map(|r| r.join(", "))
+                        .unwrap_or_else(|| "(home)".into())
+                );
             }
         }
         ConfigCmd::Get { key } => {
@@ -768,6 +924,9 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 "skill.global" => json!(g.skill_global),
                 "ui.accent" => json!(g.ui_accent),
                 "ui.theme" => json!(g.ui_theme),
+                "identity.default" => json!(g.default_identity),
+                "identity.prefer" => json!(g.prefer_default_identity),
+                "scan.roots" => json!(g.scan_roots),
                 other => bail!("unknown global key '{other}'"),
             };
             if out.json {
@@ -822,6 +981,22 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                     }
                     g.ui_theme = Some(value.clone());
                 }
+                "identity.default" => {
+                    if value.trim().is_empty() {
+                        bail!("identity.default cannot be empty (use e.g. 'human')");
+                    }
+                    g.default_identity = Some(value.clone());
+                }
+                "identity.prefer" => g.prefer_default_identity = Some(parse_bool(&value)?),
+                "scan.roots" => {
+                    // Comma- or semicolon-separated list of directories.
+                    let roots: Vec<String> = value
+                        .split([',', ';'])
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    g.scan_roots = if roots.is_empty() { None } else { Some(roots) };
+                }
                 other => bail!("unknown global key '{other}'"),
             }
             g.save().context("saving global config")?;
@@ -868,6 +1043,8 @@ pub fn doctor(out: &Out) -> Result<()> {
     let in_board = Store::discover(".").ok();
     let git = identity::git_available();
     let author = identity::resolve(None);
+    let author_source = identity::source(None);
+    let detected = vcs::detect(std::path::Path::new("."));
     let (board_name, tickets) = match &in_board {
         Some(s) => (Some(s.load_board()?.name), s.ticket_ids()?.len()),
         None => (None, 0),
@@ -878,7 +1055,9 @@ pub fn doctor(out: &Out) -> Result<()> {
             "board": board_name,
             "tickets": tickets,
             "git_available": git,
+            "vcs": detected.name(),
             "author": author,
+            "author_source": author_source,
             "version": env!("CARGO_PKG_VERSION"),
         }));
     } else {
@@ -892,7 +1071,11 @@ pub fn doctor(out: &Out) -> Result<()> {
                 .unwrap_or_default()
         );
         println!("{} git available", mark(git));
-        println!("  identity: {author}");
+        println!("  vcs: {}", detected.name());
+        println!(
+            "  identity: {author}  {}",
+            dim(&format!("({author_source})"))
+        );
     }
     Ok(())
 }
@@ -971,6 +1154,22 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
             json!({ "ok": true, "already_running": true, "url": url }),
         );
         return Ok(());
+    }
+
+    // Discover every board on disk so the UI lists them all - crucial when serving
+    // globally (no board here), where the registry alone might be empty on a fresh
+    // machine. Also include the current directory as a scan root.
+    registry::prune();
+    if board.is_none() {
+        out.line("scanning for boards…");
+        let mut roots = configured_scan_roots();
+        if let Ok(cwd) = std::env::current_dir() {
+            roots.push(cwd);
+        }
+        let found = registry::scan(&roots, 7);
+        if !found.is_empty() {
+            out.line(format!("  found {} board(s)", found.len()));
+        }
     }
 
     // Idle-shutdown: --idle overrides (0 = never); otherwise honor autoserve.

@@ -1,6 +1,7 @@
 // Small typed client for the wipe-daemon REST + WebSocket API.
 import { browser } from '$app/environment';
 import type {
+  AppConfig,
   Attachment,
   Board,
   CreateTicketInput,
@@ -127,9 +128,19 @@ export const api = {
     return req<Health>('/api/health');
   },
 
-  /** User-global UI defaults (accent/theme) set via `wipe config --global`. */
-  appConfig(): Promise<{ accent?: string | null; theme?: string | null }> {
-    return req<{ accent?: string | null; theme?: string | null }>('/api/config');
+  /** User-global defaults (styling + default identity) set via `wipe config --global`. */
+  appConfig(): Promise<AppConfig> {
+    return req<AppConfig>('/api/config');
+  },
+
+  /** Update user-global preferences (styling + default identity). */
+  patchConfig(patch: Partial<AppConfig>): Promise<AppConfig> {
+    return req<AppConfig>('/api/config', { method: 'PATCH', body: JSON.stringify(patch) });
+  },
+
+  /** Rescan the disk for boards and refresh the registry. */
+  rescan(): Promise<{ found: number; projects: Project[] }> {
+    return req<{ found: number; projects: Project[] }>('/api/scan', { method: 'POST' });
   },
 
   /** Registered boards plus `current` - the board the daemon was launched in

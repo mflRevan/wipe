@@ -11,10 +11,12 @@
     definitions,
     currentProject,
     loadDefinitions,
+    loadProjects,
     bootstrap,
     stopLiveUpdates
   } from '$lib/stores/board';
   import { labelColor, LABEL_COLORS, LABEL_KEYS } from '$lib/utils';
+  import type { AppConfig } from '$lib/types';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -27,13 +29,60 @@
   let recoloring = $state<string | null>(null);
   let error = $state<string | null>(null);
 
+  // User-global preferences (default identity) + board discovery.
+  let cfg = $state<AppConfig>({});
+  let savingCfg = $state(false);
+  let scanMsg = $state<string | null>(null);
+
   function proj() {
     return get(currentProject) ?? undefined;
   }
 
   $effect(() => {
-    if (open) apiBaseInput = getApiBase();
+    if (open) {
+      apiBaseInput = getApiBase();
+      scanMsg = null;
+      error = null;
+      void loadCfg();
+    }
   });
+
+  async function loadCfg() {
+    try {
+      cfg = await api.appConfig();
+    } catch {
+      /* config is non-critical */
+    }
+  }
+
+  async function saveCfg() {
+    savingCfg = true;
+    error = null;
+    try {
+      // Only send a non-empty identity (the daemon leaves an omitted field
+      // unchanged); never silently coerce an untouched field to "human".
+      const id = cfg.default_identity?.trim();
+      cfg = await api.patchConfig({
+        default_identity: id ? id : undefined,
+        prefer_default_identity: cfg.prefer_default_identity ?? false
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      savingCfg = false;
+    }
+  }
+
+  async function rescan() {
+    scanMsg = 'scanning…';
+    try {
+      const r = await api.rescan();
+      await loadProjects();
+      scanMsg = r.found > 0 ? `found ${r.found} new board(s)` : 'no new boards found';
+    } catch (e) {
+      scanMsg = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   async function addLabel() {
     const name = newLabel.trim();
@@ -172,6 +221,43 @@
             <Button variant="primary" size="sm" onclick={addLabel}><Plus size={14} /> Add</Button>
           </div>
           <p class="hint">Rename isn't supported; delete strips the label from all tickets.</p>
+        </section>
+
+        <!-- identity -->
+        <section class="sec">
+          <span class="flabel">Identity</span>
+          <input
+            class="in"
+            bind:value={cfg.default_identity}
+            placeholder="human"
+            aria-label="Default identity"
+          />
+          <label class="check">
+            <input type="checkbox" bind:checked={cfg.prefer_default_identity} />
+            Always use this identity, even when version control reports one
+          </label>
+          <p class="hint">
+            Used to attribute changes when your project's version control (git, Plastic, …)
+            reports no user - so nothing is ever "unknown".
+          </p>
+          <div class="actions">
+            <Button variant="primary" size="sm" onclick={saveCfg} disabled={savingCfg}>
+              {savingCfg ? 'Saving…' : 'Save identity'}
+            </Button>
+          </div>
+        </section>
+
+        <!-- discovery -->
+        <section class="sec">
+          <span class="flabel">Boards</span>
+          <p class="hint">
+            Scan your disk for `.wipe` boards and add any found (useful after cloning a repo
+            that already has a board).
+          </p>
+          <div class="actions">
+            {#if scanMsg}<span class="scanmsg">{scanMsg}</span>{/if}
+            <Button variant="secondary" size="sm" onclick={rescan}>Rescan for boards</Button>
+          </div>
         </section>
 
         <!-- connection -->
@@ -387,7 +473,22 @@
   }
   .actions {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: 10px;
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--wp-text-muted);
+    cursor: pointer;
+  }
+  .scanmsg {
+    font-size: 12px;
+    color: var(--wp-text-subtle);
+    margin-right: auto;
   }
   .err {
     font-size: 12px;

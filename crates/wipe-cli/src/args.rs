@@ -23,6 +23,11 @@ pub struct Cli {
     #[arg(short = 'C', long = "cwd", global = true, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
 
+    /// Author authored actions as this identity for this command (typically an
+    /// agent id). Overrides the session/VCS identity; see `wipe identity`.
+    #[arg(long = "agentid", global = true, value_name = "ID")]
+    pub agentid: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -34,6 +39,11 @@ pub enum Command {
     Init(InitArgs),
     /// Configure machine-wide defaults (a guided global setup).
     Onboard(OnboardArgs),
+    /// Manage who your actions are attributed to (humans and agents).
+    #[command(subcommand)]
+    Identity(IdentityCmd),
+    /// Discover `.wipe` boards on disk and add them to the local registry.
+    Scan(ScanArgs),
     /// Show the board at a glance.
     Status,
     /// Inspect and manage the board itself.
@@ -104,6 +114,50 @@ pub struct OnboardArgs {
     /// Skip the interactive flow and just print the current global config.
     #[arg(long, short = 'y')]
     pub yes: bool,
+}
+
+/// `wipe identity ...`
+#[derive(Debug, Subcommand)]
+pub enum IdentityCmd {
+    /// List available identities (registry + VCS), marking the active one.
+    ///
+    /// Agents: run this FIRST to see whether an identity for you already exists
+    /// before creating a new one with `wipe identity use`.
+    List,
+    /// Bind an identity to this terminal session (creates it if new).
+    Use(IdentityUseArgs),
+    /// Show who actions are currently attributed to, and why.
+    Whoami,
+    /// Unbind this session's identity (revert to VCS/default resolution).
+    Clear,
+}
+
+/// `wipe identity use`
+#[derive(Debug, Args)]
+pub struct IdentityUseArgs {
+    /// Identity id to use (an existing id, an email, or a fresh agent slug).
+    pub id: String,
+    /// Display name (defaults to the id).
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Mark this identity as an agent (default when the id isn't an email).
+    #[arg(long)]
+    pub agent: bool,
+    /// Mark this identity as a human.
+    #[arg(long, conflicts_with = "agent")]
+    pub human: bool,
+}
+
+/// `wipe scan`
+#[derive(Debug, Args)]
+pub struct ScanArgs {
+    /// Root directory to scan (repeatable; defaults to your configured scan roots
+    /// or your home directory).
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<PathBuf>,
+    /// How many directory levels deep to search.
+    #[arg(long, default_value = "7")]
+    pub depth: usize,
 }
 
 /// `wipe skill ...`

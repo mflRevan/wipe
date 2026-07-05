@@ -29,6 +29,13 @@ fn main() -> ExitCode {
         }
     }
 
+    // Record the global --agentid override before any command resolves an author.
+    identity::set_override(cli.agentid.clone());
+    if let Some(id) = cli.agentid.as_deref() {
+        // Make the agent visible in the board's identity list (best-effort).
+        identity::ensure_registered(id, None, true);
+    }
+
     let out = Out::new(cli.json);
     let result = dispatch(&out, cli.command);
 
@@ -45,6 +52,8 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
     match command {
         Command::Init(a) => commands::init(out, a),
         Command::Onboard(a) => commands::onboard(out, a),
+        Command::Identity(c) => commands::identity(out, c),
+        Command::Scan(a) => commands::scan(out, a),
         Command::Status => commands::status(out),
         Command::Board(c) => commands::board(out, c),
         Command::List(c) => commands::list(out, c),
