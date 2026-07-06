@@ -4,7 +4,6 @@
   import { Plus, MoreHorizontal, ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-svelte';
   import Card from './Card.svelte';
   import Popover from './ui/Popover.svelte';
-  import { send, receive } from '$lib/transitions';
   import type { Ticket } from '$lib/types';
 
   let {
@@ -142,14 +141,13 @@
       onfinalize(listId, e.detail.items, e.detail.info)}
   >
     {#each tickets as ticket (ticket.id)}
-      <div
-        class="item"
-        animate:flip={{ duration: flipMs }}
-        in:receive={{ key: ticket.id }}
-        out:send={{ key: ticket.id }}
-      >
+      <div class="item" animate:flip={{ duration: flipMs }}>
         {#if marker in ticket}
-          <div class="placeholder"></div>
+          <!-- The drop slot: render the dragged card hidden so the gap is EXACTLY
+               its size, with a dashed outline showing where it will land. -->
+          <div class="slot">
+            <Card {ticket} {onopen} />
+          </div>
         {:else}
           <Card {ticket} {onopen} />
         {/if}
@@ -285,12 +283,17 @@
   .item {
     position: relative;
   }
-  .placeholder {
-    height: 64px;
-    border: 2px dashed color-mix(in srgb, var(--wp-accent) 45%, transparent);
+  /* Drop slot: exactly the size of the card being dragged (its hidden card sets the
+     height), shown as a dashed accent outline so you see precisely where it lands. */
+  .slot {
+    position: relative;
     border-radius: var(--wp-r-md);
-    background: color-mix(in srgb, var(--wp-accent) 9%, transparent);
-    transition: all var(--wp-fast) var(--wp-ease);
+    background: color-mix(in srgb, var(--wp-accent) 10%, transparent);
+    outline: 2px dashed color-mix(in srgb, var(--wp-accent) 55%, transparent);
+    outline-offset: -2px;
+  }
+  .slot > :global(.card) {
+    visibility: hidden;
   }
   .add-card {
     display: flex;

@@ -11,7 +11,6 @@
     moveList,
     deleteList
   } from '$lib/stores/board';
-  import { suppressAnim } from '$lib/transitions';
   import type { List, Ticket } from '$lib/types';
 
   let { onopen, onadd }: { onopen: (t: Ticket) => void; onadd: (id: string, name: string) => void } =
@@ -21,9 +20,11 @@
   const flipMs = reduced ? 0 : 150;
 
   let cols = $state<List[]>([]);
-  // `$state` so flipping it back to false re-runs the sync effect below, pulling in
-  // any board update that landed (from the live poll) mid-drag.
-  let dragging = $state(false);
+  // Deliberately a plain (untracked) local: the sync effect below must NOT re-run
+  // the instant a drag ends, or it would rebuild `cols` from the not-yet-updated
+  // store and snap the just-dropped card back to its origin. The effect still
+  // re-runs when `$board` itself changes (the ~0.5s poll confirms the move).
+  let dragging = false;
 
   // Inline "+ Add list" affordance.
   let addingList = $state(false);
@@ -57,14 +58,11 @@
 
   function handleConsider(listId: string, items: Ticket[]) {
     dragging = true;
-    // Let svelte-dnd-action own the animation during a manual drag; the live-poll
-    // crossfade would otherwise fight it.
-    suppressAnim(true);
     const col = colById(listId);
     if (col) col.tickets = items;
   }
 
-  async function handleFinalize(
+  function handleFinalize(
     listId: string,
     items: Ticket[],
     info: { id: string; trigger: string }
@@ -72,11 +70,12 @@
     const col = colById(listId);
     if (col) col.tickets = items;
     dragging = false;
-    suppressAnim(false);
     // Persist only from the destination zone (covers same-list reorders too).
+    // `cols` already reflects the drop; because `dragging` is untracked the sync
+    // effect won't revert it, and the ~0.5s poll confirms the move server-side.
     if (info.trigger === 'droppedIntoZone') {
       const pos = items.findIndex((t) => t.id === info.id);
-      if (pos !== -1) await moveTicket(info.id, listId, pos);
+      if (pos !== -1) void moveTicket(info.id, listId, pos);
     }
   }
 </script>
