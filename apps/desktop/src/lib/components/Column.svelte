@@ -1,8 +1,10 @@
 <script lang="ts">
   import { dndzone, SHADOW_ITEM_MARKER_PROPERTY_NAME, type DndEvent } from 'svelte-dnd-action';
+  import { flip } from 'svelte/animate';
   import { Plus, MoreHorizontal, ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-svelte';
   import Card from './Card.svelte';
   import Popover from './ui/Popover.svelte';
+  import { send, receive } from '$lib/transitions';
   import type { Ticket } from '$lib/types';
 
   let {
@@ -140,7 +142,12 @@
       onfinalize(listId, e.detail.items, e.detail.info)}
   >
     {#each tickets as ticket (ticket.id)}
-      <div class="item">
+      <div
+        class="item"
+        animate:flip={{ duration: flipMs }}
+        in:receive={{ key: ticket.id }}
+        out:send={{ key: ticket.id }}
+      >
         {#if marker in ticket}
           <div class="placeholder"></div>
         {:else}

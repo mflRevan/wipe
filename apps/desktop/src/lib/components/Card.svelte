@@ -2,7 +2,7 @@
   import { MessageSquare, Paperclip } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
-  import { definitions, identities, currentProject } from '$lib/stores/board';
+  import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
   import { mediaUrl } from '$lib/api';
   import { labelColorFor, priorityColor, mediaKind } from '$lib/utils';
   import type { Attachment, Ticket } from '$lib/types';
@@ -10,6 +10,8 @@
   let { ticket, onopen }: { ticket: Ticket; onopen: (t: Ticket) => void } = $props();
 
   let dot = $derived(priorityColor(ticket.priority));
+  // Briefly highlight when an agent/human changed this card since the last poll.
+  let changed = $derived($recentlyChanged.has(ticket.id));
   // First image attachment becomes a compact card cover, like Trello.
   let cover = $derived<Attachment | undefined>(
     ticket.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
@@ -21,6 +23,7 @@
 
 <div
   class="card"
+  class:changed
   role="button"
   tabindex="0"
   onclick={() => onopen(ticket)}
@@ -89,6 +92,26 @@
   .card:hover {
     background: var(--wp-elevated);
     box-shadow: var(--wp-shadow);
+  }
+  /* Brief highlight when an agent/human just changed this card (live updates). */
+  .card.changed {
+    animation: card-flash 1.8s var(--wp-ease);
+  }
+  @keyframes card-flash {
+    0% {
+      border-color: var(--wp-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--wp-accent) 30%, transparent);
+    }
+    100% {
+      border-color: var(--wp-border);
+      box-shadow: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card.changed {
+      animation: none;
+      border-color: var(--wp-accent);
+    }
   }
   .cover {
     margin: -12px -12px 0;

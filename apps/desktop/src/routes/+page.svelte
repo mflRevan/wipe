@@ -18,12 +18,14 @@
     rewinding,
     rewindCommit,
     loading,
+    forumUnread,
     bootstrap,
     checkHealth,
     loadBoard,
     loadProjects,
     reloadProject,
     returnToNow,
+    setForumView,
     stopLiveUpdates
   } from '$lib/stores/board';
   import { getApiBase } from '$lib/api';
@@ -47,6 +49,10 @@
   let settingsOpen = $state(false);
   let historyOpen = $state(false);
   let view = $state<'board' | 'forum'>('board');
+
+  // Keep the store informed of whether the forum is open, so it can clear the
+  // unread indicator while you're looking at it.
+  $effect(() => setForumView(view === 'forum'));
 
   onMount(() => {
     void bootstrap();
@@ -89,6 +95,7 @@
       </button>
       <button class:on={view === 'forum'} onclick={() => (view = 'forum')}>
         <MessagesSquare size={14} /> Forum
+        {#if $forumUnread && view !== 'forum'}<span class="unread" title="New forum activity"></span>{/if}
       </button>
     </div>
 
@@ -203,6 +210,7 @@
     border: 1px solid var(--wp-border);
   }
   .viewtabs button {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -215,6 +223,13 @@
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
+  }
+  .viewtabs .unread {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--wp-accent);
+    box-shadow: 0 0 0 2px var(--wp-surface);
   }
   .viewtabs button:hover {
     color: var(--wp-text);

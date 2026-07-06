@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/wipe-core", "crates/wipe-cli", "crates/wipe-daemon"]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 license = "MIT"
 authors = ["Aiman <aiman@shabib.net>"]
@@ -24,8 +24,8 @@ tempfile = "3"
 
 # Internal crates. `version` is required so they can be published to crates.io
 # (path is used for local builds, version for the published dependency).
-wipe-core = { path = "crates/wipe-core", version = "0.3.2" }
-wipe-daemon = { path = "crates/wipe-daemon", version = "0.3.2" }
+wipe-core = { path = "crates/wipe-core", version = "0.3.3" }
+wipe-daemon = { path = "crates/wipe-daemon", version = "0.3.3" }
 
 [profile.release]
 lto = "thin"

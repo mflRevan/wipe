@@ -10,6 +10,7 @@ mod identity;
 mod onboard;
 mod output;
 mod skills;
+mod update_check;
 
 use std::process::ExitCode;
 
@@ -27,6 +28,13 @@ fn main() -> ExitCode {
             emit_error(cli.json, &format!("cannot enter {}: {e}", dir.display()));
             return ExitCode::FAILURE;
         }
+    }
+
+    // Once a day, quietly note if a newer version is published (stderr only, so
+    // `--json` stdout stays clean). Skipped for `completions`, whose output is
+    // eval'd by the shell and should stay fast and side-effect-free.
+    if !matches!(cli.command, Command::Completions { .. }) {
+        update_check::run(env!("CARGO_PKG_VERSION"));
     }
 
     // Record the global --agentid override before any command resolves an author.
