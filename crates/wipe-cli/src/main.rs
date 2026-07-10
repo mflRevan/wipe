@@ -5,6 +5,7 @@
 mod args;
 mod autostart;
 mod commands;
+mod first_run;
 mod forum_cmd;
 mod identity;
 mod onboard;
@@ -44,7 +45,22 @@ fn main() -> ExitCode {
         identity::ensure_registered(id, None, true);
     }
 
+    // On the very first interactive run of a fresh install, offer the guided global
+    // setup. Skipped for the commands that either *are* that setup (`onboard`) or run
+    // their own wizard (`init`), and for `completions` (shell-eval'd, must stay quiet).
+    let may_offer_onboarding = !matches!(
+        cli.command,
+        Command::Onboard(_) | Command::Init(_) | Command::Completions { .. }
+    ) && first_run::should_offer(cli.json);
+
     let out = Out::new(cli.json);
+
+    if may_offer_onboarding && first_run::offer() {
+        if let Err(e) = commands::onboard(&out, args::OnboardArgs { yes: false }) {
+            eprintln!("wipe: guided setup did not complete: {e:#}");
+        }
+    }
+
     let result = dispatch(&out, cli.command);
 
     match result {

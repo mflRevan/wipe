@@ -72,7 +72,10 @@ const features = [
   },
 ];
 
-const quickstart = `# Initialize a board in your project
+const quickstart = `# One-time guided setup (offered automatically on your first run)
+wipe onboard
+
+# Initialize a board in your project
 wipe init .
 
 # Create a ticket
@@ -130,7 +133,10 @@ export default function Landing() {
           <p className="mt-4 font-mono text-xs text-muted-foreground">{TAGLINE}</p>
 
           <div className="animate-fade-up mt-14 w-full max-w-2xl text-left">
-            <CodeBlock code={`npm install -g @mflrevan/wipe\nwipe init .`} prompt />
+            <CodeBlock
+              code={`npm install -g @mflrevan/wipe\nwipe onboard   # one-time guided setup\nwipe init .`}
+              prompt
+            />
           </div>
         </div>
       </section>

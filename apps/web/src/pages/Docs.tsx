@@ -115,6 +115,33 @@ function Installation() {
           },
         ]}
       />
+      <div className="space-y-3">
+        <H3>First run: guided setup</H3>
+        <Prose>
+          <p>
+            The first time you run any{" "}
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe</code>{" "}
+            command after installing, it offers a one-time guided setup. You can
+            also start it yourself at any point:
+          </p>
+        </Prose>
+        <CodeBlock code="wipe onboard" prompt />
+        <Prose>
+          <p>
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe onboard</code>{" "}
+            records your <strong className="text-foreground">machine-wide defaults</strong> - your
+            identity for attribution, the default UI port and how it's exposed
+            (local, Tailscale, or a reverse proxy), whether wipe starts at login,
+            the starter layout for new boards, the agent-skill convention, and UI
+            theme/accent. These become the defaults for every board you create.
+            It's fully skippable and never blocks scripts or agents:{" "}
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">--json</code>,
+            piped, and non-interactive runs skip the prompt, and{" "}
+            <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">WIPE_NO_ONBOARD_PROMPT</code>{" "}
+            disables it entirely.
+          </p>
+        </Prose>
+      </div>
       <Prose>
         <p>
           Verify your install and environment at any time with{" "}
@@ -130,33 +157,46 @@ function Quickstart() {
     <section className="space-y-6">
       <H2>Quickstart</H2>
       <Prose>
-        <p>Initialize a board, then create and move tickets as work progresses.</p>
+        <p>
+          Set your defaults once, initialize a board, then create and move tickets
+          as work progresses.
+        </p>
       </Prose>
       <div className="space-y-5">
         <div className="space-y-2">
-          <H3>1. Initialize a board</H3>
+          <H3>1. Set up your defaults (once per machine)</H3>
+          <Prose>
+            <p>
+              Offered automatically on your first run, or start it yourself. Sets
+              your identity, UI port, autostart, and styling for every board.
+            </p>
+          </Prose>
+          <CodeBlock code="wipe onboard" prompt />
+        </div>
+        <div className="space-y-2">
+          <H3>2. Initialize a board</H3>
           <CodeBlock code="wipe init ." prompt />
         </div>
         <div className="space-y-2">
-          <H3>2. Create a ticket</H3>
+          <H3>3. Create a ticket</H3>
           <CodeBlock
             code={`wipe ticket create --title "Write onboarding docs" --priority high`}
             prompt
           />
         </div>
         <div className="space-y-2">
-          <H3>3. Move it as work progresses</H3>
+          <H3>4. Move it as work progresses</H3>
           <CodeBlock code="wipe ticket move T-1 --to in-progress" prompt />
         </div>
         <div className="space-y-2">
-          <H3>4. Leave a comment</H3>
+          <H3>5. Leave a comment</H3>
           <CodeBlock
             code={`wipe comment add T-1 --body "Blocked on the API design ticket."`}
             prompt
           />
         </div>
         <div className="space-y-2">
-          <H3>5. Check the board and open the UI</H3>
+          <H3>6. Check the board and open the UI</H3>
           <CodeBlock code={`wipe status\nwipe serve`} prompt />
         </div>
       </div>
