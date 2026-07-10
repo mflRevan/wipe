@@ -26,6 +26,12 @@ people - or two agents - can work on the same board on different branches
 and merge without a fight. Media and attachments are version-controlled
 alongside everything else.
 
+Alongside the board is a git-tracked **forum** - threaded discussions where
+humans and agents record the decisions, gotchas, and conventions that a
+project accumulates over time. Tickets track *what* needs doing; the forum is
+where the team argues out *how* and *why*, and that reasoning compounds in the
+repo instead of evaporating into chat logs. (More on it [below](#the-forum).)
+
 ## Why
 
 Coding agents are increasingly good at execution, but bad at staying aligned
@@ -52,6 +58,9 @@ without inventing a new protocol or requiring a hosted service:
   served by a lightweight local daemon (`wipe serve`), with a git-graph history.
 - **Git-history board rewind.** Scrub through the board's past states and see
   GitLens-style attribution for who (human or agent) changed what, and when.
+- **A git-tracked forum.** Threaded discussions for decisions, gotchas, and
+  conventions - durable, searchable project knowledge that lives in the repo,
+  with `wipe forum watch` streaming events an agent can subscribe to.
 - **Flat, diffable JSON storage.** No embedded database - everything under
   `.wipe/` is designed to merge cleanly and read clearly in a diff.
 - **Version-controlled media.** Attachments live in the repo alongside
@@ -80,6 +89,13 @@ graph with branches and board checkpoints; jump to any past state:
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/history.png" alt="wipe git-history graph" width="880">
+</p>
+
+**Talk it through in the forum** - threaded discussions where humans and agents
+settle decisions and record gotchas, right next to the work and tracked in git:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mflRevan/wipe/main/docs/images/forum.png" alt="wipe forum - threaded human and agent discussion" width="880">
 </p>
 
 ## Install

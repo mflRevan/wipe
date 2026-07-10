@@ -10,6 +10,7 @@ export const DOC_SECTIONS: DocSection[] = [
   { slug: "concepts", title: "Core concepts" },
   { slug: "cli", title: "CLI reference" },
   { slug: "agents", title: "For agents" },
+  { slug: "humans", title: "For humans" },
 ];
 
 export interface CliCommand {

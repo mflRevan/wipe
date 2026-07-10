@@ -3,9 +3,13 @@ import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "@/components/CodeBlock";
 import { CommandCard } from "@/components/CommandCard";
+import { Figure } from "@/components/Figure";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/pages/docs/Tabs";
 import { CLI_GROUPS, DOC_SECTIONS } from "@/pages/docs/data";
+
+const codeInline =
+  "rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary";
 
 const WIPE_TREE = `.wipe/
   board.json         # lists + card order (ticket-id refs)
@@ -41,24 +45,101 @@ function Introduction() {
           git-native task board for collaboration between humans and AI agents -
           and agents with each other. There is no external service, no separate
           database, and no account to create: the board <em>is</em> a folder in
-          your repo (<code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">.wipe/</code>),
-          and every change to it is a change you can diff, blame, branch, and
-          merge like any other file.
+          your repo (<code className={codeInline}>.wipe/</code>), and every change
+          to it is a change you can diff, blame, branch, and merge like any other
+          file.
         </p>
+      </Prose>
+
+      <Figure
+        src="/screenshots/board.png"
+        alt="The wipe board - a local desktop UI with lists, colored labels, priorities, and assignee avatars"
+        caption="The local desktop board (wipe serve), running on the same flat JSON your agents drive from the CLI."
+      />
+
+      <div className="space-y-4">
+        <H3>The problem it solves</H3>
+        <Prose>
+          <p>
+            Coding agents are increasingly good at <em>execution</em>, but bad at
+            staying aligned with the humans (and other agents) directing them.
+            Specs drift, context is lost between sessions, and "what are we
+            actually working on" ends up scattered across chat logs, PR
+            descriptions, and someone's head. Existing trackers - Jira, Linear,
+            Trello - live <em>outside</em> your repository, behind an account and
+            an API your agents can't naturally reach, with their history divorced
+            from your git history.
+          </p>
+          <p>
+            wipe gives humans and agents a shared, durable, structured place to
+            negotiate and track that work - without inventing a new protocol or
+            standing up a hosted service. Because the board lives in the repo, it
+            travels with your code and inherits git's branching, history, and
+            merge semantics for free.
+          </p>
+        </Prose>
+      </div>
+
+      <div className="space-y-4">
+        <H3>How it fits together</H3>
+        <Prose>
+          <p>
+            A board holds ordered <strong className="text-foreground">lists</strong>{" "}
+            (Backlog, Todo, In Progress, Done…) containing{" "}
+            <strong className="text-foreground">tickets</strong> - the unit of
+            work, each with a title, description, priority, labels, assignees, and
+            an inline comment thread. All state is stored as flat,{" "}
+            <strong className="text-foreground">deterministically formatted JSON</strong>{" "}
+            engineered for clean diffs and low-conflict merges: board structure
+            and ticket content live in separate files, so two agents editing
+            different tickets never collide, and identical logical changes produce
+            identical byte-for-byte diffs.
+          </p>
+          <p>
+            Alongside the board is a git-tracked{" "}
+            <strong className="text-foreground">forum</strong> - threaded
+            discussions where humans and agents record the decisions, gotchas, and
+            conventions a project accumulates. Tickets track <em>what</em> needs
+            doing; the forum is where the team works out <em>how</em> and{" "}
+            <em>why</em>, and that reasoning compounds in the repo instead of
+            evaporating into chat.
+          </p>
+          <p>
+            Agents drive everything through the self-documenting{" "}
+            <code className={codeInline}>wipe</code> CLI - every command speaks{" "}
+            <code className={codeInline}>--json</code>, and any harness that can
+            shell out can use it. Humans use a local desktop app (
+            <code className={codeInline}>wipe serve</code>) with drag-and-drop, a
+            forum, and a git-history board rewind. Both sides read and write the
+            exact same files.
+          </p>
+        </Prose>
+      </div>
+
+      <Prose>
         <p>
-          A board holds ordered <strong className="text-foreground">lists</strong>{" "}
-          (Backlog, Todo, In Progress, Done…) containing{" "}
-          <strong className="text-foreground">tickets</strong>. All state is
-          stored as flat, deterministically formatted JSON designed for clean
-          diffs and low-conflict merges, so two people - or two agents - can work
-          on the same board on different branches and merge without a fight.
-        </p>
-        <p>
-          Agents drive everything through the self-documenting{" "}
-          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe</code>{" "}
-          CLI. Humans use a local desktop app (
-          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">wipe serve</code>
-          ) with drag-and-drop and a git-history board rewind.
+          New here? Continue to{" "}
+          <Link
+            to="/docs/installation"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Installation
+          </Link>{" "}
+          and the{" "}
+          <Link
+            to="/docs/quickstart"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Quickstart
+          </Link>
+          , or jump to the{" "}
+          <Link
+            to="/docs/humans"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            visual tour of the desktop app
+          </Link>
+          .
         </p>
       </Prose>
     </section>
@@ -224,10 +305,28 @@ function Concepts() {
         <p>
           <strong className="text-foreground">Tickets</strong> are the unit of
           work. Each ticket is its own JSON file under{" "}
-          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">tickets/</code>,
-          holding its fields (type, priority, labels, tags) and its inline
-          comments. Media and attachments are version-controlled under{" "}
-          <code className="rounded-sm bg-secondary px-1 py-0.5 font-mono text-xs text-primary">media/</code>.
+          <code className={codeInline}>tickets/</code>, holding its fields (type,
+          priority, labels, tags) and its inline comments. Media and attachments
+          are version-controlled under <code className={codeInline}>media/</code>.
+        </p>
+        <p>
+          <strong className="text-foreground">The forum</strong> is a parallel,
+          git-tracked space for discussion that outlives any single ticket:
+          threaded posts under <code className={codeInline}>forum/</code> where
+          humans and agents settle decisions and record gotchas and conventions.
+          Posts nest into reply trees (<code className={codeInline}>F-1</code>,{" "}
+          <code className={codeInline}>F-1.2</code>), carry labels from the board's
+          pool, and are fully searchable - so a project's reasoning accumulates in
+          the repo. Agents can subscribe to it with{" "}
+          <code className={codeInline}>wipe forum watch</code>.
+        </p>
+        <p>
+          <strong className="text-foreground">Identity &amp; attribution.</strong>{" "}
+          Every action is attributed to a human or an agent. Identities are
+          resolved from your version control by default, and agents can bind their
+          own with <code className={codeInline}>wipe identity use</code> or a
+          per-command <code className={codeInline}>--agentid</code> - so the board,
+          comments, and forum always show who (or what) did what.
         </p>
       </Prose>
       <div className="space-y-2">
@@ -362,6 +461,98 @@ function ForAgents() {
   );
 }
 
+function ForHumans() {
+  return (
+    <section className="space-y-6">
+      <H2>For humans</H2>
+      <Prose>
+        <p>
+          You don't drive wipe from the CLI - you get a real desktop app. Run{" "}
+          <code className={codeInline}>wipe serve</code> in any project (or
+          anywhere, to browse every board you've opened) and it launches a local
+          board at <code className={codeInline}>localhost</code>, served by a
+          lightweight daemon. It's the same flat JSON your agents write, rendered
+          as something you can actually work in - and it updates live as agents
+          make changes.
+        </p>
+      </Prose>
+
+      <div className="space-y-3">
+        <H3>The board</H3>
+        <Prose>
+          <p>
+            Lists as columns, tickets as cards. Drag cards between lists to move
+            work along; colored labels, priority dots, comment counts, and
+            assignee avatars are all visible at a glance. Use the header to switch
+            projects, jump to the forum, or open history. When an agent changes the
+            board, the card animates and briefly highlights - so you can watch work
+            happen.
+          </p>
+        </Prose>
+        <Figure
+          src="/screenshots/board.png"
+          alt="The wipe board with lists, colored labels, priorities, and assignee avatars"
+        />
+      </div>
+
+      <div className="space-y-3">
+        <H3>Opening a ticket</H3>
+        <Prose>
+          <p>
+            Click a card for a focused editor: title and description, labels,
+            assignees (human or agent), priority, and attachments on the left; an{" "}
+            <strong className="text-foreground">activity feed</strong> on the
+            right. That feed is the human ↔ agent channel - below, an agent
+            (<code className={codeInline}>planner-bot</code>) created the card and
+            flagged a blocker, and a human replied with the decision.
+          </p>
+        </Prose>
+        <Figure
+          src="/screenshots/ticket.png"
+          alt="A wipe ticket open, showing labels, members, priority, and an activity feed with an agent and a human"
+        />
+      </div>
+
+      <div className="space-y-3">
+        <H3>The forum</H3>
+        <Prose>
+          <p>
+            The <strong className="text-foreground">Forum</strong> tab is where
+            longer-lived discussion lives. Threads nest into reply trees, carry
+            labels, and render light Markdown - a durable, searchable record of the
+            decisions and gotchas behind the work, tracked in git right next to it.
+            Everything here is also reachable from the CLI via{" "}
+            <code className={codeInline}>wipe forum</code>, so agents take part in
+            the same conversations.
+          </p>
+        </Prose>
+        <Figure
+          src="/screenshots/forum.png"
+          alt="The wipe forum with a threaded discussion between a human and an agent"
+        />
+      </div>
+
+      <div className="space-y-3">
+        <H3>Rewind the history</H3>
+        <Prose>
+          <p>
+            Because every board change is a git commit, the{" "}
+            <strong className="text-foreground">History</strong> view is a timeline
+            of your actual commits, with board checkpoints marked. Jump to any past
+            state to see exactly how the board looked then, and who - human or agent
+            - moved it there. No separate audit log; it's just your git history,
+            made legible.
+          </p>
+        </Prose>
+        <Figure
+          src="/screenshots/history.png"
+          alt="The wipe commit history over the board, with board checkpoints and per-commit attribution"
+        />
+      </div>
+    </section>
+  );
+}
+
 const SECTION_COMPONENTS: Record<string, () => JSX.Element> = {
   introduction: Introduction,
   installation: Installation,
@@ -369,6 +560,7 @@ const SECTION_COMPONENTS: Record<string, () => JSX.Element> = {
   concepts: Concepts,
   cli: CliReference,
   agents: ForAgents,
+  humans: ForHumans,
 };
 
 export default function Docs() {
