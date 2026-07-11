@@ -12,6 +12,7 @@
     tickets,
     flipMs,
     dragDisabled,
+    dragActive = false,
     canMoveLeft = false,
     canMoveRight = false,
     onopen,
@@ -27,6 +28,7 @@
     tickets: Ticket[];
     flipMs: number;
     dragDisabled: boolean;
+    dragActive?: boolean;
     canMoveLeft?: boolean;
     canMoveRight?: boolean;
     onopen: (t: Ticket) => void;
@@ -39,6 +41,12 @@
   } = $props();
 
   const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
+
+  // svelte-dnd-action places the drop placeholder (an item carrying the shadow
+  // marker) into whichever zone the card is currently over - so exactly one
+  // column holds it at a time. That's the list a release would land in; glow only
+  // that one. (dropTargetStyle can't be used for this: it styles ALL valid zones.)
+  let isTarget = $derived(dragActive && tickets.some((t) => marker in t));
 
   let renaming = $state(false);
   let renameDraft = $state('');
@@ -54,7 +62,7 @@
   }
 </script>
 
-<section class="column">
+<section class="column" class:target={isTarget}>
   <header class="col-head">
     {#if renaming}
       <!-- svelte-ignore a11y_autofocus -->
@@ -123,10 +131,13 @@
 
   <div
     class="col-body wp-scroll"
+    class:dragging={dragActive}
     use:dndzone={{
       items: tickets,
       flipDurationMs: flipMs,
       dragDisabled,
+      // Disable the library's built-in target styling: it highlights EVERY valid
+      // zone. We glow just the hovered column ourselves via `isTarget` below.
       dropTargetStyle: {},
       transformDraggedElement: (el?: HTMLElement) => {
         if (el) {
@@ -177,6 +188,16 @@
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);
     border-radius: var(--wp-r-lg);
+    transition:
+      border-color var(--wp-fast) var(--wp-ease),
+      box-shadow var(--wp-fast) var(--wp-ease),
+      background var(--wp-fast) var(--wp-ease);
+  }
+  /* The single list a release would land in - glow it in the accent color. */
+  .column.target {
+    border-color: color-mix(in srgb, var(--wp-accent) 65%, transparent);
+    background: color-mix(in srgb, var(--wp-accent) 6%, var(--wp-surface));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--wp-accent) 45%, transparent);
   }
   .col-head {
     display: flex;
@@ -279,6 +300,14 @@
        its contents. */
     min-height: 52px;
     flex: 0 1 auto;
+    transition: min-height var(--wp-base) var(--wp-ease);
+  }
+  /* While a card is being dragged anywhere on the board, grow every list's drop
+     zone so it's a big, forgiving target - you can hover a short list (or the
+     space below its cards) and it still registers as the landing list instead of
+     snapping the card back. */
+  .col-body.dragging {
+    min-height: 140px;
   }
   .item {
     position: relative;

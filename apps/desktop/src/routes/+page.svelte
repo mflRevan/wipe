@@ -48,7 +48,26 @@
 
   let settingsOpen = $state(false);
   let historyOpen = $state(false);
-  let view = $state<'board' | 'forum'>('board');
+  // Restore the last-open view across a page refresh (paired with the persisted
+  // board in the store), so a reload stays where you were.
+  const VIEW_KEY = 'wipe:view';
+  function readView(): 'board' | 'forum' {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(VIEW_KEY) === 'forum'
+        ? 'forum'
+        : 'board';
+    } catch {
+      return 'board';
+    }
+  }
+  let view = $state<'board' | 'forum'>(readView());
+  $effect(() => {
+    try {
+      localStorage.setItem(VIEW_KEY, view);
+    } catch {
+      /* best-effort */
+    }
+  });
 
   // Keep the store informed of whether the forum is open, so it can clear the
   // unread indicator while you're looking at it.

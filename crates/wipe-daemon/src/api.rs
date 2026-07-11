@@ -332,6 +332,92 @@ pub async fn add_comment(
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
 }
 
+// --- checklist ---------------------------------------------------------------
+
+/// Body for adding a checklist item.
+#[derive(Debug, Deserialize)]
+pub struct ChecklistAddBody {
+    project: Option<String>,
+    text: String,
+}
+
+/// `POST /api/tickets/{id}/checklist` - append an item; returns the updated ticket.
+pub async fn add_checklist_item(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
+    Json(b): Json<ChecklistAddBody>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project.or(b.project))?;
+    ops::checklist_add(&store, &id, &b.text, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))
+}
+
+/// Body for editing / (un)checking a checklist item. `done` sets the checked
+/// state; `text` renames. Either or both may be present.
+#[derive(Debug, Deserialize)]
+pub struct ChecklistPatchBody {
+    project: Option<String>,
+    #[serde(default)]
+    done: Option<bool>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+/// `PATCH /api/tickets/{id}/checklist/{item}` - set state and/or text; returns the
+/// updated ticket.
+pub async fn patch_checklist_item(
+    State(state): State<AppState>,
+    Path((id, item)): Path<(String, String)>,
+    Query(pq): Query<ProjectQuery>,
+    Json(b): Json<ChecklistPatchBody>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project.or(b.project))?;
+    let now = Utc::now();
+    if let Some(text) = b.text {
+        ops::checklist_edit(&store, &id, &item, &text, now)?;
+    }
+    if let Some(done) = b.done {
+        ops::checklist_set(&store, &id, &item, Some(done), now)?;
+    }
+    notify(&state);
+    Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))
+}
+
+/// `DELETE /api/tickets/{id}/checklist/{item}` - remove an item; returns the ticket.
+/// The project is taken from the `?project=` query (no request body needed).
+pub async fn delete_checklist_item(
+    State(state): State<AppState>,
+    Path((id, item)): Path<(String, String)>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    ops::checklist_remove(&store, &id, &item, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))
+}
+
+/// Body for reordering a checklist item.
+#[derive(Debug, Deserialize)]
+pub struct ChecklistMoveBody {
+    project: Option<String>,
+    index: usize,
+}
+
+/// `POST /api/tickets/{id}/checklist/{item}/move` - reorder; returns the ticket.
+pub async fn move_checklist_item(
+    State(state): State<AppState>,
+    Path((id, item)): Path<(String, String)>,
+    Query(pq): Query<ProjectQuery>,
+    Json(b): Json<ChecklistMoveBody>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project.or(b.project))?;
+    ops::checklist_move(&store, &id, &item, b.index, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))
+}
+
 /// `GET /api/definitions` - labels + priorities.
 pub async fn definitions(
     State(state): State<AppState>,

@@ -180,6 +180,9 @@ pub struct Ticket {
     /// Inline comment thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Ordered checklist / to-do items within the ticket.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checklist: Vec<ChecklistItem>,
     /// Activity log (moves, label/assignee/priority changes, attachments). Shown
     /// interleaved with comments in the ticket's activity timeline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -187,6 +190,9 @@ pub struct Ticket {
     /// Next comment counter for this ticket.
     #[serde(default = "one")]
     pub next_comment: u64,
+    /// Next checklist-item counter for this ticket.
+    #[serde(default = "one")]
+    pub next_check: u64,
     /// When the ticket was created.
     pub created: DateTime<Utc>,
     /// When the ticket was last modified.
@@ -211,11 +217,26 @@ impl Ticket {
             relations: Vec::new(),
             attachments: Vec::new(),
             comments: Vec::new(),
+            checklist: Vec::new(),
             activity: Vec::new(),
             next_comment: 1,
+            next_check: 1,
             created: now,
             updated: now,
         }
+    }
+
+    /// Append a checklist item, allocating the next item ID. Returns the new ID.
+    pub fn add_checklist_item(&mut self, text: impl Into<String>, now: DateTime<Utc>) -> String {
+        let id = crate::id::checklist_id(self.next_check);
+        self.next_check += 1;
+        self.checklist.push(ChecklistItem {
+            id: id.clone(),
+            text: text.into(),
+            done: false,
+        });
+        self.updated = now;
+        id
     }
 
     /// Append a comment, allocating the next comment ID. Returns the new comment ID.
@@ -294,6 +315,19 @@ pub struct Comment {
     /// When the comment was last edited, if ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited: Option<DateTime<Utc>>,
+}
+
+/// A single checklist / to-do item within a ticket. Ordered by position in the
+/// ticket's `checklist` vec.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChecklistItem {
+    /// Item ID, e.g. `ck-3`.
+    pub id: String,
+    /// Item text.
+    pub text: String,
+    /// Whether the item is checked off.
+    #[serde(default)]
+    pub done: bool,
 }
 
 /// A recorded change to a ticket, shown in the activity timeline alongside

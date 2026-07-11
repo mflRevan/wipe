@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquare, Paperclip } from 'lucide-svelte';
+  import { MessageSquare, Paperclip, CheckSquare } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
   import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
@@ -10,6 +10,9 @@
   let { ticket, onopen }: { ticket: Ticket; onopen: (t: Ticket) => void } = $props();
 
   let dot = $derived(priorityColor(ticket.priority));
+  // Checklist progress for the compact badge (only shown when there are items).
+  let clTotal = $derived(ticket.checklist?.length ?? 0);
+  let clDone = $derived(ticket.checklist?.filter((i) => i.done).length ?? 0);
   // Briefly highlight when an agent/human changed this card since the last poll.
   let changed = $derived($recentlyChanged.has(ticket.id));
   // First image attachment becomes a compact card cover, like Trello.
@@ -64,6 +67,15 @@
       {/if}
     </div>
     <div class="counts">
+      {#if clTotal}
+        <span
+          class="count"
+          class:cl-complete={clDone === clTotal}
+          title="Checklist: {clDone} of {clTotal} done"
+        >
+          <CheckSquare size={13} /> {clDone}/{clTotal}
+        </span>
+      {/if}
       {#if ticket.comments.length}
         <span class="count"><MessageSquare size={13} /> {ticket.comments.length}</span>
       {/if}
@@ -186,5 +198,9 @@
     gap: 3px;
     font-size: 12px;
     font-family: var(--wp-font-mono);
+  }
+  /* All items checked - nudge the badge toward the accent so it reads as "done". */
+  .count.cl-complete {
+    color: var(--wp-accent);
   }
 </style>

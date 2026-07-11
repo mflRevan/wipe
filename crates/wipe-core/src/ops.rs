@@ -11,8 +11,8 @@ use crate::error::{Error, Result};
 use crate::git;
 use crate::id::{slug, ticket_id};
 use crate::model::{
-    next_label_color, Attachment, AttachmentSource, Board, Identity, IdentityKind, LabelDef, List,
-    Ticket,
+    next_label_color, Attachment, AttachmentSource, Board, ChecklistItem, Identity, IdentityKind,
+    LabelDef, List, Ticket,
 };
 use crate::store::Store;
 
@@ -150,6 +150,102 @@ pub fn add_comment(
     let id = ticket.add_comment(author, body, now);
     store.save_ticket(&ticket)?;
     Ok(id)
+}
+
+// --- checklist ---------------------------------------------------------------
+
+fn checklist_item_mut<'t>(ticket: &'t mut Ticket, item_id: &str) -> Result<&'t mut ChecklistItem> {
+    ticket
+        .checklist
+        .iter_mut()
+        .find(|i| i.id == item_id)
+        .ok_or_else(|| Error::msg(format!("checklist item `{item_id}` not found")))
+}
+
+/// Append a checklist item to a ticket. Returns the new item's ID.
+pub fn checklist_add(
+    store: &Store,
+    ticket_id: &str,
+    text: &str,
+    now: DateTime<Utc>,
+) -> Result<String> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let id = ticket.add_checklist_item(text, now);
+    store.save_ticket(&ticket)?;
+    Ok(id)
+}
+
+/// Set a checklist item's checked state. `done = None` toggles it. Returns the
+/// resulting state.
+pub fn checklist_set(
+    store: &Store,
+    ticket_id: &str,
+    item_id: &str,
+    done: Option<bool>,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let item = checklist_item_mut(&mut ticket, item_id)?;
+    item.done = done.unwrap_or(!item.done);
+    let state = item.done;
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(state)
+}
+
+/// Edit a checklist item's text.
+pub fn checklist_edit(
+    store: &Store,
+    ticket_id: &str,
+    item_id: &str,
+    text: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    checklist_item_mut(&mut ticket, item_id)?.text = text.to_string();
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
+}
+
+/// Remove a checklist item.
+pub fn checklist_remove(
+    store: &Store,
+    ticket_id: &str,
+    item_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let before = ticket.checklist.len();
+    ticket.checklist.retain(|i| i.id != item_id);
+    if ticket.checklist.len() == before {
+        return Err(Error::msg(format!("checklist item `{item_id}` not found")));
+    }
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
+}
+
+/// Move a checklist item to a new 0-based position (clamped to the list length).
+pub fn checklist_move(
+    store: &Store,
+    ticket_id: &str,
+    item_id: &str,
+    index: usize,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let from = ticket
+        .checklist
+        .iter()
+        .position(|i| i.id == item_id)
+        .ok_or_else(|| Error::msg(format!("checklist item `{item_id}` not found")))?;
+    let item = ticket.checklist.remove(from);
+    let to = index.min(ticket.checklist.len());
+    ticket.checklist.insert(to, item);
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
 }
 
 /// Add a new list to the end of the board. Returns the new list's ID.
@@ -637,6 +733,55 @@ mod tests {
         let board = s.load_board().unwrap();
         assert_eq!(board.lists[0].cards, vec!["T-1", "T-2"]);
         assert_eq!(board.next_ticket, 3);
+    }
+
+    #[test]
+    fn checklist_lifecycle() {
+        let (_d, s) = project();
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "A".into(),
+                ..Default::default()
+            },
+            "tester",
+            now(),
+        )
+        .unwrap();
+        let a = checklist_add(&s, "T-1", "first", now()).unwrap();
+        let b = checklist_add(&s, "T-1", "second", now()).unwrap();
+        let c = checklist_add(&s, "T-1", "third", now()).unwrap();
+        assert_eq!(
+            (a.as_str(), b.as_str(), c.as_str()),
+            ("ck-1", "ck-2", "ck-3")
+        );
+
+        // toggle + explicit set
+        assert!(checklist_set(&s, "T-1", "ck-1", None, now()).unwrap());
+        assert!(!checklist_set(&s, "T-1", "ck-1", Some(false), now()).unwrap());
+        checklist_set(&s, "T-1", "ck-2", Some(true), now()).unwrap();
+
+        // edit + move (ck-3 to front) + remove
+        checklist_edit(&s, "T-1", "ck-2", "second!", now()).unwrap();
+        checklist_move(&s, "T-1", "ck-3", 0, now()).unwrap();
+        checklist_remove(&s, "T-1", "ck-1", now()).unwrap();
+
+        let t = s.load_ticket("T-1").unwrap();
+        assert_eq!(
+            t.checklist
+                .iter()
+                .map(|i| i.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ck-3", "ck-2"]
+        );
+        assert_eq!(t.checklist[1].text, "second!");
+        assert!(t.checklist[1].done);
+        // ids never reuse even after removal
+        assert_eq!(t.next_check, 4);
+
+        // missing item is an error, not a panic
+        assert!(checklist_set(&s, "T-1", "ck-99", None, now()).is_err());
+        assert!(checklist_remove(&s, "T-1", "ck-99", now()).is_err());
     }
 
     #[test]

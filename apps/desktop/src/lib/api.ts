@@ -87,6 +87,7 @@ function fillTicket(t: Ticket): Ticket {
     assignees: t.assignees ?? [],
     comments: t.comments ?? [],
     attachments: t.attachments ?? [],
+    checklist: t.checklist ?? [],
     activity: t.activity ?? []
   };
 }
@@ -276,6 +277,56 @@ export const api = {
     return req<{ ok: boolean; comment: string }>(
       `/api/tickets/${encodeURIComponent(id)}/comments${qs({ project })}`,
       { method: 'POST', body: JSON.stringify({ body, author }) }
+    );
+  },
+
+  // --- checklist ----------------------------------------------------------
+  // Each mutation returns the full updated ticket, so callers can re-render
+  // immediately without waiting for the next poll.
+
+  async addChecklistItem(id: string, text: string, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(`/api/tickets/${encodeURIComponent(id)}/checklist${qs({ project })}`, {
+        method: 'POST',
+        body: JSON.stringify({ text })
+      })
+    );
+  },
+
+  async setChecklistItem(
+    id: string,
+    item: string,
+    patch: { done?: boolean; text?: string },
+    project?: string
+  ): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(
+        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}${qs({ project })}`,
+        { method: 'PATCH', body: JSON.stringify(patch) }
+      )
+    );
+  },
+
+  async removeChecklistItem(id: string, item: string, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(
+        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}${qs({ project })}`,
+        { method: 'DELETE' }
+      )
+    );
+  },
+
+  async moveChecklistItem(
+    id: string,
+    item: string,
+    index: number,
+    project?: string
+  ): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(
+        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}/move${qs({ project })}`,
+        { method: 'POST', body: JSON.stringify({ index }) }
+      )
     );
   },
 

@@ -20,6 +20,13 @@ export interface Activity {
   detail?: string;
 }
 
+/** A single checklist / to-do item within a ticket (see wipe-core `ChecklistItem`). */
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
 export type AttachmentSource = 'media' | 'repo';
 
 export interface Attachment {
@@ -40,6 +47,7 @@ export interface Ticket {
   assignees: string[];
   attachments: Attachment[];
   comments: Comment[];
+  checklist: ChecklistItem[];
   activity: Activity[];
   created: string;
   updated: string;

@@ -58,6 +58,9 @@ pub enum Command {
     /// Manage comments on tickets.
     #[command(subcommand)]
     Comment(CommentCmd),
+    /// Manage a ticket's checklist (to-do items).
+    #[command(subcommand)]
+    Checklist(ChecklistCmd),
     /// Manage labels.
     #[command(subcommand)]
     Label(LabelCmd),
@@ -358,6 +361,71 @@ pub enum CommentCmd {
     List {
         /// Ticket ID.
         ticket: String,
+    },
+}
+
+/// `wipe checklist ...`
+#[derive(Debug, Subcommand)]
+pub enum ChecklistCmd {
+    /// Add an item to a ticket's checklist.
+    Add {
+        /// Ticket ID.
+        ticket: String,
+        /// Item text.
+        #[arg(long, short)]
+        text: String,
+    },
+    /// List a ticket's checklist items and their state.
+    List {
+        /// Ticket ID.
+        ticket: String,
+    },
+    /// Check an item off (mark done).
+    Check {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID (e.g. ck-1).
+        item: String,
+    },
+    /// Uncheck an item (mark not done).
+    Uncheck {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID.
+        item: String,
+    },
+    /// Toggle an item's checked state.
+    Toggle {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID.
+        item: String,
+    },
+    /// Edit an item's text.
+    Edit {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID.
+        item: String,
+        /// New text.
+        #[arg(long, short)]
+        text: String,
+    },
+    /// Remove an item.
+    Remove {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID.
+        item: String,
+    },
+    /// Move an item to a new 0-based position.
+    Move {
+        /// Ticket ID.
+        ticket: String,
+        /// Checklist item ID.
+        item: String,
+        /// Target index (0-based).
+        index: usize,
     },
 }
 

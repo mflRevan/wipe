@@ -25,6 +25,10 @@
   // store and snap the just-dropped card back to its origin. The effect still
   // re-runs when `$board` itself changes (the ~0.5s poll confirms the move).
   let dragging = false;
+  // A SEPARATE reactive flag purely for drag-affordance styling (bigger drop
+  // zones + the target-list glow). It's intentionally not read by the sync effect,
+  // so toggling it on drop can't trigger the snap-back that `dragging` guards.
+  let dragActive = $state(false);
 
   // Inline "+ Add list" affordance.
   let addingList = $state(false);
@@ -58,6 +62,7 @@
 
   function handleConsider(listId: string, items: Ticket[]) {
     dragging = true;
+    dragActive = true;
     const col = colById(listId);
     if (col) col.tickets = items;
   }
@@ -70,6 +75,7 @@
     const col = colById(listId);
     if (col) col.tickets = items;
     dragging = false;
+    dragActive = false;
     // Persist only from the destination zone (covers same-list reorders too).
     // `cols` already reflects the drop; because `dragging` is untracked the sync
     // effect won't revert it, and the ~0.5s poll confirms the move server-side.
@@ -87,6 +93,7 @@
       name={col.name}
       tickets={col.tickets}
       {flipMs}
+      {dragActive}
       dragDisabled={$rewinding}
       canMoveLeft={i > 0}
       canMoveRight={i < cols.length - 1}

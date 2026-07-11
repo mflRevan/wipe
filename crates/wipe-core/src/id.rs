@@ -14,6 +14,11 @@ pub fn comment_id(n: u64) -> String {
     format!("c-{n}")
 }
 
+/// Format a checklist-item ID from its numeric counter, e.g. `ck-3`.
+pub fn checklist_id(n: u64) -> String {
+    format!("ck-{n}")
+}
+
 /// Turn a human name into a stable kebab-case slug used for list IDs.
 ///
 /// Non-alphanumeric runs collapse to a single `-`; the result is lowercased and
@@ -46,6 +51,7 @@ mod tests {
     fn formats_ids() {
         assert_eq!(ticket_id(23), "T-23");
         assert_eq!(comment_id(7), "c-7");
+        assert_eq!(checklist_id(3), "ck-3");
     }
 
     #[test]

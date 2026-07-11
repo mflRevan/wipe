@@ -74,6 +74,15 @@ fn router(state: AppState) -> Router {
         .route("/api/tickets/{id}", patch(api::patch_ticket))
         .route("/api/tickets/{id}/move", post(api::move_ticket))
         .route("/api/tickets/{id}/comments", post(api::add_comment))
+        .route("/api/tickets/{id}/checklist", post(api::add_checklist_item))
+        .route(
+            "/api/tickets/{id}/checklist/{item}",
+            patch(api::patch_checklist_item).delete(api::delete_checklist_item),
+        )
+        .route(
+            "/api/tickets/{id}/checklist/{item}/move",
+            post(api::move_checklist_item),
+        )
         .route(
             "/api/tickets/{id}/attachments",
             post(api::upload_attachment).delete(api::delete_attachment),

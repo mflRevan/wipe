@@ -2,7 +2,7 @@
   import { fade, scale } from 'svelte/transition';
   import { browser } from '$app/environment';
   import { get } from 'svelte/store';
-  import { X, Eye, Pencil, Send, Flag } from 'lucide-svelte';
+  import { X, Eye, Pencil, Send, Flag, Check, Plus, CheckSquare } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
   import Markdown from './Markdown.svelte';
@@ -10,9 +10,24 @@
   import AssigneePicker from './AssigneePicker.svelte';
   import Attachments from './Attachments.svelte';
   import { api, mediaUrl } from '$lib/api';
-  import { board, definitions, identities, currentProject, rewinding } from '$lib/stores/board';
+  import {
+    board,
+    definitions,
+    identities,
+    currentProject,
+    rewinding,
+    markSelfChange,
+    applyTicket
+  } from '$lib/stores/board';
   import { formatDate, mediaKind, priorityColor, activityPhrase } from '$lib/utils';
-  import type { Activity, Attachment, Comment, Ticket, TicketPatch } from '$lib/types';
+  import type {
+    Activity,
+    Attachment,
+    ChecklistItem,
+    Comment,
+    Ticket,
+    TicketPatch
+  } from '$lib/types';
 
   type FeedItem =
     | { type: 'comment'; ts: string; comment: Comment }
@@ -70,10 +85,58 @@
   async function patch(p: TicketPatch) {
     if (!ticket) return;
     saveError = null;
+    // Your own edits from this modal shouldn't flash on the board as "activity" -
+    // suppress the highlight and reflect the server's result immediately.
+    markSelfChange(ticket.id);
     try {
-      await api.patchTicket(ticket.id, p, proj());
+      applyTicket(await api.patchTicket(ticket.id, p, proj()));
     } catch (e) {
       saveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // --- checklist ---
+  let newItem = $state('');
+  let editingItem = $state<string | null>(null);
+  let editDraft = $state('');
+  let clDone = $derived(ticket?.checklist.filter((i) => i.done).length ?? 0);
+  let clTotal = $derived(ticket?.checklist.length ?? 0);
+
+  // All checklist edits route through here: suppress the self-flash and apply the
+  // returned ticket right away so ticking/adding feels instant.
+  async function clMutate(fn: () => Promise<Ticket>) {
+    if (!ticket) return;
+    saveError = null;
+    markSelfChange(ticket.id);
+    try {
+      applyTicket(await fn());
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  async function addItem() {
+    const t = newItem.trim();
+    if (!ticket || !t) return;
+    newItem = '';
+    await clMutate(() => api.addChecklistItem(ticket!.id, t, proj()));
+  }
+  async function toggleItem(item: ChecklistItem) {
+    await clMutate(() => api.setChecklistItem(ticket!.id, item.id, { done: !item.done }, proj()));
+  }
+  async function removeItem(id: string) {
+    await clMutate(() => api.removeChecklistItem(ticket!.id, id, proj()));
+  }
+  function startEditItem(item: ChecklistItem) {
+    if (readOnly) return;
+    editingItem = item.id;
+    editDraft = item.text;
+  }
+  async function saveEditItem(id: string) {
+    const t = editDraft.trim();
+    const cur = ticket?.checklist.find((i) => i.id === id);
+    editingItem = null;
+    if (ticket && t && cur && t !== cur.text) {
+      await clMutate(() => api.setChecklistItem(ticket!.id, id, { text: t }, proj()));
     }
   }
 
@@ -97,6 +160,7 @@
     if (!ticket || !b) return;
     commentDraft = '';
     saveError = null;
+    markSelfChange(ticket.id);
     try {
       await api.addComment(ticket.id, b, undefined, proj());
     } catch (e) {
@@ -259,6 +323,80 @@
             <button class="body-empty" onclick={startBody}>Add a more detailed description…</button>
           {:else}
             <span class="dim">No description.</span>
+          {/if}
+        </div>
+
+        <!-- checklist -->
+        <div class="field">
+          <div class="flabel-row">
+            <span class="flabel"><CheckSquare size={12} /> Checklist</span>
+            {#if clTotal > 0}<span class="cl-count">{clDone}/{clTotal}</span>{/if}
+          </div>
+          {#if clTotal > 0}
+            <div class="cl-bar" aria-hidden="true">
+              <div class="cl-fill" style="width:{(clDone / clTotal) * 100}%"></div>
+            </div>
+            <div class="cl-items">
+              {#each ticket.checklist as item (item.id)}
+                <div class="cl-item" class:done={item.done}>
+                  <button
+                    class="cl-check"
+                    role="checkbox"
+                    aria-checked={item.done}
+                    aria-label={item.done ? 'Uncheck item' : 'Check item'}
+                    disabled={readOnly}
+                    onclick={() => toggleItem(item)}
+                  >
+                    {#if item.done}<Check size={12} />{/if}
+                  </button>
+                  {#if editingItem === item.id && !readOnly}
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input
+                      class="cl-edit"
+                      autofocus
+                      bind:value={editDraft}
+                      onblur={() => saveEditItem(item.id)}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
+                        else if (e.key === 'Escape') editingItem = null;
+                      }}
+                    />
+                  {:else}
+                    <button
+                      class="cl-text"
+                      class:ro={readOnly}
+                      onclick={() => startEditItem(item)}>{item.text}</button
+                    >
+                  {/if}
+                  {#if !readOnly}
+                    <button
+                      class="cl-del"
+                      aria-label="Delete item"
+                      onclick={() => removeItem(item.id)}><X size={13} /></button
+                    >
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if !readOnly}
+            <div class="cl-add">
+              <Plus size={14} class="cl-addicon" />
+              <input
+                class="cl-newinput"
+                placeholder="Add an item…"
+                bind:value={newItem}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void addItem();
+                  }
+                }}
+              />
+              {#if newItem.trim()}
+                <button class="cl-addbtn" onclick={addItem}>Add</button>
+              {/if}
+            </div>
           {/if}
         </div>
 
@@ -535,6 +673,10 @@
     gap: 8px;
   }
   .flabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: fit-content;
     font-family: var(--wp-font-display);
     font-size: 11px;
     font-weight: 600;
@@ -546,6 +688,156 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  /* --- checklist --- */
+  .cl-count {
+    font-family: var(--wp-font-mono);
+    font-size: 12px;
+    color: var(--wp-text-subtle);
+  }
+  .cl-bar {
+    height: 4px;
+    border-radius: var(--wp-r-pill);
+    background: var(--wp-surface);
+    overflow: hidden;
+  }
+  .cl-fill {
+    height: 100%;
+    border-radius: var(--wp-r-pill);
+    background: var(--wp-accent);
+    transition: width var(--wp-base) var(--wp-ease);
+  }
+  .cl-items {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .cl-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 4px;
+    border-radius: var(--wp-r-sm);
+  }
+  .cl-item:hover {
+    background: var(--wp-surface);
+  }
+  .cl-check {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--wp-r-sm);
+    border: 1.5px solid var(--wp-border-strong);
+    background: var(--wp-card);
+    color: var(--wp-on-accent);
+    cursor: pointer;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .cl-check:hover:not(:disabled) {
+    border-color: var(--wp-accent);
+  }
+  .cl-check:disabled {
+    cursor: default;
+  }
+  .cl-item.done .cl-check {
+    background: var(--wp-accent);
+    border-color: var(--wp-accent);
+  }
+  .cl-text {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    padding: 2px 2px;
+    border: none;
+    background: none;
+    color: var(--wp-text);
+    font-size: 14px;
+    line-height: 1.4;
+    cursor: text;
+    border-radius: var(--wp-r-sm);
+    word-break: break-word;
+  }
+  .cl-text.ro {
+    cursor: default;
+  }
+  .cl-item.done .cl-text {
+    color: var(--wp-text-subtle);
+    text-decoration: line-through;
+  }
+  .cl-edit {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    padding: 0 6px;
+    border-radius: var(--wp-r-sm);
+    border: 1px solid var(--wp-border-strong);
+    background: var(--wp-card);
+    color: var(--wp-text);
+    font-size: 14px;
+  }
+  .cl-del {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--wp-r-sm);
+    background: none;
+    color: var(--wp-text-subtle);
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .cl-item:hover .cl-del {
+    opacity: 1;
+  }
+  .cl-del:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-error);
+  }
+  .cl-add {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    padding: 0 4px;
+  }
+  :global(.cl-add .cl-addicon) {
+    color: var(--wp-text-subtle);
+    flex: none;
+  }
+  .cl-newinput {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 6px;
+    border: none;
+    border-bottom: 1px solid transparent;
+    background: none;
+    color: var(--wp-text);
+    font-size: 14px;
+  }
+  .cl-newinput:focus {
+    outline: none;
+    border-bottom-color: var(--wp-border-strong);
+  }
+  .cl-addbtn {
+    flex: none;
+    height: 26px;
+    padding: 0 12px;
+    border-radius: var(--wp-r-sm);
+    border: none;
+    background: var(--wp-accent);
+    color: var(--wp-on-accent);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
   }
   .prio-row {
     display: inline-flex;

@@ -181,6 +181,32 @@ export const CLI_GROUPS: CliGroup[] = [
     ],
   },
   {
+    name: "checklist",
+    summary: "Break a ticket into to-do items agents and humans can tick off.",
+    commands: [
+      {
+        command: "wipe checklist add",
+        description: "Add an item to a ticket's checklist.",
+        example: 'wipe checklist add T-1 --text "Write tests"',
+      },
+      {
+        command: "wipe checklist check",
+        description: "Tick an item off (also: uncheck, toggle).",
+        example: "wipe checklist check T-1 ck-1",
+      },
+      {
+        command: "wipe checklist list",
+        description: "List a ticket's items and how many are done.",
+        example: "wipe checklist list T-1 --json",
+      },
+      {
+        command: "wipe checklist edit",
+        description: "Edit, remove, or move (reorder) an item.",
+        example: 'wipe checklist edit T-1 ck-1 --text "Write unit tests"',
+      },
+    ],
+  },
+  {
     name: "label",
     summary: "Define and assign colored labels (the board's categorization).",
     commands: [

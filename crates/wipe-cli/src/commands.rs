@@ -605,6 +605,85 @@ pub fn comment(out: &Out, cmd: CommentCmd) -> Result<()> {
     Ok(())
 }
 
+/// `wipe checklist ...` - manage a ticket's checklist items.
+pub fn checklist(out: &Out, cmd: ChecklistCmd) -> Result<()> {
+    let s = store()?;
+    match cmd {
+        ChecklistCmd::Add { ticket, text } => {
+            let id = ops::checklist_add(&s, &ticket, &text, Utc::now())?;
+            out.ok(
+                format!("added {id} to {ticket}"),
+                json!({ "ok": true, "ticket": ticket, "item": id }),
+            );
+        }
+        ChecklistCmd::List { ticket } => {
+            let t = s.load_ticket(&ticket)?;
+            if out.json {
+                out.json_value(&json!({
+                    "ticket": ticket,
+                    "checklist": t.checklist.iter().map(to_value).collect::<Vec<_>>(),
+                }));
+            } else if t.checklist.is_empty() {
+                out.line(format!("{ticket} has no checklist"));
+            } else {
+                let done = t.checklist.iter().filter(|i| i.done).count();
+                println!("{ticket} checklist ({done}/{})", t.checklist.len());
+                for i in &t.checklist {
+                    let box_ = if i.done { "[x]" } else { "[ ]" };
+                    println!("  {box_} {} {}", id_style(&i.id), i.text);
+                }
+            }
+        }
+        ChecklistCmd::Check { ticket, item } => {
+            ops::checklist_set(&s, &ticket, &item, Some(true), Utc::now())?;
+            out.ok(
+                format!("checked {item}"),
+                json!({ "ok": true, "ticket": ticket, "item": item, "done": true }),
+            );
+        }
+        ChecklistCmd::Uncheck { ticket, item } => {
+            ops::checklist_set(&s, &ticket, &item, Some(false), Utc::now())?;
+            out.ok(
+                format!("unchecked {item}"),
+                json!({ "ok": true, "ticket": ticket, "item": item, "done": false }),
+            );
+        }
+        ChecklistCmd::Toggle { ticket, item } => {
+            let done = ops::checklist_set(&s, &ticket, &item, None, Utc::now())?;
+            out.ok(
+                format!("{} {item}", if done { "checked" } else { "unchecked" }),
+                json!({ "ok": true, "ticket": ticket, "item": item, "done": done }),
+            );
+        }
+        ChecklistCmd::Edit { ticket, item, text } => {
+            ops::checklist_edit(&s, &ticket, &item, &text, Utc::now())?;
+            out.ok(
+                format!("edited {item}"),
+                json!({ "ok": true, "ticket": ticket, "item": item }),
+            );
+        }
+        ChecklistCmd::Remove { ticket, item } => {
+            ops::checklist_remove(&s, &ticket, &item, Utc::now())?;
+            out.ok(
+                format!("removed {item} from {ticket}"),
+                json!({ "ok": true, "ticket": ticket, "item": item }),
+            );
+        }
+        ChecklistCmd::Move {
+            ticket,
+            item,
+            index,
+        } => {
+            ops::checklist_move(&s, &ticket, &item, index, Utc::now())?;
+            out.ok(
+                format!("moved {item} to position {index}"),
+                json!({ "ok": true, "ticket": ticket, "item": item, "index": index }),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `wipe label ...`
 pub fn label(out: &Out, cmd: LabelCmd) -> Result<()> {
     let s = store()?;

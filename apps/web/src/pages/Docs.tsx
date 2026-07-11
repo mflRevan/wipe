@@ -500,11 +500,16 @@ function ForHumans() {
         <Prose>
           <p>
             Click a card for a focused editor: title and description, labels,
-            assignees (human or agent), priority, and attachments on the left; an{" "}
-            <strong className="text-foreground">activity feed</strong> on the
-            right. That feed is the human ↔ agent channel - below, an agent
+            assignees (human or agent), priority, a{" "}
+            <strong className="text-foreground">checklist</strong>, and attachments
+            on the left; an <strong className="text-foreground">activity feed</strong>{" "}
+            on the right. That feed is the human ↔ agent channel - below, an agent
             (<code className={codeInline}>planner-bot</code>) created the card and
-            flagged a blocker, and a human replied with the decision.
+            flagged a blocker, and a human replied with the decision. Break work
+            into checklist items and either side can tick them off (
+            <code className={codeInline}>wipe checklist</code> from the CLI); a{" "}
+            <code className={codeInline}>2/3</code> badge shows progress right on
+            the card.
           </p>
         </Prose>
         <Figure

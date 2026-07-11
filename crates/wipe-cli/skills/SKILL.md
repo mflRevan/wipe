@@ -1,6 +1,6 @@
 ---
 name: wipe
-description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, and board state, AND to post/search/subscribe in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
+description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, checklists, and board state, AND to post/search/subscribe in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
 ---
 
 # wipe - agent operating guide
@@ -16,8 +16,8 @@ merge-friendly; hand-editing breaks that guarantee.
 2. On success the exit code is `0`. On failure it is non-zero and, in `--json`
    mode, stdout contains `{"ok": false, "error": "..."}`. Always check the exit code.
 3. Never write to `.wipe/` yourself. Use the commands below.
-4. IDs are stable: tickets are `T-<n>`, comments `c-<n>`, lists are kebab-case
-   slugs (e.g. `in-progress`).
+4. IDs are stable: tickets are `T-<n>`, comments `c-<n>`, checklist items
+   `ck-<n>`, lists are kebab-case slugs (e.g. `in-progress`).
 5. Prefer small, explicit commands over guessing. Run `wipe <group> --help` to
    discover exact flags - the CLI is self-documenting.
 
@@ -93,6 +93,18 @@ Collaborate via comments (this is the human↔agent / agent↔agent channel):
 ```bash
 wipe comment add T-1 --body "Spec clarified: use OAuth" --json
 wipe comment list T-1 --json
+```
+
+Break a ticket into checklist items and tick them off as you go. Items get stable
+`ck-<n>` IDs; `list` reports how many are done:
+
+```bash
+wipe checklist add T-1 --text "Add the OAuth device-flow endpoint" --json
+wipe checklist add T-1 --text "Write integration tests" --json
+wipe checklist list T-1 --json          # -> items with {id, text, done}
+wipe checklist check T-1 ck-1 --json    # also: uncheck, toggle
+wipe checklist edit T-1 ck-2 --text "Write end-to-end tests" --json
+wipe checklist move T-1 ck-2 0 --json   # reorder (0-based); remove to delete
 ```
 
 Labels (the only categorization - there is no "type" or "tags"). New labels are

@@ -13,6 +13,30 @@ export const board = writable<Board | null>(null);
 export const boardError = writable<string | null>(null);
 export const loading = writable<boolean>(false);
 
+// --- persistence: keep the open board across a page refresh --------------------
+const PROJECT_KEY = 'wipe:project';
+function lsGet(key: string): string | null {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+function lsSet(key: string, value: string | null): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable / disabled - persistence is best-effort */
+  }
+}
+// Capture the last-open board BEFORE wiring the subscriber below: subscribe fires
+// synchronously with the initial `null`, which would otherwise clear the value we
+// need to restore.
+const savedProject = lsGet(PROJECT_KEY);
+currentProject.subscribe((v) => lsSet(PROJECT_KEY, v));
+
 export const definitions = writable<Definitions>({
   version: 0,
   labels: [],
@@ -126,9 +150,15 @@ export async function loadProjects(): Promise<void> {
     projects.set(list);
     const cur = get(currentProject);
     if (!cur || !list.some((p) => p.path === cur)) {
-      // Prefer the board `wipe serve` was launched in; otherwise fall back to the
-      // first registered board.
-      const pick = served && list.some((p) => p.path === served) ? served : (list[0]?.path ?? null);
+      // Prefer the board we were last viewing (survives a page refresh), then the
+      // board `wipe serve` was launched in, then the first registered board.
+      const has = (p: string | null | undefined): p is string =>
+        !!p && list.some((x) => x.path === p);
+      const pick = has(savedProject)
+        ? savedProject
+        : has(served)
+          ? served
+          : (list[0]?.path ?? null);
       if (pick) currentProject.set(pick);
     }
   } catch (e) {
@@ -229,6 +259,27 @@ export async function enterRewind(commit: GraphCommit): Promise<void> {
 export async function returnToNow(): Promise<void> {
   rewindCommit.set(null);
   await loadBoard();
+}
+
+/** Replace a single ticket in the current board with a fresher copy (e.g. the
+ *  ticket returned by a mutation), so the UI reflects the change immediately
+ *  without waiting for the next poll. No-op if the ticket isn't on the board. */
+export function applyTicket(next: Ticket): void {
+  board.update((b) => {
+    if (!b) return b;
+    let changed = false;
+    const lists = b.lists.map((l) => ({
+      ...l,
+      tickets: l.tickets.map((t) => {
+        if (t.id === next.id) {
+          changed = true;
+          return next;
+        }
+        return t;
+      })
+    }));
+    return changed ? { ...b, lists } : b;
+  });
 }
 
 /** Move a ticket, then let the poll/WS reconcile. The move is a local action, so
