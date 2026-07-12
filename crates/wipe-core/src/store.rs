@@ -211,6 +211,9 @@ impl Store {
 
     /// Load a single ticket by ID.
     pub fn load_ticket(&self, id: &str) -> Result<Ticket> {
+        if !valid_ticket_id(id) {
+            return Err(Error::TicketNotFound(id.to_string()));
+        }
         let path = self.ticket_path(id);
         if !path.exists() {
             return Err(Error::TicketNotFound(id.to_string()));
@@ -220,11 +223,17 @@ impl Store {
 
     /// Write a ticket file.
     pub fn save_ticket(&self, ticket: &Ticket) -> Result<()> {
+        if !valid_ticket_id(&ticket.id) {
+            return Err(Error::msg(format!("invalid ticket id `{}`", ticket.id)));
+        }
         write_json_atomic(&self.ticket_path(&ticket.id), ticket)
     }
 
     /// Delete a ticket file. Errors if it does not exist.
     pub fn delete_ticket(&self, id: &str) -> Result<()> {
+        if !valid_ticket_id(id) {
+            return Err(Error::TicketNotFound(id.to_string()));
+        }
         let path = self.ticket_path(id);
         if !path.exists() {
             return Err(Error::TicketNotFound(id.to_string()));
@@ -339,6 +348,14 @@ impl Store {
     }
 }
 
+/// A ticket ID must be `T-` followed by digits only. Rejecting anything else
+/// (path separators, `..`, dots) guarantees a caller-supplied ID can never be
+/// turned into a path that escapes the tickets directory - e.g. a crafted
+/// `../board` must never let `delete_ticket` remove `.wipe/board.json`.
+fn valid_ticket_id(id: &str) -> bool {
+    matches!(id.strip_prefix("T-"), Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// A thread ID must be `F-` followed by digits only. Rejecting anything else
 /// (path separators, `..`, dots) guarantees a caller-supplied ID can never be
 /// turned into a path that escapes the forum directory.
@@ -449,6 +466,27 @@ mod tests {
             store.load_ticket("T-99"),
             Err(Error::TicketNotFound(_))
         ));
+    }
+
+    #[test]
+    fn ticket_id_traversal_is_rejected() {
+        let (_dir, store) = temp_project();
+        // A crafted id must never resolve to a path outside tickets/. board.json
+        // exists next to tickets/, so if traversal worked delete would remove it.
+        let board_json = store.wipe_dir().join("board.json");
+        assert!(board_json.exists());
+        for evil in ["../board", "../../evil", "T-1/../../board", "..\\board"] {
+            assert!(matches!(
+                store.delete_ticket(evil),
+                Err(Error::TicketNotFound(_))
+            ));
+            assert!(matches!(
+                store.load_ticket(evil),
+                Err(Error::TicketNotFound(_))
+            ));
+        }
+        // The sibling file is untouched.
+        assert!(board_json.exists());
     }
 
     #[test]

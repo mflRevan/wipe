@@ -21,8 +21,17 @@ cargo-dist-version = "0.28.2"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell", "npm"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+# Target platforms to build apps for (Rust target-triple syntax). macOS (Intel +
+# Apple Silicon) is built natively on GitHub's macos runners so `npm i -g` and the
+# shell installer work there too - dist computes the runner per target, so the
+# release workflow needs no changes when this list grows.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
 # npm is published tokenlessly via OIDC in .github/workflows/publish-npm.yml,
 # not by cargo-dist (which would use a token). The npm installer is still built
 # and uploaded to the release as `*-npm-package.tar.gz` for that workflow to use.

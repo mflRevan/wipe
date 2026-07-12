@@ -49,7 +49,10 @@
 
   async function submit() {
     const t = title.trim();
-    if (!t) return;
+    // Guard the Enter path too (the button is disabled while busy, but key-repeat
+    // or a double-Enter re-enters here): without this each keypress POSTs another
+    // identical ticket.
+    if (!t || busy) return;
     busy = true;
     error = null;
     const project = get(currentProject) ?? undefined;

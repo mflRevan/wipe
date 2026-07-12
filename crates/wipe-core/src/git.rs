@@ -66,8 +66,11 @@ pub fn log(root: &Path, pathspec: Option<&str>, limit: Option<usize>) -> Result<
 /// Read the contents of a tracked file as of a specific commit/ref. Returns
 /// `None` if the file did not exist at that revision.
 pub fn file_at_commit(root: &Path, rev: &str, relpath: &str) -> Result<Option<String>> {
-    // Forward slashes work on all platforms for git pathspecs.
-    let spec = format!("{rev}:{}", relpath.replace('\\', "/"));
+    // `rev:./path` resolves relative to git's cwd (our `-C root`), whereas a bare
+    // `rev:path` is relative to the REPO root - which breaks for a board nested in
+    // a subdirectory of the repo (e.g. a monorepo's `apps/foo/.wipe`). Forward
+    // slashes work on all platforms for git pathspecs.
+    let spec = format!("{rev}:./{}", relpath.replace('\\', "/"));
     match run(root, &["--no-pager", "show", &spec]) {
         Ok(s) => Ok(Some(s)),
         // A non-zero exit here means "path not present at rev", not a hard error.

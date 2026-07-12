@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { MessageSquare, Paperclip, CheckSquare } from 'lucide-svelte';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import { browser } from '$app/environment';
+  import { MessageSquare, Paperclip, CheckSquare, ShieldCheck } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
   import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
@@ -9,12 +12,44 @@
 
   let { ticket, onopen }: { ticket: Ticket; onopen: (t: Ticket) => void } = $props();
 
+  const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   let dot = $derived(priorityColor(ticket.priority));
   // Checklist progress for the compact badge (only shown when there are items).
   let clTotal = $derived(ticket.checklist?.length ?? 0);
   let clDone = $derived(ticket.checklist?.filter((i) => i.done).length ?? 0);
-  // Briefly highlight when an agent/human changed this card since the last poll.
-  let changed = $derived($recentlyChanged.has(ticket.id));
+  // Acceptance-criteria progress (reviewer gates), shown as its own badge.
+  let acTotal = $derived(ticket.acceptance?.length ?? 0);
+  let acDone = $derived(ticket.acceptance?.filter((i) => i.done).length ?? 0);
+  // How this card just changed (drives the live-update animation).
+  let change = $derived($recentlyChanged.get(ticket.id));
+
+  // Title typewriter: when a card first appears because an agent/human just
+  // created it, reveal the title character-by-character (as if being typed) for
+  // ~1s. A freshly-created ticket is a freshly-mounted node, so we read the change
+  // kind at mount and animate once; otherwise the title renders normally.
+  let typing = $state(false);
+  let typed = $state('');
+  let caret = $state(false);
+  onMount(() => {
+    if (reduced || get(recentlyChanged).get(ticket.id) !== 'new') return;
+    const full = ticket.title;
+    typing = true;
+    caret = true;
+    typed = '';
+    let i = 0;
+    const step = Math.min(45, Math.max(14, 900 / Math.max(full.length, 1)));
+    const iv = setInterval(() => {
+      i += 1;
+      typed = full.slice(0, i);
+      if (i >= full.length) {
+        clearInterval(iv);
+        typing = false;
+        setTimeout(() => (caret = false), 350);
+      }
+    }, step);
+    return () => clearInterval(iv);
+  });
   // First image attachment becomes a compact card cover, like Trello.
   let cover = $derived<Attachment | undefined>(
     ticket.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
@@ -26,7 +61,9 @@
 
 <div
   class="card"
-  class:changed
+  class:edited={change === 'edited'}
+  class:materialize={change === 'new'}
+  class:floated={change === 'moved'}
   role="button"
   tabindex="0"
   onclick={() => onopen(ticket)}
@@ -54,7 +91,10 @@
     {#if ticket.priority}
       <span class="prio" style="--d:{dot}" title="Priority: {ticket.priority}"></span>
     {/if}
-    <span class="ttext">{ticket.title}</span>
+    <span class="ttext"
+      >{typing ? typed : ticket.title}{#if caret}<span class="caret" aria-hidden="true"></span
+        >{/if}</span
+    >
   </div>
 
   <div class="footer">
@@ -74,6 +114,15 @@
           title="Checklist: {clDone} of {clTotal} done"
         >
           <CheckSquare size={13} /> {clDone}/{clTotal}
+        </span>
+      {/if}
+      {#if acTotal}
+        <span
+          class="count ac"
+          class:ac-complete={acDone === acTotal}
+          title="Acceptance criteria: {acDone} of {acTotal} met"
+        >
+          <ShieldCheck size={13} /> {acDone}/{acTotal}
         </span>
       {/if}
       {#if ticket.comments.length}
@@ -105,9 +154,19 @@
     background: var(--wp-elevated);
     box-shadow: var(--wp-shadow);
   }
-  /* Brief highlight when an agent/human just changed this card (live updates). */
-  .card.changed {
+  /* Live updates: three motions by how the card changed.
+     - edited: a brief accent highlight (an agent/human tweaked it).
+     - new: it materializes into place, as if just written (pairs with the title
+       typewriter above).
+     - moved: it floats in with a highlight when it lands in a new list. */
+  .card.edited {
     animation: card-flash 1.8s var(--wp-ease);
+  }
+  .card.materialize {
+    animation: card-materialize 0.5s var(--wp-ease) both;
+  }
+  .card.floated {
+    animation: card-float 0.6s var(--wp-ease);
   }
   @keyframes card-flash {
     0% {
@@ -119,10 +178,61 @@
       box-shadow: none;
     }
   }
+  @keyframes card-materialize {
+    0% {
+      opacity: 0;
+      transform: translateY(6px) scale(0.96);
+      border-color: var(--wp-accent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--wp-accent) 26%, transparent);
+    }
+    60% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    100% {
+      transform: none;
+      border-color: var(--wp-border);
+      box-shadow: none;
+    }
+  }
+  @keyframes card-float {
+    0% {
+      transform: translateY(-6px);
+      border-color: var(--wp-accent);
+      box-shadow:
+        0 8px 18px -8px color-mix(in srgb, var(--wp-accent) 45%, transparent),
+        0 0 0 2px color-mix(in srgb, var(--wp-accent) 35%, transparent);
+    }
+    100% {
+      transform: none;
+      border-color: var(--wp-border);
+      box-shadow: none;
+    }
+  }
+  /* The typewriter caret while a new card's title is being "typed". */
+  .caret {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    margin-left: 1px;
+    transform: translateY(2px);
+    background: var(--wp-accent);
+    animation: caret-blink 0.7s steps(1) infinite;
+  }
+  @keyframes caret-blink {
+    50% {
+      opacity: 0;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .card.changed {
+    .card.edited,
+    .card.materialize,
+    .card.floated {
       animation: none;
       border-color: var(--wp-accent);
+    }
+    .caret {
+      display: none;
     }
   }
   .cover {
@@ -202,5 +312,9 @@
   /* All items checked - nudge the badge toward the accent so it reads as "done". */
   .count.cl-complete {
     color: var(--wp-accent);
+  }
+  /* All acceptance criteria met - reads in the criteria's own (sage) hue. */
+  .count.ac-complete {
+    color: #7e9b7a;
   }
 </style>

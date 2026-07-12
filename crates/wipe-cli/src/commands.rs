@@ -607,10 +607,25 @@ pub fn comment(out: &Out, cmd: CommentCmd) -> Result<()> {
 
 /// `wipe checklist ...` - manage a ticket's checklist items.
 pub fn checklist(out: &Out, cmd: ChecklistCmd) -> Result<()> {
+    checks(out, ops::Checks::Checklist, cmd)
+}
+
+/// `wipe criteria ...` - manage a ticket's acceptance criteria.
+pub fn criteria(out: &Out, cmd: ChecklistCmd) -> Result<()> {
+    checks(out, ops::Checks::Acceptance, cmd)
+}
+
+/// Shared implementation for the two tickable surfaces (checklist / criteria).
+fn checks(out: &Out, kind: ops::Checks, cmd: ChecklistCmd) -> Result<()> {
     let s = store()?;
+    // The human/JSON wording for this surface: (spoken name, JSON key).
+    let (noun, key) = match kind {
+        ops::Checks::Checklist => ("checklist", "checklist"),
+        ops::Checks::Acceptance => ("acceptance criteria", "acceptance"),
+    };
     match cmd {
         ChecklistCmd::Add { ticket, text } => {
-            let id = ops::checklist_add(&s, &ticket, &text, Utc::now())?;
+            let id = ops::checks_add(&s, kind, &ticket, &text, Utc::now())?;
             out.ok(
                 format!("added {id} to {ticket}"),
                 json!({ "ok": true, "ticket": ticket, "item": id }),
@@ -618,52 +633,56 @@ pub fn checklist(out: &Out, cmd: ChecklistCmd) -> Result<()> {
         }
         ChecklistCmd::List { ticket } => {
             let t = s.load_ticket(&ticket)?;
+            let items = match kind {
+                ops::Checks::Checklist => &t.checklist,
+                ops::Checks::Acceptance => &t.acceptance,
+            };
             if out.json {
                 out.json_value(&json!({
                     "ticket": ticket,
-                    "checklist": t.checklist.iter().map(to_value).collect::<Vec<_>>(),
+                    key: items.iter().map(to_value).collect::<Vec<_>>(),
                 }));
-            } else if t.checklist.is_empty() {
-                out.line(format!("{ticket} has no checklist"));
+            } else if items.is_empty() {
+                out.line(format!("{ticket} has no {noun}"));
             } else {
-                let done = t.checklist.iter().filter(|i| i.done).count();
-                println!("{ticket} checklist ({done}/{})", t.checklist.len());
-                for i in &t.checklist {
+                let done = items.iter().filter(|i| i.done).count();
+                println!("{ticket} {noun} ({done}/{})", items.len());
+                for i in items {
                     let box_ = if i.done { "[x]" } else { "[ ]" };
                     println!("  {box_} {} {}", id_style(&i.id), i.text);
                 }
             }
         }
         ChecklistCmd::Check { ticket, item } => {
-            ops::checklist_set(&s, &ticket, &item, Some(true), Utc::now())?;
+            ops::checks_set(&s, kind, &ticket, &item, Some(true), Utc::now())?;
             out.ok(
                 format!("checked {item}"),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": true }),
             );
         }
         ChecklistCmd::Uncheck { ticket, item } => {
-            ops::checklist_set(&s, &ticket, &item, Some(false), Utc::now())?;
+            ops::checks_set(&s, kind, &ticket, &item, Some(false), Utc::now())?;
             out.ok(
                 format!("unchecked {item}"),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": false }),
             );
         }
         ChecklistCmd::Toggle { ticket, item } => {
-            let done = ops::checklist_set(&s, &ticket, &item, None, Utc::now())?;
+            let done = ops::checks_set(&s, kind, &ticket, &item, None, Utc::now())?;
             out.ok(
                 format!("{} {item}", if done { "checked" } else { "unchecked" }),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": done }),
             );
         }
         ChecklistCmd::Edit { ticket, item, text } => {
-            ops::checklist_edit(&s, &ticket, &item, &text, Utc::now())?;
+            ops::checks_edit(&s, kind, &ticket, &item, &text, Utc::now())?;
             out.ok(
                 format!("edited {item}"),
                 json!({ "ok": true, "ticket": ticket, "item": item }),
             );
         }
         ChecklistCmd::Remove { ticket, item } => {
-            ops::checklist_remove(&s, &ticket, &item, Utc::now())?;
+            ops::checks_remove(&s, kind, &ticket, &item, Utc::now())?;
             out.ok(
                 format!("removed {item} from {ticket}"),
                 json!({ "ok": true, "ticket": ticket, "item": item }),
@@ -674,7 +693,7 @@ pub fn checklist(out: &Out, cmd: ChecklistCmd) -> Result<()> {
             item,
             index,
         } => {
-            ops::checklist_move(&s, &ticket, &item, index, Utc::now())?;
+            ops::checks_move(&s, kind, &ticket, &item, index, Utc::now())?;
             out.ok(
                 format!("moved {item} to position {index}"),
                 json!({ "ok": true, "ticket": ticket, "item": item, "index": index }),

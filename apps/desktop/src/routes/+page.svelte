@@ -93,10 +93,18 @@
   }
 
   async function refresh() {
-    if (await checkHealth()) {
-      await loadProjects();
-      await loadBoard();
+    // If we were offline (the "Retry connection" path), a plain reload would show
+    // a board that then never updates: bootstrap() is what starts the 0.5s poll and
+    // the change WebSocket, and it was skipped while the daemon was down. Re-run it
+    // so a recovered connection resumes live updates instead of freezing.
+    const wasOffline = !$health;
+    if (!(await checkHealth())) return;
+    if (wasOffline) {
+      await bootstrap();
+      return;
     }
+    await loadProjects();
+    await loadBoard();
   }
 </script>
 

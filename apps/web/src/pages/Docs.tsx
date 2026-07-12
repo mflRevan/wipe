@@ -13,9 +13,10 @@ const codeInline =
 
 const WIPE_TREE = `.wipe/
   board.json         # lists + card order (ticket-id refs)
-  definitions.json   # ticket types, labels, tags, priorities
+  definitions.json   # label definitions + priorities
   settings.json      # daemon port + exposure
   tickets/T-1.json   # one file per ticket (fields + inline comments)
+  forum/F-1.json     # one file per discussion thread
   media/             # version-controlled attachments
   .cache/index.db    # gitignored, auto-managed`;
 
@@ -305,9 +306,10 @@ function Concepts() {
         <p>
           <strong className="text-foreground">Tickets</strong> are the unit of
           work. Each ticket is its own JSON file under{" "}
-          <code className={codeInline}>tickets/</code>, holding its fields (type,
-          priority, labels, tags) and its inline comments. Media and attachments
-          are version-controlled under <code className={codeInline}>media/</code>.
+          <code className={codeInline}>tickets/</code>, holding its fields
+          (priority, labels, assignees), a checklist, acceptance criteria, and its
+          inline comments. Media and attachments are version-controlled under{" "}
+          <code className={codeInline}>media/</code>.
         </p>
         <p>
           <strong className="text-foreground">The forum</strong> is a parallel,
@@ -501,15 +503,21 @@ function ForHumans() {
           <p>
             Click a card for a focused editor: title and description, labels,
             assignees (human or agent), priority, a{" "}
-            <strong className="text-foreground">checklist</strong>, and attachments
-            on the left; an <strong className="text-foreground">activity feed</strong>{" "}
-            on the right. That feed is the human ↔ agent channel - below, an agent
-            (<code className={codeInline}>planner-bot</code>) created the card and
+            <strong className="text-foreground">checklist</strong>,{" "}
+            <strong className="text-foreground">acceptance criteria</strong>, and
+            attachments on the left; an{" "}
+            <strong className="text-foreground">activity feed</strong> on the right.
+            That feed is the human ↔ agent channel - below, an agent (
+            <code className={codeInline}>planner-bot</code>) created the card and
             flagged a blocker, and a human replied with the decision. Break work
             into checklist items and either side can tick them off (
-            <code className={codeInline}>wipe checklist</code> from the CLI); a{" "}
-            <code className={codeInline}>2/3</code> badge shows progress right on
-            the card.
+            <code className={codeInline}>wipe checklist</code> from the CLI). The{" "}
+            <strong className="text-foreground">acceptance criteria</strong> are the
+            reviewer's list - the conditions a ticket must meet to be accepted (
+            <code className={codeInline}>wipe criteria</code>): a reviewer ticks each
+            one, or bounces the ticket back with the unmet ones visible, so the
+            worker sees exactly what's left. Both show a{" "}
+            <code className={codeInline}>2/3</code> badge right on the card.
           </p>
         </Prose>
         <Figure

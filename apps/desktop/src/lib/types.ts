@@ -27,6 +27,10 @@ export interface ChecklistItem {
   done: boolean;
 }
 
+/** Which tickable surface on a ticket an operation targets: the worker-facing
+ *  checklist (`ck-<n>`) or the reviewer-facing acceptance criteria (`ac-<n>`). */
+export type ChecksKind = 'checklist' | 'acceptance';
+
 export type AttachmentSource = 'media' | 'repo';
 
 export interface Attachment {
@@ -48,6 +52,7 @@ export interface Ticket {
   attachments: Attachment[];
   comments: Comment[];
   checklist: ChecklistItem[];
+  acceptance: ChecklistItem[];
   activity: Activity[];
   created: string;
   updated: string;

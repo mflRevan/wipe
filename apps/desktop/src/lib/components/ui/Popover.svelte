@@ -78,7 +78,12 @@
     if (open && root && !e.composedPath().includes(root)) open = false;
   }
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') open = false;
+    // Only when actually open, and mark the event handled so an enclosing modal's
+    // own Escape listener doesn't ALSO close (Escape should dismiss just the popover).
+    if (e.key === 'Escape' && open) {
+      open = false;
+      e.preventDefault();
+    }
   }
 </script>
 

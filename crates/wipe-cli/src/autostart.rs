@@ -21,7 +21,13 @@ fn wipe_exe() -> String {
 
 /// Whether a login entry is currently installed.
 pub fn is_enabled() -> bool {
-    imp::entry_path().map(|p| p.exists()).unwrap_or(false)
+    imp::is_installed()
+}
+
+/// Default `is_installed` shared by platforms without extra legacy entries.
+#[cfg(not(target_os = "windows"))]
+fn path_installed(p: Option<PathBuf>) -> bool {
+    p.map(|p| p.exists()).unwrap_or(false)
 }
 
 /// Install the login entry (idempotent).
@@ -38,7 +44,7 @@ pub fn disable() -> Result<String> {
 mod imp {
     use super::*;
 
-    pub fn entry_path() -> Option<PathBuf> {
+    fn startup_dir() -> Option<PathBuf> {
         std::env::var_os("APPDATA").map(|appdata| {
             PathBuf::from(appdata)
                 .join("Microsoft")
@@ -46,8 +52,35 @@ mod imp {
                 .join("Start Menu")
                 .join("Programs")
                 .join("Startup")
-                .join("wipe-autoserve.cmd")
         })
+    }
+
+    pub fn entry_path() -> Option<PathBuf> {
+        // A .vbs launcher: WScript runs the daemon with window style 0 (hidden),
+        // so login starts a true background process - no console window, not even
+        // a minimized one. (A .cmd in the Startup folder always opens a console.)
+        startup_dir().map(|d| d.join("wipe-autoserve.vbs"))
+    }
+
+    /// Installed if either the current .vbs or the pre-0.3.7 .cmd entry exists,
+    /// so upgraded installs still report their (legacy) autostart as on.
+    pub fn is_installed() -> bool {
+        [entry_path(), legacy_entry_path()]
+            .into_iter()
+            .flatten()
+            .any(|p| p.exists())
+    }
+
+    /// The pre-0.3.7 entry (a .cmd that opened a minimized console); enable and
+    /// disable both clean it up so upgrades don't leave two login entries.
+    fn legacy_entry_path() -> Option<PathBuf> {
+        startup_dir().map(|d| d.join("wipe-autoserve.cmd"))
+    }
+
+    fn remove_legacy() {
+        if let Some(old) = legacy_entry_path() {
+            let _ = std::fs::remove_file(old);
+        }
     }
 
     pub fn enable() -> Result<String> {
@@ -55,13 +88,17 @@ mod imp {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        // `start "" /min` launches detached and minimized so login isn't blocked.
+        // VBScript string-escaping: "" inside a quoted string is a literal quote.
+        let exe = wipe_exe().replace('"', "\"\"");
         let body = format!(
-            "@echo off\r\nstart \"wipe\" /min \"{}\" serve --idle 0\r\n",
-            wipe_exe()
+            "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" serve --idle 0\", 0, False\r\n"
         );
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
-        Ok(format!("added a login entry at {}", path.display()))
+        remove_legacy();
+        Ok(format!(
+            "added a background login entry at {}",
+            path.display()
+        ))
     }
 
     pub fn disable() -> Result<String> {
@@ -69,6 +106,7 @@ mod imp {
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
+        remove_legacy();
         Ok("removed the wipe login entry".to_string())
     }
 }
@@ -84,6 +122,10 @@ mod imp {
                 .join("LaunchAgents")
                 .join("dev.wipe.autoserve.plist")
         })
+    }
+
+    pub fn is_installed() -> bool {
+        super::path_installed(entry_path())
     }
 
     pub fn enable() -> Result<String> {
@@ -140,6 +182,10 @@ mod imp {
                 .join("user")
                 .join("wipe-autoserve.service"),
         )
+    }
+
+    pub fn is_installed() -> bool {
+        super::path_installed(entry_path())
     }
 
     pub fn enable() -> Result<String> {

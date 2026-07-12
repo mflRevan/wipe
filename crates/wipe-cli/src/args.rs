@@ -61,6 +61,9 @@ pub enum Command {
     /// Manage a ticket's checklist (to-do items).
     #[command(subcommand)]
     Checklist(ChecklistCmd),
+    /// Manage a ticket's acceptance criteria (the reviewer's checklist).
+    #[command(subcommand, visible_alias = "acceptance")]
+    Criteria(ChecklistCmd),
     /// Manage labels.
     #[command(subcommand)]
     Label(LabelCmd),
@@ -364,10 +367,11 @@ pub enum CommentCmd {
     },
 }
 
-/// `wipe checklist ...`
+/// `wipe checklist ...` and `wipe criteria ...` - the two tickable surfaces on a
+/// ticket share the same verbs (checklist items are `ck-<n>`, criteria `ac-<n>`).
 #[derive(Debug, Subcommand)]
 pub enum ChecklistCmd {
-    /// Add an item to a ticket's checklist.
+    /// Add an item.
     Add {
         /// Ticket ID.
         ticket: String,
@@ -375,7 +379,7 @@ pub enum ChecklistCmd {
         #[arg(long, short)]
         text: String,
     },
-    /// List a ticket's checklist items and their state.
+    /// List a ticket's items and their state.
     List {
         /// Ticket ID.
         ticket: String,
@@ -384,28 +388,28 @@ pub enum ChecklistCmd {
     Check {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID (e.g. ck-1).
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
     },
     /// Uncheck an item (mark not done).
     Uncheck {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID.
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
     },
     /// Toggle an item's checked state.
     Toggle {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID.
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
     },
     /// Edit an item's text.
     Edit {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID.
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
         /// New text.
         #[arg(long, short)]
@@ -415,14 +419,14 @@ pub enum ChecklistCmd {
     Remove {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID.
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
     },
     /// Move an item to a new 0-based position.
     Move {
         /// Ticket ID.
         ticket: String,
-        /// Checklist item ID.
+        /// Item ID (e.g. ck-1 or ac-1).
         item: String,
         /// Target index (0-based).
         index: usize,

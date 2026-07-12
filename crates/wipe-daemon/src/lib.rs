@@ -84,6 +84,18 @@ fn router(state: AppState) -> Router {
             post(api::move_checklist_item),
         )
         .route(
+            "/api/tickets/{id}/acceptance",
+            post(api::add_acceptance_item),
+        )
+        .route(
+            "/api/tickets/{id}/acceptance/{item}",
+            patch(api::patch_acceptance_item).delete(api::delete_acceptance_item),
+        )
+        .route(
+            "/api/tickets/{id}/acceptance/{item}/move",
+            post(api::move_acceptance_item),
+        )
+        .route(
             "/api/tickets/{id}/attachments",
             post(api::upload_attachment).delete(api::delete_attachment),
         )

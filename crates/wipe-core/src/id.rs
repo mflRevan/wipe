@@ -19,6 +19,11 @@ pub fn checklist_id(n: u64) -> String {
     format!("ck-{n}")
 }
 
+/// Format an acceptance-criterion ID from its numeric counter, e.g. `ac-2`.
+pub fn acceptance_id(n: u64) -> String {
+    format!("ac-{n}")
+}
+
 /// Turn a human name into a stable kebab-case slug used for list IDs.
 ///
 /// Non-alphanumeric runs collapse to a single `-`; the result is lowercased and
@@ -52,6 +57,7 @@ mod tests {
         assert_eq!(ticket_id(23), "T-23");
         assert_eq!(comment_id(7), "c-7");
         assert_eq!(checklist_id(3), "ck-3");
+        assert_eq!(acceptance_id(2), "ac-2");
     }
 
     #[test]

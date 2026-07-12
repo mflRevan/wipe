@@ -342,6 +342,61 @@ fn forum_delete_removes_subtree_and_requires_yes() {
     assert!(!ids.iter().any(|i| i.starts_with("F-1.1")));
 }
 
+#[test]
+fn checklist_and_criteria_are_independent_surfaces() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "C"]);
+    p.json(&["ticket", "create", "-t", "Ship it"]); // T-1
+
+    // Two independent tickable lists with their own ID namespaces.
+    assert_eq!(
+        p.json(&["checklist", "add", "T-1", "-t", "write code"])["item"],
+        "ck-1"
+    );
+    assert_eq!(
+        p.json(&["criteria", "add", "T-1", "-t", "tests pass"])["item"],
+        "ac-1"
+    );
+    assert_eq!(
+        p.json(&["criteria", "add", "T-1", "-t", "docs updated"])["item"],
+        "ac-2"
+    );
+
+    // A reviewer accepts one criterion; the checklist is untouched.
+    p.json(&["criteria", "check", "T-1", "ac-1"]);
+    let ac = p.json(&["criteria", "list", "T-1"]);
+    let items = ac["acceptance"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["done"], true);
+    assert_eq!(items[1]["done"], false);
+    let ck = p.json(&["checklist", "list", "T-1"]);
+    assert_eq!(ck["checklist"][0]["done"], false);
+
+    // A ck- id is not addressable through the criteria surface.
+    assert!(!p
+        .cmd(&["criteria", "check", "T-1", "ck-1"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+}
+
+#[test]
+fn ticket_delete_rejects_path_traversal() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "Safe"]);
+    p.json(&["ticket", "create", "-t", "Real"]); // T-1
+    assert!(p.path().join(".wipe/board.json").is_file());
+
+    // A crafted id that would escape tickets/ must fail, not delete board.json.
+    let out = p
+        .cmd(&["ticket", "delete", "../board", "--yes", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(p.path().join(".wipe/board.json").is_file());
+}
+
 /// Multi-agent collaboration through the forum, each agent a separate process
 /// (as real harnesses are). This is the flagship guard that project knowledge
 /// posted by one agent is discoverable by another, and that the on-disk search

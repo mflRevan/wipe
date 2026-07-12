@@ -4,6 +4,7 @@ import type {
   AppConfig,
   Attachment,
   Board,
+  ChecksKind,
   CreateTicketInput,
   Definitions,
   ForumMatch,
@@ -88,6 +89,7 @@ function fillTicket(t: Ticket): Ticket {
     comments: t.comments ?? [],
     attachments: t.attachments ?? [],
     checklist: t.checklist ?? [],
+    acceptance: t.acceptance ?? [],
     activity: t.activity ?? []
   };
 }
@@ -280,20 +282,22 @@ export const api = {
     );
   },
 
-  // --- checklist ----------------------------------------------------------
-  // Each mutation returns the full updated ticket, so callers can re-render
-  // immediately without waiting for the next poll.
+  // --- checklist & acceptance criteria -------------------------------------
+  // `kind` picks the surface ('checklist' | 'acceptance'); the two share routes
+  // shapes. Each mutation returns the full updated ticket, so callers can
+  // re-render immediately without waiting for the next poll.
 
-  async addChecklistItem(id: string, text: string, project?: string): Promise<Ticket> {
+  async addCheckItem(kind: ChecksKind, id: string, text: string, project?: string): Promise<Ticket> {
     return fillTicket(
-      await req<Ticket>(`/api/tickets/${encodeURIComponent(id)}/checklist${qs({ project })}`, {
+      await req<Ticket>(`/api/tickets/${encodeURIComponent(id)}/${kind}${qs({ project })}`, {
         method: 'POST',
         body: JSON.stringify({ text })
       })
     );
   },
 
-  async setChecklistItem(
+  async setCheckItem(
+    kind: ChecksKind,
     id: string,
     item: string,
     patch: { done?: boolean; text?: string },
@@ -301,22 +305,23 @@ export const api = {
   ): Promise<Ticket> {
     return fillTicket(
       await req<Ticket>(
-        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}${qs({ project })}`,
+        `/api/tickets/${encodeURIComponent(id)}/${kind}/${encodeURIComponent(item)}${qs({ project })}`,
         { method: 'PATCH', body: JSON.stringify(patch) }
       )
     );
   },
 
-  async removeChecklistItem(id: string, item: string, project?: string): Promise<Ticket> {
+  async removeCheckItem(kind: ChecksKind, id: string, item: string, project?: string): Promise<Ticket> {
     return fillTicket(
       await req<Ticket>(
-        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}${qs({ project })}`,
+        `/api/tickets/${encodeURIComponent(id)}/${kind}/${encodeURIComponent(item)}${qs({ project })}`,
         { method: 'DELETE' }
       )
     );
   },
 
-  async moveChecklistItem(
+  async moveCheckItem(
+    kind: ChecksKind,
     id: string,
     item: string,
     index: number,
@@ -324,7 +329,7 @@ export const api = {
   ): Promise<Ticket> {
     return fillTicket(
       await req<Ticket>(
-        `/api/tickets/${encodeURIComponent(id)}/checklist/${encodeURIComponent(item)}/move${qs({ project })}`,
+        `/api/tickets/${encodeURIComponent(id)}/${kind}/${encodeURIComponent(item)}/move${qs({ project })}`,
         { method: 'POST', body: JSON.stringify({ index }) }
       )
     );

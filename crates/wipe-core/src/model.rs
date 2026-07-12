@@ -183,6 +183,11 @@ pub struct Ticket {
     /// Ordered checklist / to-do items within the ticket.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checklist: Vec<ChecklistItem>,
+    /// Ordered acceptance criteria: the conditions a reviewer (human or agent)
+    /// ticks off to accept the work. Same shape as the checklist, but owned by
+    /// the reviewer rather than the person doing the work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance: Vec<ChecklistItem>,
     /// Activity log (moves, label/assignee/priority changes, attachments). Shown
     /// interleaved with comments in the ticket's activity timeline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -193,6 +198,9 @@ pub struct Ticket {
     /// Next checklist-item counter for this ticket.
     #[serde(default = "one")]
     pub next_check: u64,
+    /// Next acceptance-criterion counter for this ticket.
+    #[serde(default = "one")]
+    pub next_accept: u64,
     /// When the ticket was created.
     pub created: DateTime<Utc>,
     /// When the ticket was last modified.
@@ -218,9 +226,11 @@ impl Ticket {
             attachments: Vec::new(),
             comments: Vec::new(),
             checklist: Vec::new(),
+            acceptance: Vec::new(),
             activity: Vec::new(),
             next_comment: 1,
             next_check: 1,
+            next_accept: 1,
             created: now,
             updated: now,
         }
@@ -231,6 +241,19 @@ impl Ticket {
         let id = crate::id::checklist_id(self.next_check);
         self.next_check += 1;
         self.checklist.push(ChecklistItem {
+            id: id.clone(),
+            text: text.into(),
+            done: false,
+        });
+        self.updated = now;
+        id
+    }
+
+    /// Append an acceptance criterion, allocating the next ID. Returns the new ID.
+    pub fn add_acceptance_item(&mut self, text: impl Into<String>, now: DateTime<Utc>) -> String {
+        let id = crate::id::acceptance_id(self.next_accept);
+        self.next_accept += 1;
+        self.acceptance.push(ChecklistItem {
             id: id.clone(),
             text: text.into(),
             done: false,

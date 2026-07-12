@@ -84,6 +84,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Ticket(c) => commands::ticket(out, c),
         Command::Comment(c) => commands::comment(out, c),
         Command::Checklist(c) => commands::checklist(out, c),
+        Command::Criteria(c) => commands::criteria(out, c),
         Command::Label(c) => commands::label(out, c),
         Command::Media(c) => commands::media(out, c),
         Command::Forum(c) => forum_cmd::run(out, c),

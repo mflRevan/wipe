@@ -207,6 +207,33 @@ export const CLI_GROUPS: CliGroup[] = [
     ],
   },
   {
+    name: "criteria",
+    summary:
+      "The reviewer's checklist: conditions a ticket must meet to be accepted. Same verbs as checklist; items are ac-<n>.",
+    commands: [
+      {
+        command: "wipe criteria add",
+        description: "Add an acceptance criterion to a ticket.",
+        example: 'wipe criteria add T-1 --text "All tests pass in CI"',
+      },
+      {
+        command: "wipe criteria check",
+        description: "As a reviewer, mark a criterion met (also: uncheck, toggle).",
+        example: "wipe criteria check T-1 ac-1",
+      },
+      {
+        command: "wipe criteria list",
+        description: "List a ticket's criteria and how many are met.",
+        example: "wipe criteria list T-1 --json",
+      },
+      {
+        command: "wipe criteria edit",
+        description: "Edit, remove, or move (reorder) a criterion.",
+        example: 'wipe criteria edit T-1 ac-1 --text "Docs updated"',
+      },
+    ],
+  },
+  {
     name: "label",
     summary: "Define and assign colored labels (the board's categorization).",
     commands: [

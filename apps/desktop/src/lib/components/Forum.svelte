@@ -24,6 +24,7 @@
   let ntLabels = $state<string[]>([]);
   let replyTo = $state<string | null>(null);
   let replyBody = $state('');
+  let sending = $state(false); // in-flight guard for createThread / sendReply
 
   function proj() {
     return get(currentProject) ?? undefined;
@@ -77,6 +78,10 @@
       const t = await api.forumThread(id, proj());
       if (id !== selectedId) return; // drop a stale response
       thread = t;
+      // If the reply was aimed at a post that has since been deleted (locally or by
+      // another user, via a WS refresh), re-aim it at the thread root - otherwise
+      // the composer says "reply to thread" but sends to a gone id and 400s.
+      if (replyTo && !findPost(t.root, replyTo)) replyTo = t.id;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -113,7 +118,8 @@
 
   async function createThread() {
     const title = ntTitle.trim();
-    if (!title) return;
+    if (!title || sending) return;
+    sending = true;
     try {
       const t = await api.forumPost(
         { title, body: ntBody.trim() || undefined, labels: ntLabels },
@@ -127,6 +133,8 @@
       await openThread(t.id);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      sending = false;
     }
   }
 
@@ -137,7 +145,8 @@
 
   async function sendReply() {
     const body = replyBody.trim();
-    if (!body || !replyTo) return;
+    if (!body || !replyTo || sending) return;
+    sending = true;
     try {
       await api.forumReply(replyTo, { body }, proj());
       replyBody = '';
@@ -145,6 +154,8 @@
       await loadThreads();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      sending = false;
     }
   }
 
@@ -210,7 +221,9 @@
         {/if}
         <div class="crow">
           <button class="ghost" onclick={() => (composingThread = false)}>Cancel</button>
-          <button class="prim" disabled={!ntTitle.trim()} onclick={createThread}>Post thread</button>
+          <button class="prim" disabled={!ntTitle.trim() || sending} onclick={createThread}
+            >Post thread</button
+          >
         </div>
       </div>
     {/if}
@@ -281,7 +294,12 @@
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendReply();
             }}
           ></textarea>
-          <button class="c-send" aria-label="Send reply" onclick={sendReply}><Send size={15} /></button>
+          <button
+            class="c-send"
+            aria-label="Send reply"
+            disabled={!replyBody.trim() || sending}
+            onclick={sendReply}><Send size={15} /></button
+          >
         </div>
       </div>
     {:else}

@@ -65,6 +65,13 @@ edit("apps/desktop/src-tauri/Cargo.toml", (s) =>
   s.replace(/(\nversion = ")[^"]*(")/, `$1${version}$2`)
 );
 
+// Tauri app config: in Tauri 2 a `version` here overrides the crate version, so
+// the bundled desktop app (installers, About/updater, app.getVersion()) reads it -
+// keep it in lockstep or manual `tauri build`s ship a stale version.
+edit("apps/desktop/src-tauri/tauri.conf.json", (s) =>
+  s.replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`)
+);
+
 // Frontend package.json files (private, but keep them in lockstep).
 for (const pkg of ["apps/web/package.json", "apps/desktop/package.json"]) {
   edit(pkg, (s) => s.replace(/("version"\s*:\s*")[^"]*(")/, `$1${version}$2`));

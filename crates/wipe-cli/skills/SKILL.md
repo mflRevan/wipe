@@ -1,6 +1,6 @@
 ---
 name: wipe
-description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, checklists, and board state, AND to post/search/subscribe in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
+description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, checklists, acceptance criteria, and board state, AND to post/search/subscribe in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
 ---
 
 # wipe - agent operating guide
@@ -17,7 +17,8 @@ merge-friendly; hand-editing breaks that guarantee.
    mode, stdout contains `{"ok": false, "error": "..."}`. Always check the exit code.
 3. Never write to `.wipe/` yourself. Use the commands below.
 4. IDs are stable: tickets are `T-<n>`, comments `c-<n>`, checklist items
-   `ck-<n>`, lists are kebab-case slugs (e.g. `in-progress`).
+   `ck-<n>`, acceptance criteria `ac-<n>`, lists are kebab-case slugs (e.g.
+   `in-progress`).
 5. Prefer small, explicit commands over guessing. Run `wipe <group> --help` to
    discover exact flags - the CLI is self-documenting.
 
@@ -105,6 +106,20 @@ wipe checklist list T-1 --json          # -> items with {id, text, done}
 wipe checklist check T-1 ck-1 --json    # also: uncheck, toggle
 wipe checklist edit T-1 ck-2 --text "Write end-to-end tests" --json
 wipe checklist move T-1 ck-2 0 --json   # reorder (0-based); remove to delete
+```
+
+**Acceptance criteria** are a second, reviewer-owned checklist: the conditions a
+ticket must meet to be accepted. Same verbs as `checklist`, but the group is
+`criteria` and items are `ac-<n>`. Convention: whoever *works* a ticket reads the
+criteria as the definition of done; whoever *reviews* it ticks each one and, if
+any fail, unticks them and moves the ticket back - so the worker instantly sees
+exactly what is left. As a reviewer:
+
+```bash
+wipe criteria add T-1 --text "All tests pass in CI" --json   # usually set when the ticket is written
+wipe criteria list T-1 --json           # -> {id, text, done}; see what's required and what's met
+wipe criteria check T-1 ac-1 --json     # met; uncheck/toggle when a review fails
+wipe ticket move T-1 --to todo --json   # bounce it back with the unmet criteria visible
 ```
 
 Labels (the only categorization - there is no "type" or "tags"). New labels are

@@ -44,9 +44,14 @@ export const definitions = writable<Definitions>({
 });
 export const identities = writable<Identity[]>([]);
 
-/** Ticket ids that changed since the last poll (drives the "just changed" flash).
- *  Ids auto-expire, so this is a rolling set of very recent changes. */
-export const recentlyChanged = writable<Set<string>>(new Set());
+/** How a ticket just changed, so the UI can pick a fitting animation:
+ *  `new` (materialize + typewriter), `moved` (float into its new list), or
+ *  `edited` (brief highlight). */
+export type ChangeKind = 'new' | 'moved' | 'edited';
+/** Ticket ids that changed since the last poll, mapped to how they changed
+ *  (drives the live-update animations). Entries auto-expire, so this is a rolling
+ *  map of very recent changes. */
+export const recentlyChanged = writable<Map<string, ChangeKind>>(new Map());
 /** True when the forum has new posts the viewer hasn't looked at yet. */
 export const forumUnread = writable<boolean>(false);
 
@@ -74,14 +79,18 @@ export function markSelfChange(id: string): void {
 function clearChanges(): void {
   for (const t of changeTimers.values()) clearTimeout(t);
   changeTimers.clear();
-  recentlyChanged.set(new Set());
+  recentlyChanged.set(new Map());
 }
 
-/** Flag a ticket as just-changed for ~1.8s so the UI can highlight it. */
-function flashTicket(id: string): void {
-  recentlyChanged.update((s) => {
-    const n = new Set(s);
-    n.add(id);
+// How long each animation should own the card before the entry expires. `new`
+// covers the ~1s title typewriter; `moved` is a quick float; `edited` a highlight.
+const CHANGE_TTL: Record<ChangeKind, number> = { new: 1200, moved: 700, edited: 1800 };
+
+/** Flag how a ticket just changed so the UI can animate it, clearing after its TTL. */
+function flashTicket(id: string, kind: ChangeKind): void {
+  recentlyChanged.update((m) => {
+    const n = new Map(m);
+    n.set(id, kind);
     return n;
   });
   const prev = changeTimers.get(id);
@@ -89,26 +98,29 @@ function flashTicket(id: string): void {
   changeTimers.set(
     id,
     setTimeout(() => {
-      recentlyChanged.update((s) => {
-        const n = new Set(s);
+      recentlyChanged.update((m) => {
+        const n = new Map(m);
         n.delete(id);
         return n;
       });
       changeTimers.delete(id);
-    }, 1800)
+    }, CHANGE_TTL[kind])
   );
 }
 
-/** Diff two board snapshots and flash tickets that appeared, moved, or were edited. */
+/** Diff two board snapshots and animate tickets that appeared, moved, or were edited. */
 function markChanges(prev: Board, next: Board): void {
   const before = new Map<string, { updated?: string; list: string }>();
   for (const l of prev.lists) for (const t of l.tickets) before.set(t.id, { updated: t.updated, list: l.list });
   for (const l of next.lists) {
     for (const t of l.tickets) {
       const p = before.get(t.id);
-      if ((!p || p.updated !== t.updated || p.list !== l.list) && !selfActed.has(t.id)) {
-        flashTicket(t.id);
-      }
+      if (selfActed.has(t.id)) continue;
+      // Classify the change so the card can pick the right motion. A brand-new id
+      // materializes; a same-id-different-list is a move; otherwise it's an edit.
+      if (!p) flashTicket(t.id, 'new');
+      else if (p.list !== l.list) flashTicket(t.id, 'moved');
+      else if (p.updated !== t.updated) flashTicket(t.id, 'edited');
     }
   }
 }
@@ -172,6 +184,11 @@ export async function loadProjects(): Promise<void> {
 // stale or misattributed snapshot.
 let boardIssued = 0;
 let boardApplied = 0;
+// Sequence at which the last local mutation was applied via applyTicket/moveTicket.
+// A poll GET issued at-or-before this must be dropped: it may have read the server
+// pre-mutation and would otherwise briefly revert the just-applied change (a
+// checkbox flicking back, a drop snapping home) until the next poll heals it.
+let lastMutationSeq = 0;
 /** The project the currently-stored `board` snapshot belongs to (null when it's a
  *  historical snapshot or nothing is loaded), so we only diff-for-flash within one
  *  project's live timeline. */
@@ -195,6 +212,9 @@ export async function loadBoard(opts: { silent?: boolean } = {}): Promise<void> 
     if (seq <= boardApplied) return;
     if (project() !== proj) return;
     if (get(rewindCommit)) return;
+    // Drop a poll that was in flight when a local mutation landed: it may predate
+    // the mutation on the server and would visibly revert it (see lastMutationSeq).
+    if (seq <= lastMutationSeq) return;
     boardApplied = seq;
     const prev = get(board);
     if (!prev || JSON.stringify(prev) !== JSON.stringify(next)) {
@@ -240,15 +260,29 @@ export async function loadGraph(): Promise<void> {
 /** Enter rewind mode at a specific commit and load the historical snapshot. */
 export async function enterRewind(commit: GraphCommit): Promise<void> {
   loading.set(true);
+  // Remember what we're leaving so a failed load can restore it instead of
+  // stranding the UI in rewind mode showing the LIVE board as "history".
+  const prev = get(rewindCommit);
+  const proj = project();
   try {
     // Set rewind first so any in-flight live poll bails before clobbering the
     // snapshot, and mark the stored board as historical (no flash diffing).
     rewindCommit.set(commit);
-    board.set(await api.boardAt(commit.hash, project()));
+    const snapshot = await api.boardAt(commit.hash, proj);
+    // Rapid clicks race their fetches: only apply if this is still the selected
+    // commit and project, else a slower earlier response could mislabel the board.
+    if (get(rewindCommit)?.hash !== commit.hash || project() !== proj) return;
+    board.set(snapshot);
     boardProject = null;
     clearChanges();
     boardError.set(null);
   } catch (e) {
+    // Restore the prior mode (usually live) so we never claim a snapshot we don't
+    // have - e.g. clicking a commit that predates `wipe init` (no board there).
+    if (get(rewindCommit)?.hash === commit.hash) {
+      rewindCommit.set(prev);
+      if (!prev) await loadBoard();
+    }
     boardError.set(e instanceof Error ? e.message : String(e));
   } finally {
     loading.set(false);
@@ -265,6 +299,9 @@ export async function returnToNow(): Promise<void> {
  *  ticket returned by a mutation), so the UI reflects the change immediately
  *  without waiting for the next poll. No-op if the ticket isn't on the board. */
 export function applyTicket(next: Ticket): void {
+  // Any board GET already in flight predates this local change; fence them out so
+  // they can't overwrite what we're about to splice in.
+  lastMutationSeq = boardIssued;
   board.update((b) => {
     if (!b) return b;
     let changed = false;
@@ -286,6 +323,8 @@ export function applyTicket(next: Ticket): void {
  *  suppress the "just changed" flash for it (that highlight is for remote edits). */
 export async function moveTicket(id: string, to: string, pos: number): Promise<void> {
   markSelfChange(id);
+  // Fence out any in-flight poll so a stale snapshot can't snap the card back.
+  lastMutationSeq = boardIssued;
   try {
     await api.moveTicket(id, to, pos, project());
   } catch (e) {
@@ -423,8 +462,12 @@ export function resetForumIndicator(): void {
 }
 
 async function refreshForumIndicator(): Promise<void> {
+  const proj = project();
   try {
-    const threads = await api.forumThreads(project());
+    const threads = await api.forumThreads(proj);
+    // Drop a response that resolved after a project switch, or it would poison the
+    // new project's baseline with the old project's post count (false unread dot).
+    if (project() !== proj) return;
     const total = threads.reduce((n, t) => n + (t.posts ?? 0), 0);
     if (lastForumPosts >= 0 && total > lastForumPosts && !onForumView) forumUnread.set(true);
     lastForumPosts = total;

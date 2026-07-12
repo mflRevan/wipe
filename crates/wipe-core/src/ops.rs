@@ -152,40 +152,81 @@ pub fn add_comment(
     Ok(id)
 }
 
-// --- checklist ---------------------------------------------------------------
+// --- checklist & acceptance criteria ------------------------------------------
+//
+// The two tickable surfaces on a ticket share one item shape and identical
+// operations; [`Checks`] selects which list (and ID namespace) a call targets.
 
-fn checklist_item_mut<'t>(ticket: &'t mut Ticket, item_id: &str) -> Result<&'t mut ChecklistItem> {
-    ticket
-        .checklist
-        .iter_mut()
-        .find(|i| i.id == item_id)
-        .ok_or_else(|| Error::msg(format!("checklist item `{item_id}` not found")))
+/// Which tickable list on a ticket an operation targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Checks {
+    /// The worker-facing to-do checklist (`ck-<n>` items).
+    Checklist,
+    /// The reviewer-facing acceptance criteria (`ac-<n>` items).
+    Acceptance,
 }
 
-/// Append a checklist item to a ticket. Returns the new item's ID.
-pub fn checklist_add(
+impl Checks {
+    fn items(self, t: &mut Ticket) -> &mut Vec<ChecklistItem> {
+        match self {
+            Checks::Checklist => &mut t.checklist,
+            Checks::Acceptance => &mut t.acceptance,
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Checks::Checklist => "checklist item",
+            Checks::Acceptance => "acceptance criterion",
+        }
+    }
+
+    fn append(self, t: &mut Ticket, text: &str, now: DateTime<Utc>) -> String {
+        match self {
+            Checks::Checklist => t.add_checklist_item(text, now),
+            Checks::Acceptance => t.add_acceptance_item(text, now),
+        }
+    }
+}
+
+fn checks_item_mut<'t>(
+    kind: Checks,
+    ticket: &'t mut Ticket,
+    item_id: &str,
+) -> Result<&'t mut ChecklistItem> {
+    kind.items(ticket)
+        .iter_mut()
+        .find(|i| i.id == item_id)
+        .ok_or_else(|| Error::msg(format!("{} `{item_id}` not found", kind.noun())))
+}
+
+/// Append an item to a ticket's checklist or acceptance criteria. Returns the
+/// new item's ID.
+pub fn checks_add(
     store: &Store,
+    kind: Checks,
     ticket_id: &str,
     text: &str,
     now: DateTime<Utc>,
 ) -> Result<String> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    let id = ticket.add_checklist_item(text, now);
+    let id = kind.append(&mut ticket, text, now);
     store.save_ticket(&ticket)?;
     Ok(id)
 }
 
-/// Set a checklist item's checked state. `done = None` toggles it. Returns the
+/// Set an item's checked state. `done = None` toggles it. Returns the
 /// resulting state.
-pub fn checklist_set(
+pub fn checks_set(
     store: &Store,
+    kind: Checks,
     ticket_id: &str,
     item_id: &str,
     done: Option<bool>,
     now: DateTime<Utc>,
 ) -> Result<bool> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    let item = checklist_item_mut(&mut ticket, item_id)?;
+    let item = checks_item_mut(kind, &mut ticket, item_id)?;
     item.done = done.unwrap_or(!item.done);
     let state = item.done;
     ticket.updated = now;
@@ -193,56 +234,60 @@ pub fn checklist_set(
     Ok(state)
 }
 
-/// Edit a checklist item's text.
-pub fn checklist_edit(
+/// Edit an item's text.
+pub fn checks_edit(
     store: &Store,
+    kind: Checks,
     ticket_id: &str,
     item_id: &str,
     text: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    checklist_item_mut(&mut ticket, item_id)?.text = text.to_string();
+    checks_item_mut(kind, &mut ticket, item_id)?.text = text.to_string();
     ticket.updated = now;
     store.save_ticket(&ticket)?;
     Ok(())
 }
 
-/// Remove a checklist item.
-pub fn checklist_remove(
+/// Remove an item.
+pub fn checks_remove(
     store: &Store,
+    kind: Checks,
     ticket_id: &str,
     item_id: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    let before = ticket.checklist.len();
-    ticket.checklist.retain(|i| i.id != item_id);
-    if ticket.checklist.len() == before {
-        return Err(Error::msg(format!("checklist item `{item_id}` not found")));
+    let items = kind.items(&mut ticket);
+    let before = items.len();
+    items.retain(|i| i.id != item_id);
+    if items.len() == before {
+        return Err(Error::msg(format!("{} `{item_id}` not found", kind.noun())));
     }
     ticket.updated = now;
     store.save_ticket(&ticket)?;
     Ok(())
 }
 
-/// Move a checklist item to a new 0-based position (clamped to the list length).
-pub fn checklist_move(
+/// Move an item to a new 0-based position (clamped to the list length).
+pub fn checks_move(
     store: &Store,
+    kind: Checks,
     ticket_id: &str,
     item_id: &str,
     index: usize,
     now: DateTime<Utc>,
 ) -> Result<()> {
     let mut ticket = store.load_ticket(ticket_id)?;
-    let from = ticket
-        .checklist
+    let items = kind.items(&mut ticket);
+    let from = items
         .iter()
         .position(|i| i.id == item_id)
-        .ok_or_else(|| Error::msg(format!("checklist item `{item_id}` not found")))?;
-    let item = ticket.checklist.remove(from);
-    let to = index.min(ticket.checklist.len());
-    ticket.checklist.insert(to, item);
+        .ok_or_else(|| Error::msg(format!("{} `{item_id}` not found", kind.noun())))?;
+    let item = items.remove(from);
+    let to = index.min(items.len());
+    items.insert(to, item);
     ticket.updated = now;
     store.save_ticket(&ticket)?;
     Ok(())
@@ -748,23 +793,24 @@ mod tests {
             now(),
         )
         .unwrap();
-        let a = checklist_add(&s, "T-1", "first", now()).unwrap();
-        let b = checklist_add(&s, "T-1", "second", now()).unwrap();
-        let c = checklist_add(&s, "T-1", "third", now()).unwrap();
+        let k = Checks::Checklist;
+        let a = checks_add(&s, k, "T-1", "first", now()).unwrap();
+        let b = checks_add(&s, k, "T-1", "second", now()).unwrap();
+        let c = checks_add(&s, k, "T-1", "third", now()).unwrap();
         assert_eq!(
             (a.as_str(), b.as_str(), c.as_str()),
             ("ck-1", "ck-2", "ck-3")
         );
 
         // toggle + explicit set
-        assert!(checklist_set(&s, "T-1", "ck-1", None, now()).unwrap());
-        assert!(!checklist_set(&s, "T-1", "ck-1", Some(false), now()).unwrap());
-        checklist_set(&s, "T-1", "ck-2", Some(true), now()).unwrap();
+        assert!(checks_set(&s, k, "T-1", "ck-1", None, now()).unwrap());
+        assert!(!checks_set(&s, k, "T-1", "ck-1", Some(false), now()).unwrap());
+        checks_set(&s, k, "T-1", "ck-2", Some(true), now()).unwrap();
 
         // edit + move (ck-3 to front) + remove
-        checklist_edit(&s, "T-1", "ck-2", "second!", now()).unwrap();
-        checklist_move(&s, "T-1", "ck-3", 0, now()).unwrap();
-        checklist_remove(&s, "T-1", "ck-1", now()).unwrap();
+        checks_edit(&s, k, "T-1", "ck-2", "second!", now()).unwrap();
+        checks_move(&s, k, "T-1", "ck-3", 0, now()).unwrap();
+        checks_remove(&s, k, "T-1", "ck-1", now()).unwrap();
 
         let t = s.load_ticket("T-1").unwrap();
         assert_eq!(
@@ -780,8 +826,40 @@ mod tests {
         assert_eq!(t.next_check, 4);
 
         // missing item is an error, not a panic
-        assert!(checklist_set(&s, "T-1", "ck-99", None, now()).is_err());
-        assert!(checklist_remove(&s, "T-1", "ck-99", now()).is_err());
+        assert!(checks_set(&s, k, "T-1", "ck-99", None, now()).is_err());
+        assert!(checks_remove(&s, k, "T-1", "ck-99", now()).is_err());
+    }
+
+    #[test]
+    fn acceptance_criteria_are_independent_of_the_checklist() {
+        let (_d, s) = project();
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "Review me".into(),
+                ..Default::default()
+            },
+            "tester",
+            now(),
+        )
+        .unwrap();
+        // Both surfaces allocate from their own counters and namespaces.
+        let ck = checks_add(&s, Checks::Checklist, "T-1", "do the work", now()).unwrap();
+        let a1 = checks_add(&s, Checks::Acceptance, "T-1", "tests pass", now()).unwrap();
+        let a2 = checks_add(&s, Checks::Acceptance, "T-1", "docs updated", now()).unwrap();
+        assert_eq!(
+            (ck.as_str(), a1.as_str(), a2.as_str()),
+            ("ck-1", "ac-1", "ac-2")
+        );
+
+        assert!(checks_set(&s, Checks::Acceptance, "T-1", "ac-1", Some(true), now()).unwrap());
+        let t = s.load_ticket("T-1").unwrap();
+        assert!(t.acceptance[0].done);
+        assert!(!t.checklist[0].done);
+        assert_eq!((t.next_check, t.next_accept), (2, 3));
+
+        // A `ck-` ID is not addressable through the acceptance surface.
+        assert!(checks_set(&s, Checks::Acceptance, "T-1", "ck-1", None, now()).is_err());
     }
 
     #[test]

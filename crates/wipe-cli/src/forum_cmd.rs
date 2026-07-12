@@ -114,8 +114,12 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
                 .find(&id)
                 .ok_or_else(|| anyhow!("forum post `{id}` not found"))?;
             if out.json {
+                // Honor --depth in JSON too (it previously returned the whole
+                // subtree regardless), so an agent that bounds the tree gets a
+                // bounded payload that matches the human output.
+                let pruned = prune_depth(root, depth);
                 out.json_value(
-                    &json!({ "thread": thread.id, "title": thread.title, "post": to_value(root) }),
+                    &json!({ "thread": thread.id, "title": thread.title, "post": to_value(&pruned) }),
                 );
             } else {
                 if root.id == thread.id {
@@ -247,6 +251,20 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
     Ok(())
 }
 
+/// Clone a post, keeping replies only down to `max_depth` levels below it (same
+/// bound `render` applies): `Some(0)` drops all replies, `None` keeps the whole
+/// subtree. Used so `forum show --json --depth N` returns a bounded tree.
+fn prune_depth(post: &Post, max_depth: Option<usize>) -> Post {
+    let mut out = post.clone();
+    if max_depth == Some(0) {
+        out.replies = Vec::new();
+    } else {
+        let next = max_depth.map(|d| d - 1);
+        out.replies = post.replies.iter().map(|r| prune_depth(r, next)).collect();
+    }
+    out
+}
+
 /// Render a post and (bounded by `max_depth`) its reply subtree as an indented tree.
 fn render(post: &Post, level: usize, max_depth: Option<usize>) {
     let pad = "  ".repeat(level);
@@ -297,7 +315,10 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
                 initial.iter().filter(|p| forum::matches(p, &q)).collect();
             matched.sort_by_key(|p| p.created);
             for p in matched {
-                emit(p);
+                // A closed pipe (consumer gone) ends the watch cleanly.
+                if emit(p).is_err() {
+                    return Ok(());
+                }
             }
         }
         initial.into_iter().map(|p| p.id).collect()
@@ -315,7 +336,9 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
             .collect();
         fresh.sort_by_key(|p| p.created); // oldest-first
         for p in fresh {
-            emit(p);
+            if emit(p).is_err() {
+                return Ok(());
+            }
         }
         // Rebuild `seen` from the current ids each poll: bounded memory, and safe
         // because dotted ids are never reused (a deleted id can never return).
@@ -324,7 +347,10 @@ fn watch(store: &Store, a: ForumWatchArgs) -> Result<()> {
 }
 
 /// Write one NDJSON event to stdout and flush (so listeners get it immediately).
-fn emit(p: &PostView) {
+/// A write error means the consumer closed the pipe (e.g. `| head -1`, or a
+/// harness that exited); propagate it so `watch` stops cleanly instead of
+/// polling and re-indexing the forum forever as an orphan.
+fn emit(p: &PostView) -> std::io::Result<()> {
     let event = json!({
         "id": p.id,
         "thread": p.thread_id,
@@ -336,6 +362,6 @@ fn emit(p: &PostView) {
         "created": p.created,
     });
     let mut lock = std::io::stdout().lock();
-    let _ = writeln!(lock, "{event}");
-    let _ = lock.flush();
+    writeln!(lock, "{event}")?;
+    lock.flush()
 }
