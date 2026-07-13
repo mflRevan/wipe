@@ -164,7 +164,8 @@ function Installation() {
             content: (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  A pure install wrapper that downloads the prebuilt binary.
+                  A pure install wrapper that downloads the prebuilt binary
+                  (Linux x64 and Windows x64; on macOS or ARM, install with cargo).
                 </p>
                 <CodeBlock code="npm install -g @mflrevan/wipe" prompt />
               </div>

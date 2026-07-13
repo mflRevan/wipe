@@ -99,7 +99,7 @@ each has a specific job and generally must live at the repo root.
 
 | File | Why it exists |
 | --- | --- |
-| `dist-workspace.toml` | Config for **cargo-dist** - a tool that, when you push a version tag, builds the `wipe` binary for every OS (Linux/macOS/Windows), makes install scripts, and attaches them to a GitHub Release. |
+| `dist-workspace.toml` | Config for **cargo-dist** - a tool that, when you push a version tag, builds the `wipe` binary (currently Linux x64 and Windows x64; macOS/ARM install from cargo/source), makes install scripts, and attaches them to a GitHub Release. |
 | `release-plz.toml` | Config for **release-plz** - see "What is release-plz" below. |
 
 ### Community / legal / meta

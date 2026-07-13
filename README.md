@@ -100,13 +100,13 @@ settle decisions and record gotchas, right next to the work and tracked in git:
 
 ## Install
 
-**npm** (downloads the prebuilt binary for your platform):
+**npm** (downloads a prebuilt binary — Linux x64 and Windows x64):
 
 ```sh
 npm install -g @mflrevan/wipe
 ```
 
-**Cargo** (builds from source):
+**Cargo** (builds from source — any platform, incl. macOS and ARM):
 
 ```sh
 cargo install wipe-cli
