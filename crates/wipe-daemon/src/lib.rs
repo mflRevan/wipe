@@ -14,7 +14,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
@@ -71,9 +71,16 @@ fn router(state: AppState) -> Router {
             put(api::put_identity).delete(api::delete_identity),
         )
         .route("/api/tickets", post(api::create_ticket))
-        .route("/api/tickets/{id}", patch(api::patch_ticket))
+        .route(
+            "/api/tickets/{id}",
+            patch(api::patch_ticket).delete(api::delete_ticket),
+        )
         .route("/api/tickets/{id}/move", post(api::move_ticket))
         .route("/api/tickets/{id}/comments", post(api::add_comment))
+        .route(
+            "/api/tickets/{id}/comments/{comment}",
+            delete(api::delete_comment),
+        )
         .route("/api/tickets/{id}/checklist", post(api::add_checklist_item))
         .route(
             "/api/tickets/{id}/checklist/{item}",

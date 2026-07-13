@@ -43,6 +43,10 @@ fn main() -> ExitCode {
     if let Some(id) = cli.agentid.as_deref() {
         // Make the agent visible in the board's identity list (best-effort).
         identity::ensure_registered(id, None, true);
+    } else if let Some(id) = identity::agent_env() {
+        // A per-terminal $WIPE_AGENT identity registers as an agent too, so it shows
+        // up in the board like any other author (best-effort, insert-only).
+        identity::ensure_registered(&id, None, true);
     }
 
     // On the very first interactive run of a fresh install, offer the guided global

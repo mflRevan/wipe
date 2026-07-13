@@ -117,11 +117,19 @@
           <div class="mdiv"></div>
           <button
             class="mi danger"
-            disabled={tickets.length > 0}
-            title={tickets.length > 0 ? 'List must be empty' : 'Delete list'}
+            title="Delete list"
             onclick={() => {
               close();
-              ondelete?.(listId);
+              // Deleting a non-empty list also deletes its tickets - confirm first
+              // so a menu misclick can't wipe a column of work.
+              if (
+                tickets.length === 0 ||
+                confirm(
+                  `Delete "${name}" and its ${tickets.length} ticket${tickets.length === 1 ? '' : 's'}? This cannot be undone.`
+                )
+              ) {
+                ondelete?.(listId);
+              }
             }}><Trash2 size={14} /> Delete list</button
           >
         {/snippet}

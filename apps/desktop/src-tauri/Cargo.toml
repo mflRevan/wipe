@@ -4,7 +4,7 @@
 
 [package]
 name = "wipe-desktop"
-version = "0.3.8"
+version = "0.3.9"
 description = "wipe desktop app (Tauri wrapper around the SvelteKit UI)"
 authors = ["Aiman <aiman@shabib.net>"]
 license = "MIT"

@@ -60,11 +60,24 @@ to a generic default.
 Alternatively, attribute a **single** command without binding a session by passing
 the global `--agentid` flag: `wipe --agentid claude ticket create -t "…" --json`.
 
-Resolution order (highest first): `--author`/`--agentid` → session identity
-(`wipe identity use`) → `$WIPE_AUTHOR` → the project's VCS user → the board/global
-default. (If the user set `identity.prefer`, the configured default overrides the
-VCS user.) Sessions are keyed by `$WIPE_SESSION`; if your harness sets a unique value
-per terminal, concurrent agents never clash.
+**Multiple agents on one machine / shared worktree? Use `$WIPE_AGENT`.** Export
+`WIPE_AGENT=<your-id>` once per terminal and every `wipe` command in that terminal
+(and its child processes) is attributed to you — no `wipe identity use`, no
+`--agentid` on each call. Because it's a plain env var it is per-process and can
+**never be stomped by a concurrent agent**, unlike the session binding (which lives
+in a shared file and *will* be overwritten when several agents share a box). This is
+the reliable pattern for fan-out/multi-agent setups:
+
+```bash
+export WIPE_AGENT="claude-dev"       # bash;  $env:WIPE_AGENT = "claude-dev"  (PowerShell)
+wipe ticket create -t "Add login" --json   # authored as claude-dev, race-free
+```
+
+Resolution order (highest first): `--author`/`--agentid` → `$WIPE_AGENT` → session
+identity (`wipe identity use`) → `$WIPE_AUTHOR` → the project's VCS user → the
+board/global default. (If the user set `identity.prefer`, the configured default
+overrides the VCS user.) Interactive single-agent sessions can still use
+`wipe identity use`; it's keyed by `$WIPE_SESSION`.
 
 ## Everyday flows
 
@@ -94,6 +107,7 @@ Collaborate via comments (this is the human↔agent / agent↔agent channel):
 ```bash
 wipe comment add T-1 --body "Spec clarified: use OAuth" --json
 wipe comment list T-1 --json
+wipe comment remove T-1 c-2 --json    # delete a comment (ids are never reused)
 ```
 
 Break a ticket into checklist items and tick them off as you go. Items get stable

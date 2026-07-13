@@ -152,6 +152,12 @@ export interface ForumThreadSummary {
   labels: string[];
   posts: number;
   created: string;
+  /** Last-activity timestamp (most recent post in the thread) — drives the sort. */
+  updated: string;
+  /** Who made the most recent post (bumped the thread). */
+  last_author: string;
+  /** One-line preview from the root post. */
+  snippet: string;
 }
 
 /** A flattened post returned by forum search. */

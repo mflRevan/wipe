@@ -2,10 +2,12 @@
   import { browser } from '$app/environment';
   import { Plus } from 'lucide-svelte';
   import Column from './Column.svelte';
+  import TrashZone from './TrashZone.svelte';
   import {
     board,
     rewinding,
     moveTicket,
+    deleteTicket,
     createList,
     renameList,
     moveList,
@@ -137,6 +139,12 @@
     <div class="empty">This board has no lists.</div>
   {/if}
 </div>
+
+<!-- Drag a card here to delete it. Hidden unless a drag is in progress, and only
+     while the board is live (not when viewing history). -->
+{#if !$rewinding}
+  <TrashZone {dragActive} {flipMs} ondelete={(id) => deleteTicket(id)} />
+{/if}
 
 <style>
   .board {

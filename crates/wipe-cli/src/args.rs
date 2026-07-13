@@ -365,6 +365,13 @@ pub enum CommentCmd {
         /// Ticket ID.
         ticket: String,
     },
+    /// Remove a comment from a ticket.
+    Remove {
+        /// Ticket ID.
+        ticket: String,
+        /// Comment ID (e.g. c-1).
+        comment: String,
+    },
 }
 
 /// `wipe checklist ...` and `wipe criteria ...` - the two tickable surfaces on a

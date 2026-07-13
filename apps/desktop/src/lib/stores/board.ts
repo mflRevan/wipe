@@ -333,6 +333,24 @@ export async function moveTicket(id: string, to: string, pos: number): Promise<v
   }
 }
 
+/** Delete a ticket, then let the poll/WS reconcile. Local action, so fence out any
+ *  in-flight poll (it may still list the ticket) and suppress the change-flash. */
+export async function deleteTicket(id: string): Promise<void> {
+  markSelfChange(id);
+  lastMutationSeq = boardIssued;
+  try {
+    await api.deleteTicket(id, project());
+    // Reflect the removal immediately so the card leaves without waiting for a poll.
+    board.update((b) => {
+      if (!b) return b;
+      return { ...b, lists: b.lists.map((l) => ({ ...l, tickets: l.tickets.filter((t) => t.id !== id) })) };
+    });
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+    await loadBoard(); // roll back to server truth
+  }
+}
+
 /** Create a new list, then refresh. */
 export async function createList(name: string): Promise<void> {
   try {

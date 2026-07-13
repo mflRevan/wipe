@@ -41,6 +41,24 @@
     const m = id.match(/^(.*?)\s*<[^>]+>$/);
     return m && m[1] ? m[1] : id;
   }
+  /** Compact "last activity" label: 5s → "now", then m / h / d, then a date. */
+  function relativeTime(iso?: string): string {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const s = Math.max(0, (Date.now() - then) / 1000);
+    if (s < 45) return 'now';
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    if (s < 86400) return `${Math.round(s / 3600)}h`;
+    if (s < 7 * 86400) return `${Math.round(s / 86400)}d`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  function labelColorFor(name: string) {
+    const def = $definitions.labels.find((l) => l.name === name);
+    return labelColor(name, def?.color);
+  }
+  // Thread whose feed is open — for the header meta row.
+  let openSummary = $derived(threads.find((t) => t.id === selectedId));
 
   function findPost(root: Post | undefined, id: string): Post | undefined {
     if (!root) return undefined;
@@ -240,11 +258,12 @@
     </div>
 
     {#if results !== null}
-      <div class="reslabel">{results.length} match(es)</div>
+      <div class="reslabel">{results.length} result{results.length === 1 ? '' : 's'}</div>
       {#each results as r (r.id)}
         <button class="threadrow" onclick={() => openThread(r.thread_id)}>
-          <div class="tr-meta">{displayName(r.author)}</div>
+          <div class="tr-title">{r.thread_title}</div>
           <div class="tr-snip">{r.body}</div>
+          <div class="tr-sub"><span class="tr-meta">{displayName(r.author)}</span></div>
         </button>
       {/each}
     {:else}
@@ -254,10 +273,21 @@
           class:active={t.id === selectedId}
           onclick={() => openThread(t.id)}
         >
-          <div class="tr-title">{t.title}</div>
+          <div class="tr-top">
+            <span class="tr-title">{t.title}</span>
+            <span class="tr-count" title="{t.posts} post{t.posts === 1 ? '' : 's'}">{t.posts}</span>
+          </div>
+          {#if t.snippet}<div class="tr-snip">{t.snippet}</div>{/if}
+          {#if t.labels?.length}
+            <div class="tr-labels">
+              {#each t.labels.slice(0, 3) as l (l)}
+                <span class="tr-chip" style="--c:{labelColorFor(l)}">{l}</span>
+              {/each}
+            </div>
+          {/if}
           <div class="tr-sub">
-            <span class="tr-meta">{displayName(t.author)}</span>
-            <span class="tr-count">{t.posts}</span>
+            <span class="tr-meta">{displayName(t.last_author ?? t.author)}</span>
+            <span class="tr-time" title="last activity">{relativeTime(t.updated ?? t.created)}</span>
           </div>
         </button>
       {:else}
@@ -271,6 +301,24 @@
     {#if thread}
       <header class="th-head">
         <h2>{thread.title}</h2>
+        <div class="th-meta">
+          <span class="thread-id">{thread.id}</span>
+          <span class="dot">·</span>
+          <span>started by {displayName(thread.root.author)}</span>
+          {#if openSummary}
+            <span class="dot">·</span>
+            <span>{openSummary.posts} post{openSummary.posts === 1 ? '' : 's'}</span>
+            <span class="dot">·</span>
+            <span>active {relativeTime(openSummary.updated)}</span>
+          {/if}
+          {#if openSummary?.labels?.length}
+            <span class="th-labels">
+              {#each openSummary.labels as l (l)}
+                <span class="tr-chip" style="--c:{labelColorFor(l)}">{l}</span>
+              {/each}
+            </span>
+          {/if}
+        </div>
       </header>
       <div class="feed wp-scroll">
         <ForumPost post={thread.root} onreply={startReply} ondelete={del} />
@@ -448,54 +496,121 @@
     padding: 2px 4px;
   }
   .threadrow {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     text-align: left;
-    padding: 9px 10px;
+    padding: 10px 11px;
     border: 1px solid var(--wp-border);
     border-radius: var(--wp-r-md);
     background: var(--wp-card);
     cursor: pointer;
     color: var(--wp-text);
+    transition:
+      background var(--wp-fast) var(--wp-ease),
+      border-color var(--wp-fast) var(--wp-ease),
+      transform var(--wp-fast) var(--wp-ease);
   }
   .threadrow:hover {
     background: var(--wp-elevated);
+    border-color: var(--wp-border-strong);
   }
+  /* Active thread: an accent spine on the left + tinted surface. */
   .threadrow.active {
-    border-color: var(--wp-accent);
-    background: color-mix(in srgb, var(--wp-accent) 8%, transparent);
+    border-color: color-mix(in srgb, var(--wp-accent) 55%, transparent);
+    background: color-mix(in srgb, var(--wp-accent) 9%, var(--wp-card));
+  }
+  .threadrow.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 var(--wp-r-pill) var(--wp-r-pill) 0;
+    background: var(--wp-accent);
+  }
+  .tr-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
   }
   .tr-title {
-    font-size: 13px;
-    font-weight: 500;
+    font-family: var(--wp-font-display);
+    font-size: 13.5px;
+    font-weight: 600;
     line-height: 1.3;
+    letter-spacing: -0.005em;
+    /* two-line clamp so long titles stay tidy */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .tr-sub {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
   }
   .tr-meta {
     font-size: 11px;
     color: var(--wp-text-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-time {
+    font-family: var(--wp-font-mono);
+    font-size: 10.5px;
+    color: var(--wp-text-subtle);
+    flex: none;
   }
   .tr-count {
     font-family: var(--wp-font-mono);
     font-size: 11px;
-    min-width: 18px;
-    text-align: center;
-    padding: 0 5px;
+    min-width: 20px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
     border-radius: var(--wp-r-pill);
     background: var(--wp-surface);
     border: 1px solid var(--wp-border);
     color: var(--wp-text-subtle);
+    flex: none;
   }
   .tr-snip {
     font-size: 12px;
+    line-height: 1.45;
     color: var(--wp-text-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+  }
+  .tr-labels,
+  .th-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .tr-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 17px;
+    padding: 0 7px 0 6px;
+    border-radius: var(--wp-r-pill);
+    font-size: 10px;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--c) 82%, var(--wp-text));
+    background: color-mix(in srgb, var(--c) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
     white-space: nowrap;
   }
   .empty,
@@ -516,13 +631,34 @@
     min-height: 0;
   }
   .th-head {
-    padding-bottom: 10px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--wp-border);
   }
   .th-head h2 {
     font-family: var(--wp-font-display);
-    font-size: 18px;
-    font-weight: 600;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+  .th-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--wp-text-subtle);
+  }
+  .th-meta .thread-id {
+    font-family: var(--wp-font-mono);
+    color: var(--wp-text-muted);
+  }
+  .th-meta .dot {
+    opacity: 0.5;
+  }
+  .th-meta .th-labels {
+    margin-left: 2px;
   }
   .feed {
     flex: 1;

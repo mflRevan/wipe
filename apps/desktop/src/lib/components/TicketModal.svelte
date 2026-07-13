@@ -202,6 +202,17 @@
     }
   }
 
+  async function deleteComment(commentId: string) {
+    if (!ticket) return;
+    saveError = null;
+    markSelfChange(ticket.id);
+    try {
+      applyTicket(await api.deleteComment(ticket.id, commentId, proj()));
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function identityFor(id: string) {
     return $identities.find((i) => i.id === id);
   }
@@ -461,6 +472,14 @@
                        ? ' · edited'
                        : ''}</span
                    >
+                   {#if !readOnly}
+                     <button
+                       class="c-del"
+                       aria-label="Delete comment"
+                       title="Delete comment"
+                       onclick={() => deleteComment(item.comment.id)}><X size={13} /></button
+                     >
+                   {/if}
                  </div>
                  <div class="c-body"><Markdown source={item.comment.body} /></div>
                </div>
@@ -861,6 +880,27 @@
     font-family: var(--wp-font-mono);
     font-size: 11px;
     color: var(--wp-text-subtle);
+  }
+  .c-del {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--wp-r-sm);
+    background: none;
+    color: var(--wp-text-subtle);
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--wp-fast) var(--wp-ease);
+  }
+  .comment:hover .c-del {
+    opacity: 1;
+  }
+  .c-del:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-error);
   }
   .c-add {
     display: flex;

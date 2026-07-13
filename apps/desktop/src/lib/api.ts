@@ -270,6 +270,12 @@ export const api = {
     });
   },
 
+  deleteTicket(id: string, project?: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/api/tickets/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'DELETE'
+    });
+  },
+
   addComment(
     id: string,
     body: string,
@@ -279,6 +285,15 @@ export const api = {
     return req<{ ok: boolean; comment: string }>(
       `/api/tickets/${encodeURIComponent(id)}/comments${qs({ project })}`,
       { method: 'POST', body: JSON.stringify({ body, author }) }
+    );
+  },
+
+  async deleteComment(id: string, comment: string, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(
+        `/api/tickets/${encodeURIComponent(id)}/comments/${encodeURIComponent(comment)}${qs({ project })}`,
+        { method: 'DELETE' }
+      )
     );
   },
 

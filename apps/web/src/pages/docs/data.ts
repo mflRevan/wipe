@@ -178,6 +178,11 @@ export const CLI_GROUPS: CliGroup[] = [
         description: "List all comments on a ticket.",
         example: "wipe comment list T-1",
       },
+      {
+        command: "wipe comment remove",
+        description: "Delete a comment from a ticket by its id.",
+        example: "wipe comment remove T-1 c-2",
+      },
     ],
   },
   {

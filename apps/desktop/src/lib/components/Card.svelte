@@ -54,8 +54,15 @@
   let cover = $derived<Attachment | undefined>(
     ticket.attachments.find((a) => mediaKind(a.mime, a.name) === 'image')
   );
+  // Resolve an assignee to its identity. Identities are keyed by bare email, but
+  // assignees are often stored as the full git form `Name <email>` — so fall back
+  // to matching the address inside the angle brackets (else the avatar/name/kind
+  // never resolve for git-human assignees).
   function identityFor(id: string) {
-    return $identities.find((i) => i.id === id);
+    const direct = $identities.find((i) => i.id === id);
+    if (direct) return direct;
+    const m = id.match(/<([^>]+)>/);
+    return m ? $identities.find((i) => i.id === m[1]) : undefined;
   }
 </script>
 

@@ -382,6 +382,60 @@ fn checklist_and_criteria_are_independent_surfaces() {
 }
 
 #[test]
+fn comments_can_be_added_and_removed() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "C"]);
+    p.json(&["ticket", "create", "-t", "Talk"]); // T-1
+    assert_eq!(
+        p.json(&["comment", "add", "T-1", "-b", "first"])["comment"],
+        "c-1"
+    );
+    p.json(&["comment", "add", "T-1", "-b", "second"]); // c-2
+
+    p.json(&["comment", "remove", "T-1", "c-1"]);
+    let listed = p.json(&["comment", "list", "T-1"]);
+    let ids: Vec<String> = listed["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, vec!["c-2"]);
+
+    // A fresh comment still advances the counter (no id reuse after deletion).
+    assert_eq!(
+        p.json(&["comment", "add", "T-1", "-b", "third"])["comment"],
+        "c-3"
+    );
+    // Removing a missing comment is an error, not a panic.
+    assert!(!p
+        .cmd(&["comment", "remove", "T-1", "c-99"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+}
+
+#[test]
+fn wipe_agent_env_outranks_wipe_author() {
+    // The per-terminal $WIPE_AGENT identity must win over $WIPE_AUTHOR (which the
+    // test harness always sets), so multi-agent attribution is race-free.
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "A"]);
+    p.json(&["ticket", "create", "-t", "X"]); // T-1
+    let mut c = p.cmd(&["comment", "add", "T-1", "-b", "hi", "--json"]);
+    c.env("WIPE_AGENT", "agent-7");
+    let out = c.output().unwrap();
+    assert!(
+        out.status.success(),
+        "comment add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listed = p.json(&["comment", "list", "T-1"]);
+    assert_eq!(listed["comments"][0]["author"], "agent-7");
+}
+
+#[test]
 fn ticket_delete_rejects_path_traversal() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "Safe"]);

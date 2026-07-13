@@ -284,6 +284,19 @@ pub async fn create_ticket(
     Ok(Json(serde_json::to_value(ticket)?))
 }
 
+/// `DELETE /api/tickets/{id}` - delete a ticket and remove its card from the
+/// board. Project comes from the `?project=` query.
+pub async fn delete_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    ops::delete_ticket(&store, &id, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
 /// Body for moving a ticket.
 #[derive(Debug, Deserialize)]
 pub struct MoveBody {
@@ -326,10 +339,26 @@ pub async fn add_comment(
     Json(b): Json<CommentBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let author = b.author.unwrap_or_else(|| "ui".to_string());
+    // Resolve like every other authored action (falls back to the repo VCS/board
+    // default) instead of stamping the sentinel "ui", so UI comments are attributed
+    // to the real identity and render consistently with CLI/forum authorship.
+    let author = resolve_actor(&store, b.author);
     let cid = ops::add_comment(&store, &id, &author, &b.body, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
+}
+
+/// `DELETE /api/tickets/{id}/comments/{comment}` - remove a comment; returns the
+/// updated ticket. Project comes from the `?project=` query.
+pub async fn delete_comment(
+    State(state): State<AppState>,
+    Path((id, comment)): Path<(String, String)>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    ops::delete_comment(&store, &id, &comment, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))
 }
 
 // --- checklist & acceptance criteria -------------------------------------------
@@ -843,11 +872,29 @@ pub async fn remove_list(
 pub async fn forum_list(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
     let store = store_for(&state, q.project)?;
     let all = forum::index(&store)?;
-    let threads: Vec<Value> = all
+    let mut threads: Vec<Value> = all
         .iter()
         .filter(|p| p.depth == 0)
         .map(|r| {
-            let posts = all.iter().filter(|p| p.thread_id == r.thread_id).count();
+            let thread_posts: Vec<&_> = all.iter().filter(|p| p.thread_id == r.thread_id).collect();
+            let posts = thread_posts.len();
+            // Last activity = the most recent post anywhere in the thread; its author
+            // is who bumped it. Drives the sidebar's activity sort + "· 2m ago".
+            let last = thread_posts
+                .iter()
+                .max_by_key(|p| p.created)
+                .copied()
+                .unwrap_or(r);
+            // A one-line preview from the root post so the sidebar rows are legible
+            // at a glance (collapse whitespace, trim).
+            let snippet: String = r
+                .body
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(140)
+                .collect();
             json!({
                 "id": r.thread_id,
                 "title": r.thread_title,
@@ -855,9 +902,14 @@ pub async fn forum_list(State(state): State<AppState>, Query(q): Query<ProjectQu
                 "labels": r.labels,
                 "posts": posts,
                 "created": r.created,
+                "updated": last.created,
+                "last_author": last.author,
+                "snippet": snippet,
             })
         })
         .collect();
+    // Newest activity first (the daemon sorts so every client gets it consistently).
+    threads.sort_by(|a, b| b["updated"].as_str().cmp(&a["updated"].as_str()));
     Ok(Json(json!({ "threads": threads })))
 }
 

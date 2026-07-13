@@ -4,13 +4,18 @@
 //! Resolution order:
 //!   1. an explicit `--author` on the subcommand
 //!   2. the global `--agentid` override for this invocation
-//!   3. the identity bound to this terminal session (`wipe identity use`)
-//!   4. `$WIPE_AUTHOR`
-//!   5. the project's VCS user / board default / global default (via `wipe-core`)
+//!   3. `$WIPE_AGENT` - a stable per-terminal agent identity
+//!   4. the identity bound to this terminal session (`wipe identity use`)
+//!   5. `$WIPE_AUTHOR`
+//!   6. the project's VCS user / board default / global default (via `wipe-core`)
 //!
-//! Sessions are keyed by `$WIPE_SESSION` (an agent harness sets one per terminal)
-//! so concurrent agents on one machine don't clash; without it, a single shared
-//! "default" session is used.
+//! `$WIPE_AGENT` (3) ranks above the session file (4) on purpose: it is a plain
+//! env var, so it is per-process, inherited by child processes, and CANNOT be
+//! overwritten by another agent the way the shared `sessions.json` can. For
+//! multiple agents sharing one machine/worktree, a harness that sets
+//! `WIPE_AGENT=<id>` once per terminal gets race-free, correct attribution on every
+//! command - no `wipe identity use` and no `--agentid` on each call. Sessions (keyed
+//! by `$WIPE_SESSION`) remain for interactive single-agent use.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,12 +39,26 @@ fn override_id() -> Option<String> {
     OVERRIDE.get().cloned().flatten()
 }
 
+/// `$WIPE_AGENT` - a stable per-terminal agent identity. Being an env var it is
+/// per-process and inherited by children, so unlike the shared session file it
+/// cannot be stomped by a concurrent agent. The reliable identity mechanism when
+/// several agents share one machine/worktree.
+pub fn agent_env() -> Option<String> {
+    std::env::var("WIPE_AGENT")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Resolve the author identity, given an optional explicit override.
 pub fn resolve(explicit: Option<String>) -> String {
     if let Some(a) = explicit.filter(|s| !s.trim().is_empty()) {
         return a;
     }
     if let Some(a) = override_id() {
+        return a;
+    }
+    if let Some(a) = agent_env() {
         return a;
     }
     if let Some(a) = active() {
@@ -71,6 +90,8 @@ pub fn source(explicit: Option<&str>) -> &'static str {
         "explicit --author"
     } else if override_id().is_some() {
         "--agentid override"
+    } else if agent_env().is_some() {
+        "$WIPE_AGENT (per-terminal)"
     } else if active().is_some() {
         "session (wipe identity use)"
     } else if std::env::var("WIPE_AUTHOR")

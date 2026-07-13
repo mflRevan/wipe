@@ -152,6 +152,25 @@ pub fn add_comment(
     Ok(id)
 }
 
+/// Delete a comment from a ticket by its ID. Errors if the comment is absent.
+/// `next_comment` is deliberately NOT decremented, so IDs are never reused.
+pub fn delete_comment(
+    store: &Store,
+    ticket_id: &str,
+    comment_id: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let before = ticket.comments.len();
+    ticket.comments.retain(|c| c.id != comment_id);
+    if ticket.comments.len() == before {
+        return Err(Error::msg(format!("comment `{comment_id}` not found")));
+    }
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
+}
+
 // --- checklist & acceptance criteria ------------------------------------------
 //
 // The two tickable surfaces on a ticket share one item shape and identical

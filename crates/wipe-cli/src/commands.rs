@@ -601,6 +601,13 @@ pub fn comment(out: &Out, cmd: CommentCmd) -> Result<()> {
                 }
             }
         }
+        CommentCmd::Remove { ticket, comment } => {
+            ops::delete_comment(&s, &ticket, &comment, Utc::now())?;
+            out.ok(
+                format!("removed {comment} from {ticket}"),
+                json!({ "ok": true, "ticket": ticket, "comment": comment }),
+            );
+        }
     }
     Ok(())
 }
