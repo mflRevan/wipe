@@ -129,8 +129,9 @@ export const CLI_GROUPS: CliGroup[] = [
     commands: [
       {
         command: "wipe ticket create",
-        description: "Create a ticket with a title, priority, labels, and assignees.",
-        example: 'wipe ticket create --title "Add login" --priority high --json',
+        description:
+          "Create a ticket in a target list (--list is required), with a title, priority, labels, and assignees.",
+        example: 'wipe ticket create --list todo --title "Add login" --priority high --json',
       },
       {
         command: "wipe ticket move",
@@ -139,7 +140,8 @@ export const CLI_GROUPS: CliGroup[] = [
       },
       {
         command: "wipe ticket edit",
-        description: "Edit a ticket's title, body, or priority.",
+        description:
+          "Edit a ticket's title, body, or priority; --author reattributes its creator (audited).",
         example: 'wipe ticket edit T-1 --priority urgent',
       },
       {
@@ -177,6 +179,17 @@ export const CLI_GROUPS: CliGroup[] = [
         command: "wipe comment list",
         description: "List all comments on a ticket.",
         example: "wipe comment list T-1",
+      },
+      {
+        command: "wipe comment edit",
+        description: "Edit a comment's body (stamps it as edited).",
+        example: 'wipe comment edit T-1 c-2 --body "Updated: use OAuth 2.1"',
+      },
+      {
+        command: "wipe comment reattribute",
+        description:
+          "Reattribute a comment to another identity, recording an audit entry (fix a stomped author).",
+        example: "wipe comment reattribute T-1 c-2 --to claude-dev",
       },
       {
         command: "wipe comment remove",
@@ -291,6 +304,12 @@ export const CLI_GROUPS: CliGroup[] = [
         example: 'wipe forum reply F-1 --body "Agreed - let\'s do it."',
       },
       {
+        command: "wipe forum edit",
+        description:
+          "Edit a post's body and/or reattribute it (--author) to fix a stomped author.",
+        example: 'wipe forum edit F-1 --author claude-dev',
+      },
+      {
         command: "wipe forum search",
         description: "Search posts by regex and/or filters (author, label, thread).",
         example: 'wipe forum search "timeout" --json',
@@ -300,6 +319,37 @@ export const CLI_GROUPS: CliGroup[] = [
         description:
           "Stream new matching posts as newline-delimited JSON - agent harnesses react to each line.",
         example: "wipe forum watch --replay",
+      },
+    ],
+  },
+  {
+    name: "subscribe",
+    summary:
+      "Watch tickets, lists, or forum threads so their activity reaches your inbox.",
+    commands: [
+      {
+        command: "wipe subscribe",
+        description:
+          "Subscribe your identity to a ticket (T-3), a list (todo), or a forum thread (F-2). Being assigned a ticket auto-subscribes you.",
+        example: "wipe subscribe T-3 --json",
+      },
+      {
+        command: "wipe subscriptions",
+        description: "List what your identity is currently watching.",
+        example: "wipe subscriptions --json",
+      },
+    ],
+  },
+  {
+    name: "inbox",
+    summary:
+      "Non-blocking: return activity by others on things you're assigned to, authored, or subscribed to.",
+    commands: [
+      {
+        command: "wipe inbox",
+        description:
+          "Print new events newest-first and exit. --unread shows only what's new since you last read, then advances your per-identity read cursor.",
+        example: "wipe inbox --unread --json",
       },
     ],
   },
@@ -345,6 +395,19 @@ export const CLI_GROUPS: CliGroup[] = [
         command: "wipe config --global set",
         description: "Set a machine-wide default that applies to every board.",
         example: "wipe config --global set default.port 6737",
+      },
+    ],
+  },
+  {
+    name: "commit",
+    summary:
+      "Commit the board's .wipe/ changes as one atomic, wipe-attributed git commit.",
+    commands: [
+      {
+        command: "wipe commit",
+        description:
+          "Stage and commit only .wipe/ (or a single ticket's file), authored as your identity. Set board.autocommit to do it automatically after every change.",
+        example: 'wipe commit T-3 -m "spec T-3"',
       },
     ],
   },

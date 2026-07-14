@@ -659,6 +659,11 @@ pub struct Settings {
     /// the global default), so attribution is never "unknown".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_author: Option<String>,
+    /// When true, every board-mutating command auto-commits `.wipe/` afterwards as
+    /// a wipe-attributed commit (see `wipe commit`), so the git history stays a
+    /// faithful, per-change record without a manual commit step.
+    #[serde(default)]
+    pub autocommit: bool,
 }
 
 fn default_max_attachment_mb() -> u64 {
@@ -672,6 +677,7 @@ impl Default for Settings {
             daemon: DaemonSettings::default(),
             max_attachment_mb: default_max_attachment_mb(),
             default_author: None,
+            autocommit: false,
         }
     }
 }
@@ -691,6 +697,11 @@ pub struct DaemonSettings {
     /// Idle timeout (seconds) used when auto-serving / `--idle` is active.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
+    /// Bearer token required to reach the API/WS when the daemon is *exposed*
+    /// (Tailscale/proxy). Generated on first exposed serve and reused thereafter so
+    /// the shareable URL stays stable. `None` on localhost-only boards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 fn default_idle_timeout() -> u64 {
@@ -704,8 +715,20 @@ impl Default for DaemonSettings {
             expose: Exposure::default(),
             autoserve: false,
             idle_timeout_secs: default_idle_timeout(),
+            token: None,
         }
     }
+}
+
+/// Per-identity subscriptions (`subscriptions.json`). Maps an identity to the
+/// refs it watches for the inbox: a ticket `T-<n>`, a `list:<id>`, a
+/// `forum:<F-n>` thread, `forum:*` (all forum), or `board:*` (everything). Using
+/// a `BTreeMap` keeps the file deterministically ordered.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Subscriptions {
+    /// identity -> the refs that identity subscribes to.
+    #[serde(default)]
+    pub subs: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// How the local daemon is reachable.

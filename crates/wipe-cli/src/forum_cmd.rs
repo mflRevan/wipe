@@ -230,9 +230,23 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             }
         }
 
-        ForumCmd::Edit { id, body } => {
-            forum::edit_post(&s, &id, &body, Utc::now())?;
-            out.ok(format!("edited {id}"), json!({ "ok": true, "id": id }));
+        ForumCmd::Edit { id, body, author } => {
+            if body.is_none() && author.is_none() {
+                bail!("nothing to change - pass --body <TEXT> and/or --author <ID>");
+            }
+            let now = Utc::now();
+            if let Some(body) = &body {
+                forum::edit_post(&s, &id, body, now)?;
+            }
+            if let Some(new_author) = &author {
+                let old = forum::reattribute_post(&s, &id, new_author, now)?;
+                out.ok(
+                    format!("edited {id} (reattributed {old} -> {new_author})"),
+                    json!({ "ok": true, "id": id, "from": old, "to": new_author }),
+                );
+            } else {
+                out.ok(format!("edited {id}"), json!({ "ok": true, "id": id }));
+            }
         }
 
         ForumCmd::Delete { id, yes } => {

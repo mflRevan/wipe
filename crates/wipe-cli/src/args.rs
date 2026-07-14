@@ -83,6 +83,21 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
+    /// Subscribe your identity to a ticket, list, or forum thread (for the inbox).
+    Subscribe(SubscribeArgs),
+    /// Unsubscribe your identity from a ticket, list, or forum thread.
+    Unsubscribe(SubscribeArgs),
+    /// List your identity's subscriptions.
+    Subscriptions {
+        /// Show another identity's subscriptions instead of yours.
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// Show unread activity on things you're assigned to, authored, or subscribed
+    /// to - returns and exits (non-blocking), newest first.
+    Inbox(InboxArgs),
+    /// Commit the board's `.wipe/` changes as one atomic, wipe-attributed commit.
+    Commit(CommitArgs),
     /// Diagnose the environment and the current board.
     Doctor,
     /// Print or install the agent SKILL guide for this CLI.
@@ -95,6 +110,50 @@ pub enum Command {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+}
+
+/// `wipe subscribe` / `wipe unsubscribe`
+#[derive(Debug, Args)]
+pub struct SubscribeArgs {
+    /// What to watch: a ticket (`T-3`), a list (`todo`), a forum thread (`F-2`),
+    /// `forum` (all forum), or `all` (everything on the board).
+    pub target: String,
+    /// Act as this identity instead of the resolved one.
+    #[arg(long)]
+    pub author: Option<String>,
+}
+
+/// `wipe inbox`
+#[derive(Debug, Args)]
+pub struct InboxArgs {
+    /// Only events strictly after this RFC-3339 timestamp (e.g.
+    /// `2026-07-14T00:00:00Z`).
+    #[arg(long)]
+    pub since: Option<String>,
+    /// Use *and advance* your stored read-cursor: show only what's new since you
+    /// last read, then mark everything up to now as read.
+    #[arg(long)]
+    pub unread: bool,
+    /// Act as this identity instead of the resolved one.
+    #[arg(long)]
+    pub author: Option<String>,
+    /// Cap the number of events returned.
+    #[arg(long)]
+    pub limit: Option<usize>,
+}
+
+/// `wipe commit`
+#[derive(Debug, Args)]
+pub struct CommitArgs {
+    /// What to commit: a ticket id (e.g. `T-3`) to commit just that ticket's
+    /// file, or omit to commit all of `.wipe/`.
+    pub target: Option<String>,
+    /// Commit message (a sensible default is used if omitted).
+    #[arg(long, short)]
+    pub message: Option<String>,
+    /// Attribute the commit to this identity instead of the resolved one.
+    #[arg(long)]
+    pub author: Option<String>,
 }
 
 /// `wipe init`
@@ -308,7 +367,7 @@ pub struct TicketCreateArgs {
     /// Priority.
     #[arg(long)]
     pub priority: Option<String>,
-    /// Destination list ID (defaults to the first list).
+    /// Destination list ID (REQUIRED - e.g. `todo`; see `wipe list show`).
     #[arg(long, short = 'l')]
     pub list: Option<String>,
     /// Label to apply (repeatable).
@@ -333,6 +392,10 @@ pub struct TicketEditArgs {
     /// New priority.
     #[arg(long)]
     pub priority: Option<String>,
+    /// Reattribute the ticket's creation to this identity (records an audit
+    /// entry). Corrects a ticket created under the wrong/stomped identity.
+    #[arg(long)]
+    pub author: Option<String>,
 }
 
 /// `wipe ticket list`
@@ -371,6 +434,27 @@ pub enum CommentCmd {
         ticket: String,
         /// Comment ID (e.g. c-1).
         comment: String,
+    },
+    /// Edit a comment's body (stamps it as edited).
+    Edit {
+        /// Ticket ID.
+        ticket: String,
+        /// Comment ID (e.g. c-1).
+        comment: String,
+        /// New body (Markdown allowed).
+        #[arg(long, short)]
+        body: String,
+    },
+    /// Reattribute a comment to another identity, recording an audit entry (for
+    /// correcting a comment written under the wrong/stomped identity).
+    Reattribute {
+        /// Ticket ID.
+        ticket: String,
+        /// Comment ID (e.g. c-1).
+        comment: String,
+        /// The identity to attribute the comment to.
+        #[arg(long)]
+        to: String,
     },
 }
 
@@ -530,13 +614,17 @@ pub enum ForumCmd {
     },
     /// Search posts by regex pattern and/or filters.
     Search(ForumSearchArgs),
-    /// Edit a post's body.
+    /// Edit a post's body and/or reattribute it (at least one is required).
     Edit {
         /// Post ID.
         id: String,
         /// New body (Markdown allowed).
         #[arg(long, short)]
-        body: String,
+        body: Option<String>,
+        /// Reattribute the post to this identity, recording the correction (for
+        /// a post written under the wrong/stomped identity).
+        #[arg(long)]
+        author: Option<String>,
     },
     /// Delete a post and its entire subtree (root deletes the whole thread).
     Delete {

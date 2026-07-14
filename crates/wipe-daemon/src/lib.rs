@@ -14,8 +14,13 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
+use axum::{Json, Router};
+use serde_json::json;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
@@ -118,8 +123,93 @@ fn router(state: AppState) -> Router {
         .route("/api/forum/{id}/reply", post(api::forum_reply))
         .route("/ws", get(api::ws_handler))
         .fallback(assets::static_handler)
-        .layer(CorsLayer::permissive())
+        // Exposed daemons get a locked-down CORS policy and a bearer-token gate on
+        // the API/WS; localhost-only keeps the permissive policy for dev ergonomics.
+        .layer(if state.exposed {
+            CorsLayer::new()
+        } else {
+            CorsLayer::permissive()
+        })
+        .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
+}
+
+/// Auth gate: when a token is configured (exposed mode), every `/api` request
+/// (except the unauthenticated health probe) and the `/ws` upgrade must carry the
+/// token as `Authorization: Bearer <t>` or a `?token=<t>` query parameter.
+async fn require_token(State(state): State<api::AppState>, req: Request, next: Next) -> Response {
+    if let Some(token) = state.token.clone() {
+        let path = req.uri().path();
+        let guarded = (path.starts_with("/api") && path != "/api/health") || path == "/ws";
+        if guarded && !request_has_token(&req, &token) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "ok": false, "error": "missing or invalid token" })),
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Whether `req` presents the expected bearer `token`, via the `Authorization`
+/// header or a `token=` query parameter (the latter lets a shared URL carry it).
+fn request_has_token(req: &Request, token: &str) -> bool {
+    if let Some(auth) = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(bearer) = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+        {
+            if bearer.trim() == token {
+                return true;
+            }
+        }
+    }
+    if let Some(q) = req.uri().query() {
+        for pair in q.split('&') {
+            if let Some(v) = pair.strip_prefix("token=") {
+                if v == token {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Resolve the bearer token for an exposed serve: `$WIPE_TOKEN` wins; otherwise the
+/// board's persisted `daemon.token` (generated and saved on first exposed serve so
+/// the shareable URL stays stable); otherwise a fresh ephemeral token.
+fn resolve_token(root: Option<&PathBuf>) -> String {
+    if let Ok(t) = std::env::var("WIPE_TOKEN") {
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    if let Some(root) = root {
+        if let Ok(store) = wipe_core::Store::open(root) {
+            if let Ok(mut settings) = store.load_settings() {
+                if let Some(t) = settings
+                    .daemon
+                    .token
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    return t;
+                }
+                let t = wipe_core::id::token();
+                settings.daemon.token = Some(t.clone());
+                let _ = store.save_settings(&settings);
+                return t;
+            }
+        }
+    }
+    wipe_core::id::token()
 }
 
 /// Start the daemon and serve until the process is stopped (Ctrl-C).
@@ -130,10 +220,19 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
     let clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let exposed = !matches!(cfg.expose, Exposure::None);
+    // Only exposed daemons require a token; localhost-only serves stay auth-free.
+    let token = if exposed {
+        Some(resolve_token(cfg.root.as_ref()))
+    } else {
+        None
+    };
     let state = AppState {
         current: cfg.root.clone(),
         tx: tx.clone(),
         clients: clients.clone(),
+        token: token.clone(),
+        exposed,
     };
 
     // Watch the launch project's `.wipe` for live updates; keep the watcher alive
@@ -160,15 +259,24 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     } else {
         bound
     };
+    // Exposed serves hand out the token in the URL so the first open authenticates;
+    // the UI persists it and sends it on every later API/WS call.
+    let url = match &token {
+        Some(t) => format!("http://{shown}/?token={t}"),
+        None => format!("http://{shown}"),
+    };
     match cfg.idle_timeout {
         Some(d) => println!(
-            "wipe UI serving on http://{shown}  (Ctrl-C to stop; auto-stops after {}s idle)",
+            "wipe UI serving on {url}  (Ctrl-C to stop; auto-stops after {}s idle)",
             d.as_secs()
         ),
-        None => println!("wipe UI serving on http://{shown}  (Ctrl-C to stop)"),
+        None => println!("wipe UI serving on {url}  (Ctrl-C to stop)"),
+    }
+    if token.is_some() {
+        println!("  exposed beyond localhost - this URL includes an access token; share it only with trusted peers.");
     }
     if cfg.open {
-        open_browser(&format!("http://{shown}"));
+        open_browser(&url);
     }
 
     let app = router(state);
@@ -244,7 +352,80 @@ mod tests {
             current: Some(root),
             tx,
             clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            token: None,
+            exposed: false,
         }
+    }
+
+    /// An exposed state guarded by `token`, for auth tests.
+    fn test_state_exposed(root: PathBuf, token: &str) -> AppState {
+        let (tx, _rx) = broadcast::channel(8);
+        AppState {
+            current: Some(root),
+            tx,
+            clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            token: Some(token.to_string()),
+            exposed: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn exposed_daemon_requires_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path(), "Auth", chrono::Utc::now()).unwrap();
+        let app = router(test_state_exposed(store.root().to_path_buf(), "secret123"));
+
+        // Health stays open (liveness probes need no token).
+        let h = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.status(), StatusCode::OK);
+
+        // A guarded endpoint without a token is rejected.
+        let no = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/board")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(no.status(), StatusCode::UNAUTHORIZED);
+
+        // Bearer header authorizes.
+        let hdr = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/board")
+                    .header("authorization", "Bearer secret123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hdr.status(), StatusCode::OK);
+
+        // `?token=` query authorizes too (how the shared URL carries it).
+        let q = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/board?token=secret123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(q.status(), StatusCode::OK);
     }
 
     #[tokio::test]

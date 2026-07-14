@@ -58,7 +58,7 @@ to a generic default.
    ```
 
 Alternatively, attribute a **single** command without binding a session by passing
-the global `--agentid` flag: `wipe --agentid claude ticket create -t "…" --json`.
+the global `--agentid` flag: `wipe --agentid claude ticket create --list todo -t "…" --json`.
 
 **Multiple agents on one machine / shared worktree? Use `$WIPE_AGENT`.** Export
 `WIPE_AGENT=<your-id>` once per terminal and every `wipe` command in that terminal
@@ -70,7 +70,7 @@ the reliable pattern for fan-out/multi-agent setups:
 
 ```bash
 export WIPE_AGENT="claude-dev"       # bash;  $env:WIPE_AGENT = "claude-dev"  (PowerShell)
-wipe ticket create -t "Add login" --json   # authored as claude-dev, race-free
+wipe ticket create --list todo -t "Add login" --json   # authored as claude-dev, race-free
 ```
 
 Resolution order (highest first): `--author`/`--agentid` → `$WIPE_AGENT` → session
@@ -79,12 +79,20 @@ board/global default. (If the user set `identity.prefer`, the configured default
 overrides the VCS user.) Interactive single-agent sessions can still use
 `wipe identity use`; it's keyed by `$WIPE_SESSION`.
 
+**Strict mode (`$WIPE_STRICT_IDENTITY=1`).** Set this in a shared/multi-agent
+worktree to make every board-mutating command **fail** unless an explicit identity
+is set (`$WIPE_AGENT`, a session, `$WIPE_AUTHOR`, or `--author`), rather than
+silently attributing the write to the repo's git user that all agents share.
+`wipe identity whoami --json` also reports a `warning` when your identity signals
+disagree (e.g. a session and `$WIPE_AGENT` point at different ids) - check it if
+attribution looks off.
+
 ## Everyday flows
 
 Create and place a ticket:
 
 ```bash
-wipe ticket create --title "Add login" --priority high --json
+wipe ticket create --list todo --title "Add login" --priority high --json
 # -> {"id":"T-1", ...}
 ```
 
@@ -107,7 +115,18 @@ Collaborate via comments (this is the human↔agent / agent↔agent channel):
 ```bash
 wipe comment add T-1 --body "Spec clarified: use OAuth" --json
 wipe comment list T-1 --json
+wipe comment edit T-1 c-2 --body "Spec clarified: use OAuth 2.1" --json   # fix a body
 wipe comment remove T-1 c-2 --json    # delete a comment (ids are never reused)
+```
+
+**Fix a wrong author (identity correction).** If something was authored under the
+wrong identity (e.g. a concurrent agent stomped the session), correct it with an
+**audit trail** rather than deleting and re-posting:
+
+```bash
+wipe comment reattribute T-1 c-2 --to claude-dev --json   # logs a `reattributed` activity
+wipe ticket edit T-1 --author claude-dev --json           # rewrite the ticket's creator
+wipe forum edit F-3 --author claude-dev --json            # reattribute a forum post
 ```
 
 Break a ticket into checklist items and tick them off as you go. Items get stable
@@ -220,6 +239,28 @@ Your harness can launch this as a background listener and act on each event. Emi
 - Label posts so others can filter (`decision`, `gotcha`, `rule`, `question`, ...).
 - Reference tickets/URLs with `--ref` so knowledge links back to work.
 
+## Your inbox - non-blocking coordination
+
+`wipe forum watch` blocks; **`wipe inbox` does not** - it returns what's new and
+exits, so an agent can poll it each loop without holding a process open. It reports
+activity by *other* actors on tickets you're **assigned to**, **authored**, or
+**subscribed to** (your own actions are excluded).
+
+```bash
+wipe subscribe T-3 --json          # watch a ticket
+wipe subscribe todo --json         # watch a whole list
+wipe subscribe F-2 --json          # watch a forum thread   (forum = all forum)
+wipe subscriptions --json          # what you're watching
+wipe inbox --json                  # everything new, newest first
+wipe inbox --unread --json         # only since you last read; then mark read
+wipe inbox --since 2026-07-14T00:00:00Z --json
+```
+
+Being assigned a ticket (`wipe ticket assign T-3 <you>`) auto-subscribes you to it.
+The `--unread` cursor is per-identity and stored in the gitignored cache, so it
+never dirties the repo. Typical agent loop: `wipe inbox --unread --json`, act on
+each event, repeat.
+
 ## Working with a supervisor
 
 When another agent or a human supervises you, treat tickets as the unit of work
@@ -231,6 +272,21 @@ and comments as the conversation. Typical loop:
 4. `wipe ticket move <id> --to in-progress|done --json` to reflect status.
 
 Keep comments concise and factual; they are the spec-driven coordination record.
+
+## Committing board changes
+
+wipe writes plain JSON under `.wipe/`; committing it is normal git. Use
+`wipe commit` when you want an **atomic, wipe-attributed** commit of just the
+board (it never sweeps in unrelated staged changes):
+
+```bash
+wipe commit --json                         # commit all of .wipe/ (auto message)
+wipe commit T-3 -m "spec T-3" --json       # commit only that ticket's file
+wipe config set board.autocommit true      # or: auto-commit .wipe/ after every change
+```
+
+The commit is authored *and* committed as your resolved identity, so board history
+is attributed to you (or your agent id) rather than the ambient git user.
 
 ## Discoverability
 

@@ -171,6 +171,128 @@ pub fn delete_comment(
     Ok(())
 }
 
+/// Commit the board's `.wipe/` changes as an atomic, wipe-attributed git commit.
+/// When `scope` is a ticket id, only that ticket's file is committed; otherwise
+/// all of `.wipe/`. Returns the new short commit hash, or `None` if there was
+/// nothing to commit. The commit is authored *and* committed as `author`, so the
+/// board's history is attributed to the wipe identity rather than the ambient git
+/// user.
+pub fn commit_board(
+    store: &Store,
+    scope: Option<&str>,
+    message: Option<&str>,
+    author: &str,
+) -> Result<Option<String>> {
+    let ticket_path;
+    let (pathspecs, default_msg): (Vec<&str>, String) = match scope {
+        Some(id) if id.starts_with("T-") => {
+            // Verify the ticket exists so a typo fails loudly instead of silently
+            // committing nothing.
+            store.load_ticket(id)?;
+            ticket_path = format!(".wipe/tickets/{id}.json");
+            (
+                vec![ticket_path.as_str()],
+                format!("chore(wipe): update {id}"),
+            )
+        }
+        Some(other) => {
+            return Err(Error::msg(format!(
+                "unknown commit target `{other}` - pass a ticket id (T-<n>) or omit to commit all of .wipe/"
+            )));
+        }
+        None => (vec![".wipe"], "chore(wipe): update board".to_string()),
+    };
+    let msg = message.unwrap_or(&default_msg);
+    crate::git::commit_paths(store.root(), &pathspecs, msg, Some(author))
+}
+
+/// Edit a comment's body in place. Sets the `edited` timestamp so the change is
+/// visible. Errors if the comment is absent.
+pub fn edit_comment(
+    store: &Store,
+    ticket_id: &str,
+    comment_id: &str,
+    body: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let c = ticket
+        .comments
+        .iter_mut()
+        .find(|c| c.id == comment_id)
+        .ok_or_else(|| Error::msg(format!("comment `{comment_id}` not found")))?;
+    c.body = body.to_string();
+    c.edited = Some(now);
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(())
+}
+
+/// Reattribute a comment to `new_author`, recording an **audit** activity entry
+/// (`reattributed`, `<c-id>: <old> -> <new>`) rather than silently overwriting -
+/// so a misattributed comment (e.g. from an identity stomp) can be corrected with a
+/// trail. Returns the previous author.
+pub fn reattribute_comment(
+    store: &Store,
+    ticket_id: &str,
+    comment_id: &str,
+    new_author: &str,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<String> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let old = {
+        let c = ticket
+            .comments
+            .iter_mut()
+            .find(|c| c.id == comment_id)
+            .ok_or_else(|| Error::msg(format!("comment `{comment_id}` not found")))?;
+        let old = c.author.clone();
+        c.author = new_author.to_string();
+        c.edited = Some(now);
+        old
+    };
+    ticket.log_activity(
+        actor,
+        "reattributed",
+        format!("{comment_id}: {old} -> {new_author}"),
+        now,
+    );
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(old)
+}
+
+/// Reattribute a ticket's *creation* to `new_author` (rewrites the `created`
+/// activity actor), recording an audit `reattributed` entry. Corrects a ticket
+/// created under a stomped identity. Returns the previous creator (if any).
+pub fn reattribute_ticket(
+    store: &Store,
+    ticket_id: &str,
+    new_author: &str,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<String>> {
+    let mut ticket = store.load_ticket(ticket_id)?;
+    let old = ticket
+        .activity
+        .iter()
+        .find(|a| a.kind == "created")
+        .map(|a| a.actor.clone());
+    for a in ticket.activity.iter_mut().filter(|a| a.kind == "created") {
+        a.actor = new_author.to_string();
+    }
+    ticket.log_activity(
+        actor,
+        "reattributed",
+        format!("created: {} -> {new_author}", old.as_deref().unwrap_or("?")),
+        now,
+    );
+    ticket.updated = now;
+    store.save_ticket(&ticket)?;
+    Ok(old)
+}
+
 // --- checklist & acceptance criteria ------------------------------------------
 //
 // The two tickable surfaces on a ticket share one item shape and identical

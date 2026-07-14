@@ -65,13 +65,81 @@ fn main() -> ExitCode {
         }
     }
 
+    // In strict-identity mode, refuse a board mutation that would fall back to the
+    // ambient VCS user (the shared-worktree stomp hazard) before it runs.
+    if mutates_board(&cli.command) {
+        if let Err(e) = identity::enforce_strict(actor_override(&cli.command)) {
+            emit_error(cli.json, &format!("{e:#}"));
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let autocommit_after = mutates_board(&cli.command);
     let result = dispatch(&out, cli.command);
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if autocommit_after {
+                maybe_autocommit(&out);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             emit_error(cli.json, &format!("{e:#}"));
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Whether a command can change board (`.wipe/`) state - the set eligible for
+/// `board.autocommit`. Read-only sub-verbs are still covered but harmless: the
+/// follow-up commit simply finds nothing staged and does nothing.
+fn mutates_board(c: &Command) -> bool {
+    matches!(
+        c,
+        Command::Board(_)
+            | Command::List(_)
+            | Command::Ticket(_)
+            | Command::Comment(_)
+            | Command::Checklist(_)
+            | Command::Criteria(_)
+            | Command::Label(_)
+            | Command::Media(_)
+            | Command::Forum(_)
+    )
+}
+
+/// The per-command *actor* override, if the command carries one (only the
+/// commands that author new content do). Reattribution targets (e.g.
+/// `ticket edit --author`, `comment reattribute --to`) are NOT actor overrides -
+/// those writes are still performed by the ambient identity.
+fn actor_override(c: &Command) -> Option<&str> {
+    use args::{CommentCmd, ForumCmd};
+    match c {
+        Command::Comment(CommentCmd::Add { author, .. }) => author.as_deref(),
+        Command::Forum(ForumCmd::Post(a)) => a.author.as_deref(),
+        Command::Forum(ForumCmd::Reply(a)) => a.author.as_deref(),
+        _ => None,
+    }
+}
+
+/// If the board opts into `board.autocommit`, commit `.wipe/` after a successful
+/// mutation. Best-effort and silent in `--json` mode so the single-object stdout
+/// contract is never broken.
+fn maybe_autocommit(out: &Out) {
+    let Ok(s) = wipe_core::Store::discover(".") else {
+        return;
+    };
+    let Ok(settings) = s.load_settings() else {
+        return;
+    };
+    if !settings.autocommit || !wipe_core::git::is_repo(s.root()) {
+        return;
+    }
+    let who = identity::resolve(None);
+    if let Ok(Some(h)) = wipe_core::ops::commit_board(&s, None, None, &who) {
+        if !out.json {
+            eprintln!("  auto-committed {h}");
         }
     }
 }
@@ -94,6 +162,11 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Forum(c) => forum_cmd::run(out, c),
         Command::Serve(a) => commands::serve(out, a),
         Command::Config { global, cmd } => commands::config(out, global, cmd),
+        Command::Subscribe(a) => commands::subscribe(out, a, false),
+        Command::Unsubscribe(a) => commands::subscribe(out, a, true),
+        Command::Subscriptions { author } => commands::subscriptions(out, author),
+        Command::Inbox(a) => commands::inbox(out, a),
+        Command::Commit(a) => commands::commit(out, a),
         Command::Doctor => commands::doctor(out),
         Command::Skill { cmd } => commands::skill(out, cmd),
         Command::Completions { shell } => {

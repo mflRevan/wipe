@@ -27,6 +27,28 @@ impl Project {
         self.dir.path()
     }
 
+    /// Run a raw `git` command in the project dir, asserting success.
+    fn git(&self, args: &[&str]) {
+        let ok = StdCommand::new("git")
+            .current_dir(self.dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    /// The author of the current `HEAD` commit as `Name <email>`.
+    fn head_author(&self) -> String {
+        let out = StdCommand::new("git")
+            .current_dir(self.dir.path())
+            .args(["--no-pager", "log", "-1", "--format=%an <%ae>"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
     /// Build a `wipe` invocation rooted at this project with a fixed author and
     /// an isolated global-config dir (so tests never read/write the real one).
     fn cmd(&self, args: &[&str]) -> StdCommand {
@@ -98,13 +120,22 @@ fn full_agent_flow() {
     let t1 = p.json(&[
         "ticket",
         "create",
+        "--list",
+        "backlog",
         "--title",
         "Add login",
         "--priority",
         "high",
     ]);
     assert_eq!(t1["id"], "T-1");
-    let t2 = p.json(&["ticket", "create", "--title", "Fix navbar"]);
+    let t2 = p.json(&[
+        "ticket",
+        "create",
+        "--list",
+        "backlog",
+        "--title",
+        "Fix navbar",
+    ]);
     assert_eq!(t2["id"], "T-2");
 
     // Move, comment, label.
@@ -149,7 +180,7 @@ fn json_error_object_and_nonzero_exit_on_missing_ticket() {
 fn delete_requires_confirmation() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "Del"]);
-    p.json(&["ticket", "create", "--title", "Temp"]);
+    p.json(&["ticket", "create", "--list", "backlog", "--title", "Temp"]);
     // Without --yes it must refuse and exit non-zero.
     let refused = p.cmd(&["ticket", "delete", "T-1"]).output().unwrap();
     assert!(!refused.status.success());
@@ -346,7 +377,7 @@ fn forum_delete_removes_subtree_and_requires_yes() {
 fn checklist_and_criteria_are_independent_surfaces() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "-t", "Ship it"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Ship it"]); // T-1
 
     // Two independent tickable lists with their own ID namespaces.
     assert_eq!(
@@ -385,7 +416,7 @@ fn checklist_and_criteria_are_independent_surfaces() {
 fn comments_can_be_added_and_removed() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "-t", "Talk"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Talk"]); // T-1
     assert_eq!(
         p.json(&["comment", "add", "T-1", "-b", "first"])["comment"],
         "c-1"
@@ -417,12 +448,225 @@ fn comments_can_be_added_and_removed() {
 }
 
 #[test]
+fn commit_creates_atomic_wipe_attributed_commit() {
+    let p = Project::new();
+    p.git(&["init", "-q"]);
+    p.git(&["config", "user.email", "repo@example.com"]);
+    p.git(&["config", "user.name", "Repo User"]);
+    p.run(&["init", ".", "--name", "L"]);
+    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
+
+    // A stray non-board change must NOT be swept into the board commit.
+    std::fs::write(p.path().join("unrelated.txt"), "hi\n").unwrap();
+
+    let c = p.json(&["commit", "-m", "board init", "--author", "claude-dev"]);
+    assert!(c["commit"].is_string(), "returns the new commit hash");
+    // Attributed to the wipe identity, not the ambient repo user.
+    assert_eq!(p.head_author(), "claude-dev <claude-dev@wipe.local>");
+
+    // The unrelated file is still untracked (the commit was scoped to .wipe/).
+    let st = StdCommand::new("git")
+        .current_dir(p.path())
+        .args(["status", "--porcelain", "unrelated.txt"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8(st.stdout)
+            .unwrap()
+            .contains("?? unrelated.txt"),
+        "unrelated change stays out of the board commit"
+    );
+
+    // Nothing new to commit -> reports null, exits 0.
+    let again = p.json(&["commit"]);
+    assert!(again["commit"].is_null());
+}
+
+#[test]
+fn subscriptions_and_inbox_flow() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "L"]);
+
+    // alice creates a ticket and assigns bob (who is auto-subscribed).
+    let t = p.json_as(
+        "alice",
+        &["ticket", "create", "--list", "todo", "-t", "Task"],
+    );
+    assert_eq!(t["id"], "T-1");
+    p.json_as("alice", &["ticket", "assign", "T-1", "bob"]);
+    let subs = p.json_as("bob", &["subscriptions"]);
+    assert!(
+        subs["subscriptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "T-1"),
+        "assignee auto-subscribed to their ticket"
+    );
+
+    // alice comments; bob comments too.
+    p.json_as(
+        "alice",
+        &["comment", "add", "T-1", "--body", "please start"],
+    );
+    p.json_as("bob", &["comment", "add", "T-1", "--body", "on it"]);
+
+    // bob's inbox shows alice's activity but never bob's own actions.
+    let ib = p.json_as("bob", &["inbox"]);
+    let events = ib["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["kind"] == "comment" && e["actor"] == "alice"),
+        "sees alice's comment"
+    );
+    assert!(
+        events.iter().all(|e| e["actor"] != "bob"),
+        "own actions excluded from inbox"
+    );
+
+    // --unread consumes: first call has items, the second is empty.
+    let u1 = p.json_as("bob", &["inbox", "--unread"]);
+    assert!(u1["count"].as_u64().unwrap() >= 1);
+    let u2 = p.json_as("bob", &["inbox", "--unread"]);
+    assert_eq!(u2["count"], 0, "read-cursor advanced");
+}
+
+#[test]
+fn strict_identity_refuses_ambient_fallback() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "L"]);
+
+    // Strict mode with no explicit identity (no WIPE_AUTHOR/AGENT/session) refuses
+    // to attribute the write to the ambient VCS user.
+    let mut c = p.cmd(&["ticket", "create", "--list", "todo", "-t", "X", "--json"]);
+    c.env_remove("WIPE_AUTHOR");
+    c.env("WIPE_STRICT_IDENTITY", "1");
+    let out = c.output().unwrap();
+    assert!(
+        !out.status.success(),
+        "strict mode must reject ambient fallback"
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["error"]
+        .as_str()
+        .unwrap()
+        .contains("WIPE_STRICT_IDENTITY"));
+
+    // With an explicit $WIPE_AGENT it proceeds.
+    let mut c = p.cmd(&["ticket", "create", "--list", "todo", "-t", "Y", "--json"]);
+    c.env_remove("WIPE_AUTHOR");
+    c.env("WIPE_STRICT_IDENTITY", "1");
+    c.env("WIPE_AGENT", "claude-dev");
+    assert!(
+        c.output().unwrap().status.success(),
+        "explicit $WIPE_AGENT satisfies strict mode"
+    );
+}
+
+#[test]
+fn autocommit_commits_after_mutations_when_enabled() {
+    let p = Project::new();
+    p.git(&["init", "-q"]);
+    p.git(&["config", "user.email", "repo@example.com"]);
+    p.git(&["config", "user.name", "Repo User"]);
+    p.run(&["init", ".", "--name", "L"]);
+    p.run(&["config", "set", "board.autocommit", "true"]);
+
+    // A board mutation now auto-commits .wipe/ with no explicit `wipe commit`.
+    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
+    let files = StdCommand::new("git")
+        .current_dir(p.path())
+        .args(["--no-pager", "show", "--name-only", "--format=", "HEAD"])
+        .output()
+        .unwrap();
+    let files = String::from_utf8(files.stdout).unwrap();
+    assert!(
+        files.contains("tickets/T-1.json"),
+        "autocommit included the new ticket file: {files}"
+    );
+}
+
+#[test]
+fn author_correction_verbs_reattribute_with_audit() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "L"]);
+    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
+
+    // Comment, then edit its body.
+    p.json(&["comment", "add", "T-1", "--body", "first"]);
+    p.json(&["comment", "edit", "T-1", "c-1", "--body", "edited body"]);
+    // Reattribute the comment to another identity.
+    let r = p.json(&["comment", "reattribute", "T-1", "c-1", "--to", "alice"]);
+    assert_eq!(r["to"], "alice");
+
+    let show = p.json(&["ticket", "show", "T-1"]);
+    let c = show["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "c-1")
+        .unwrap();
+    assert_eq!(c["author"], "alice", "comment reattributed");
+    assert_eq!(c["body"], "edited body", "comment body edited");
+    // An audit entry records the correction (not a silent overwrite).
+    assert!(
+        show["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "reattributed" && a["detail"].as_str().unwrap().contains("c-1")),
+        "reattribution audit entry present"
+    );
+
+    // Reattribute the ticket's creation.
+    p.json(&["ticket", "edit", "T-1", "--author", "bob"]);
+    let show = p.json(&["ticket", "show", "T-1"]);
+    let created = show["activity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == "created")
+        .unwrap();
+    assert_eq!(created["actor"], "bob", "ticket creator rewritten");
+
+    // Reattribute a forum post.
+    p.json(&["forum", "post", "--title", "T", "--body", "b"]);
+    let fe = p.json(&["forum", "edit", "F-1", "--author", "carol"]);
+    assert_eq!(fe["to"], "carol");
+    let fs = p.json(&["forum", "show", "F-1"]);
+    assert_eq!(fs["post"]["author"], "carol", "forum post reattributed");
+}
+
+#[test]
+fn ticket_create_requires_a_list() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "L"]);
+    let out = p
+        .cmd(&["ticket", "create", "-t", "No list", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "create without --list should fail");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    let err = v["error"].as_str().unwrap();
+    assert!(err.contains("--list"), "error should mention --list: {err}");
+    assert!(
+        err.contains("todo"),
+        "error should list available lists: {err}"
+    );
+    // With a list it succeeds.
+    let t = p.json(&["ticket", "create", "--list", "todo", "-t", "Ok"]);
+    assert_eq!(t["id"], "T-1");
+}
+
+#[test]
 fn wipe_agent_env_outranks_wipe_author() {
     // The per-terminal $WIPE_AGENT identity must win over $WIPE_AUTHOR (which the
     // test harness always sets), so multi-agent attribution is race-free.
     let p = Project::new();
     p.run(&["init", ".", "--name", "A"]);
-    p.json(&["ticket", "create", "-t", "X"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "X"]); // T-1
     let mut c = p.cmd(&["comment", "add", "T-1", "-b", "hi", "--json"]);
     c.env("WIPE_AGENT", "agent-7");
     let out = c.output().unwrap();
@@ -439,7 +683,7 @@ fn wipe_agent_env_outranks_wipe_author() {
 fn ticket_delete_rejects_path_traversal() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "Safe"]);
-    p.json(&["ticket", "create", "-t", "Real"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Real"]); // T-1
     assert!(p.path().join(".wipe/board.json").is_file());
 
     // A crafted id that would escape tickets/ must fail, not delete board.json.
@@ -639,7 +883,7 @@ fn identity_session_and_agentid_override() {
     };
 
     // No session identity yet: author is a real default, never "unknown"/empty.
-    let t1 = run(&["ticket", "create", "-t", "one"]);
+    let t1 = run(&["ticket", "create", "--list", "backlog", "-t", "one"]);
     let a1 = t1["activity"][0]["actor"].as_str().unwrap();
     assert!(
         !a1.is_empty() && a1 != "unknown",
@@ -648,14 +892,23 @@ fn identity_session_and_agentid_override() {
 
     // Bind a session identity; the next ticket is authored by it.
     run(&["identity", "use", "claude", "--agent", "--name", "Claude"]);
-    let t2 = run(&["ticket", "create", "-t", "two"]);
+    let t2 = run(&["ticket", "create", "--list", "backlog", "-t", "two"]);
     assert_eq!(t2["activity"][0]["actor"], "claude");
 
     // whoami reflects the bound identity.
     assert_eq!(run(&["identity", "whoami"])["identity"], "claude");
 
     // A single-command --agentid override wins over the session.
-    let t3 = run(&["--agentid", "gizmo", "ticket", "create", "-t", "three"]);
+    let t3 = run(&[
+        "--agentid",
+        "gizmo",
+        "ticket",
+        "create",
+        "--list",
+        "backlog",
+        "-t",
+        "three",
+    ]);
     assert_eq!(t3["activity"][0]["actor"], "gizmo");
 
     // The agent shows up in the identity list, marked active.
@@ -670,6 +923,6 @@ fn identity_session_and_agentid_override() {
 
     // Clearing the session reverts to the default author.
     run(&["identity", "clear"]);
-    let t4 = run(&["ticket", "create", "-t", "four"]);
+    let t4 = run(&["ticket", "create", "--list", "backlog", "-t", "four"]);
     assert_ne!(t4["activity"][0]["actor"], "claude");
 }

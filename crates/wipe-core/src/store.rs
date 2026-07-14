@@ -207,6 +207,36 @@ impl Store {
         write_json_atomic(&self.identities_path(), identities)
     }
 
+    // --- subscriptions -----------------------------------------------------
+
+    fn subscriptions_path(&self) -> PathBuf {
+        self.wipe_dir().join("subscriptions.json")
+    }
+
+    /// Load `subscriptions.json` (empty if the file doesn't exist yet).
+    pub fn load_subscriptions(&self) -> Result<crate::model::Subscriptions> {
+        let path = self.subscriptions_path();
+        if !path.exists() {
+            return Ok(crate::model::Subscriptions::default());
+        }
+        read_json(&path)
+    }
+
+    /// Write `subscriptions.json`.
+    pub fn save_subscriptions(&self, subs: &crate::model::Subscriptions) -> Result<()> {
+        write_json_atomic(&self.subscriptions_path(), subs)
+    }
+
+    /// Path to `identity`'s (gitignored) inbox read-cursor file under `.cache/`.
+    /// Per-user state, so it never dirties the repo or conflicts on merge.
+    pub fn inbox_cursor_path(&self, identity: &str) -> PathBuf {
+        let slug: String = identity
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        self.cache_dir().join("inbox").join(format!("{slug}.json"))
+    }
+
     // --- tickets -----------------------------------------------------------
 
     /// Load a single ticket by ID.

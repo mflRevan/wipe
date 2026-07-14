@@ -13,6 +13,7 @@ pub mod error;
 pub mod forum;
 pub mod git;
 pub mod id;
+pub mod inbox;
 pub mod model;
 pub mod ops;
 pub mod registry;

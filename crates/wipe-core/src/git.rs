@@ -84,6 +84,88 @@ pub fn last_change(root: &Path, relpath: &str) -> Result<Option<CommitInfo>> {
     Ok(log(root, Some(relpath), Some(1))?.into_iter().next())
 }
 
+/// Turn an identity string into a git `(name, email)` pair. Accepts the usual
+/// `Name <email>` form; a bare agent id (e.g. `claude-dev`) gets a stable,
+/// synthetic `<id>@wipe.local` address so `git` accepts the attribution.
+fn author_ident(author: &str) -> (String, String) {
+    if let Some(open) = author.rfind('<') {
+        if let Some(rel_close) = author[open..].find('>') {
+            let name = author[..open].trim();
+            let email = author[open + 1..open + rel_close].trim();
+            if !email.is_empty() {
+                let name = if name.is_empty() { email } else { name };
+                return (name.to_string(), email.to_string());
+            }
+        }
+    }
+    let slug: String = author
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = if slug.trim_matches('-').is_empty() {
+        "agent".to_string()
+    } else {
+        slug
+    };
+    (author.to_string(), format!("{slug}@wipe.local"))
+}
+
+/// Stage the given `pathspecs` (relative to `root`) and create a commit
+/// containing only those paths, attributed to `author` (both author and
+/// committer). Returns the new commit's short hash, or `None` if there was
+/// nothing to commit under the pathspecs. Other staged changes outside the
+/// pathspecs are left untouched, so `.wipe/` commits stay atomic and isolated.
+pub fn commit_paths(
+    root: &Path,
+    pathspecs: &[&str],
+    message: &str,
+    author: Option<&str>,
+) -> Result<Option<String>> {
+    // Stage (and thereby track any new files) under the requested paths only.
+    let mut add: Vec<&str> = vec!["add", "--"];
+    add.extend_from_slice(pathspecs);
+    run(root, &add)?;
+
+    // Is anything actually staged/changed under these paths?
+    let mut status: Vec<&str> = vec!["status", "--porcelain", "--"];
+    status.extend_from_slice(pathspecs);
+    if run(root, &status)?.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut args: Vec<String> = Vec::new();
+    if let Some(a) = author {
+        let (name, email) = author_ident(a);
+        args.push("-c".into());
+        args.push(format!("user.name={name}"));
+        args.push("-c".into());
+        args.push(format!("user.email={email}"));
+        args.push("commit".into());
+        args.push(format!("--author={name} <{email}>"));
+    } else {
+        args.push("commit".into());
+    }
+    args.push("-m".into());
+    args.push(message.to_string());
+    // Limit the commit to the pathspecs so unrelated staged changes are excluded.
+    args.push("--".into());
+    for p in pathspecs {
+        args.push((*p).to_string());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run(root, &refs)?;
+
+    // Report the freshly-created commit's short hash.
+    let head = run(root, &["rev-parse", "--short", "HEAD"])?;
+    Ok(Some(head.trim().to_string()))
+}
+
 /// Compute the git blob hash of `bytes` (identical to `git hash-object`).
 pub fn blob_hash(bytes: &[u8]) -> String {
     use sha1::{Digest, Sha1};

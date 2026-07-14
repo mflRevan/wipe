@@ -261,9 +261,16 @@ pub fn identity(out: &Out, cmd: IdentityCmd) -> Result<()> {
         IdentityCmd::Whoami => {
             let who = crate::identity::resolve(None);
             let src = crate::identity::source(None);
+            let warning = crate::identity::divergence();
+            let strict = crate::identity::strict();
+            if let Some(w) = &warning {
+                if !out.json {
+                    out.line(format!("  {}", dim(&format!("warning: {w}"))));
+                }
+            }
             out.ok(
                 format!("{who}  ({src})"),
-                json!({ "identity": who, "source": src }),
+                json!({ "identity": who, "source": src, "strict": strict, "warning": warning }),
             );
         }
         IdentityCmd::Clear => {
@@ -440,11 +447,33 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
     let s = store()?;
     match cmd {
         TicketCmd::Create(a) => {
+            // A target list is REQUIRED - creating into an implicit "first list" is a
+            // footgun (e.g. a leftmost PM-only column). Guide the caller to the real
+            // lists rather than silently guessing.
+            let list = match a.list {
+                Some(l) if !l.trim().is_empty() => l,
+                _ => {
+                    let board = s.load_board()?;
+                    let avail: Vec<&str> = board.lists.iter().map(|l| l.id.as_str()).collect();
+                    let example = avail.first().copied().unwrap_or("todo");
+                    bail!(
+                        "a target list is required - pass --list <LIST>.\n  \
+                         available lists: {}\n  \
+                         example: wipe ticket create --list {} --title \"Add login\"",
+                        if avail.is_empty() {
+                            "(none yet - add one with `wipe list add`)".to_string()
+                        } else {
+                            avail.join(", ")
+                        },
+                        example
+                    );
+                }
+            };
             let spec = NewTicket {
                 title: a.title,
                 body: a.body,
                 priority: a.priority,
-                list: a.list,
+                list: Some(list),
                 labels: a.labels,
                 assignees: a.assignees,
             };
@@ -466,15 +495,26 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             }
         }
         TicketCmd::Edit(a) => {
-            let patch = TicketPatch {
-                title: a.title,
-                body: a.body,
-                // Provided priority sets it; absent leaves it unchanged (CLI edit
-                // has no "clear" form, matching prior behavior).
-                priority: a.priority.map(Some),
-                ..Default::default()
+            let actor = identity::resolve(None);
+            let now = Utc::now();
+            let has_patch = a.title.is_some() || a.body.is_some() || a.priority.is_some();
+            // Author-correction: rewrite the creator with an audit entry.
+            if let Some(new_author) = a.author {
+                ops::reattribute_ticket(&s, &a.id, &new_author, &actor, now)?;
+            }
+            let t = if has_patch {
+                let patch = TicketPatch {
+                    title: a.title,
+                    body: a.body,
+                    // Provided priority sets it; absent leaves it unchanged (CLI edit
+                    // has no "clear" form, matching prior behavior).
+                    priority: a.priority.map(Some),
+                    ..Default::default()
+                };
+                ops::update_ticket(&s, &a.id, patch, &actor, now)?
+            } else {
+                s.load_ticket(&a.id)?
             };
-            let t = ops::update_ticket(&s, &a.id, patch, &identity::resolve(None), Utc::now())?;
             out.ok(format!("updated {}", t.id), to_value(&t));
         }
         TicketCmd::Move { id, to, pos } => {
@@ -497,6 +537,11 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 ..Default::default()
             };
             t = ops::update_ticket(&s, &id, patch, &identity::resolve(None), Utc::now())?;
+            // Auto-subscribe a new assignee to their ticket so it lands in their
+            // inbox (best-effort; never fail the assignment over it).
+            if !remove {
+                let _ = wipe_core::inbox::subscribe(&s, &who, &id);
+            }
             let verb = if remove { "unassigned" } else { "assigned" };
             out.ok(format!("{verb} {who} on {id}"), to_value(&t));
         }
@@ -606,6 +651,29 @@ pub fn comment(out: &Out, cmd: CommentCmd) -> Result<()> {
             out.ok(
                 format!("removed {comment} from {ticket}"),
                 json!({ "ok": true, "ticket": ticket, "comment": comment }),
+            );
+        }
+        CommentCmd::Edit {
+            ticket,
+            comment,
+            body,
+        } => {
+            ops::edit_comment(&s, &ticket, &comment, &body, Utc::now())?;
+            out.ok(
+                format!("edited {comment} on {ticket}"),
+                json!({ "ok": true, "ticket": ticket, "comment": comment }),
+            );
+        }
+        CommentCmd::Reattribute {
+            ticket,
+            comment,
+            to,
+        } => {
+            let actor = identity::resolve(None);
+            let old = ops::reattribute_comment(&s, &ticket, &comment, &to, &actor, Utc::now())?;
+            out.ok(
+                format!("reattributed {comment} on {ticket}: {old} -> {to}"),
+                json!({ "ok": true, "ticket": ticket, "comment": comment, "from": old, "to": to }),
             );
         }
     }
@@ -903,6 +971,7 @@ pub fn config(out: &Out, global: bool, cmd: ConfigCmd) -> Result<()> {
                 "daemon.expose" => json!(expose_slug(settings.daemon.expose)),
                 "daemon.autoserve" => json!(settings.daemon.autoserve),
                 "daemon.idle_timeout" => json!(settings.daemon.idle_timeout_secs),
+                "board.autocommit" => json!(settings.autocommit),
                 "board.name" => json!(s.load_board()?.name),
                 other => bail!("unknown config key '{other}'"),
             };
@@ -940,6 +1009,11 @@ pub fn config(out: &Out, global: bool, cmd: ConfigCmd) -> Result<()> {
                     settings.daemon.idle_timeout_secs = value
                         .parse()
                         .context("idle_timeout must be seconds (a number)")?;
+                    s.save_settings(&settings)?;
+                }
+                "board.autocommit" => {
+                    let mut settings = s.load_settings()?;
+                    settings.autocommit = parse_bool(&value)?;
                     s.save_settings(&settings)?;
                 }
                 "board.name" => {
@@ -1141,6 +1215,152 @@ fn parse_bool(s: &str) -> Result<bool> {
         "false" | "no" | "off" | "0" => Ok(false),
         other => bail!("expected true/false, got '{other}'"),
     }
+}
+
+/// Turn a user-facing subscribe target into a canonical subscription ref.
+/// Tickets (`T-<n>`) and forum posts (`F-...`) are recognized by shape; the
+/// keywords `forum`/`all` map to wildcards; anything else is treated as a list id.
+fn canonical_sub_ref(target: &str) -> String {
+    let t = target.trim();
+    match t.to_ascii_lowercase().as_str() {
+        "all" | "board" | "*" => return "board:*".to_string(),
+        "forum" => return "forum:*".to_string(),
+        _ => {}
+    }
+    if t.starts_with("T-") || t.starts_with("t-") {
+        t.to_uppercase()
+    } else if t.starts_with("F-") || t.starts_with("f-") {
+        format!("forum:{}", t.to_uppercase())
+    } else if let Some(rest) = t.strip_prefix("list:") {
+        format!("list:{rest}")
+    } else if let Some(rest) = t.strip_prefix("forum:") {
+        format!("forum:{}", rest.to_uppercase())
+    } else {
+        format!("list:{t}")
+    }
+}
+
+/// `wipe subscribe` / `wipe unsubscribe`.
+pub fn subscribe(out: &Out, a: SubscribeArgs, remove: bool) -> Result<()> {
+    let s = store()?;
+    let who = identity::resolve(a.author);
+    let reference = canonical_sub_ref(&a.target);
+    let changed = if remove {
+        wipe_core::inbox::unsubscribe(&s, &who, &reference)?
+    } else {
+        wipe_core::inbox::subscribe(&s, &who, &reference)?
+    };
+    let verb = if remove { "unsubscribed" } else { "subscribed" };
+    let noun = if changed {
+        verb
+    } else if remove {
+        "was not subscribed"
+    } else {
+        "already subscribed"
+    };
+    out.ok(
+        format!(
+            "{who} {noun} {} {reference}",
+            if remove { "from" } else { "to" }
+        ),
+        json!({ "ok": true, "identity": who, "ref": reference, "changed": changed }),
+    );
+    Ok(())
+}
+
+/// `wipe subscriptions` - list an identity's subscriptions.
+pub fn subscriptions(out: &Out, author: Option<String>) -> Result<()> {
+    let s = store()?;
+    let who = identity::resolve(author);
+    let refs = wipe_core::inbox::subscriptions_of(&s, &who)?;
+    if out.json {
+        out.json_value(&json!({ "identity": who, "subscriptions": refs }));
+    } else if refs.is_empty() {
+        out.line(format!("{who} has no subscriptions"));
+    } else {
+        out.line(format!("{who} subscribes to:"));
+        for r in &refs {
+            out.line(format!("  {r}"));
+        }
+    }
+    Ok(())
+}
+
+/// `wipe inbox` - return unread activity on things you care about, then exit.
+pub fn inbox(out: &Out, a: InboxArgs) -> Result<()> {
+    let s = store()?;
+    let who = identity::resolve(a.author);
+
+    // Determine the lower bound: explicit --since wins; otherwise the stored
+    // read-cursor; otherwise the epoch (everything).
+    let since = if let Some(raw) = &a.since {
+        chrono::DateTime::parse_from_rfc3339(raw.trim())
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| anyhow!("--since must be RFC-3339 (e.g. 2026-07-14T00:00:00Z): {e}"))?
+    } else {
+        wipe_core::inbox::read_cursor(&s, &who).unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH)
+    };
+
+    let now = Utc::now();
+    let mut events = wipe_core::inbox::inbox(&s, &who, since)?;
+    if let Some(n) = a.limit {
+        events.truncate(n);
+    }
+
+    // --unread consumes: advance the cursor so the next call only shows newer.
+    if a.unread && a.since.is_none() {
+        wipe_core::inbox::write_cursor(&s, &who, now)?;
+    }
+
+    if out.json {
+        out.json_value(&json!({
+            "identity": who,
+            "since": since.to_rfc3339(),
+            "count": events.len(),
+            "events": events,
+        }));
+    } else if events.is_empty() {
+        out.line(format!(
+            "inbox empty for {who} (since {})",
+            since.to_rfc3339()
+        ));
+    } else {
+        out.line(format!("{} new for {who}:", events.len()));
+        for e in &events {
+            out.line(format!(
+                "  {}  {} {}  {} [{}]  {}",
+                e.ts.format("%Y-%m-%d %H:%M"),
+                e.kind,
+                e.object,
+                dim(&e.actor),
+                e.reason,
+                e.detail
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `wipe commit` - stage and commit the board's `.wipe/` changes as one atomic,
+/// wipe-attributed git commit (optionally scoped to a single ticket).
+pub fn commit(out: &Out, a: CommitArgs) -> Result<()> {
+    let s = store()?;
+    if !wipe_core::git::is_repo(s.root()) {
+        bail!("not a git repository - `wipe commit` needs the board to live inside a git repo");
+    }
+    let who = identity::resolve(a.author);
+    let hash = ops::commit_board(&s, a.target.as_deref(), a.message.as_deref(), &who)?;
+    match hash {
+        Some(h) => out.ok(
+            format!("committed {h} as {who}"),
+            json!({ "ok": true, "commit": h, "author": who }),
+        ),
+        None => out.ok(
+            "nothing to commit - the board is already up to date",
+            json!({ "ok": true, "commit": Value::Null, "author": who }),
+        ),
+    }
+    Ok(())
 }
 
 /// `wipe doctor`

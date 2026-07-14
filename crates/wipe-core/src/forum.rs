@@ -152,6 +152,29 @@ pub fn edit_post(store: &Store, id: &str, body: &str, now: DateTime<Utc>) -> Res
     Ok(())
 }
 
+/// Reattribute a post to `new_author`, stamping `edited` so the correction is
+/// visible. Returns the previous author. Used to fix a post authored under a
+/// stomped identity.
+pub fn reattribute_post(
+    store: &Store,
+    id: &str,
+    new_author: &str,
+    now: DateTime<Utc>,
+) -> Result<String> {
+    let tid = thread_of(id);
+    let mut thread = store.load_thread(&tid)?;
+    let post = thread
+        .root
+        .find_mut(id)
+        .ok_or_else(|| Error::PostNotFound(id.to_string()))?;
+    let old = post.author.clone();
+    post.author = new_author.to_string();
+    post.edited = Some(now);
+    thread.updated = now;
+    store.save_thread(&thread)?;
+    Ok(old)
+}
+
 /// Delete a post and its entire subtree. Deleting a thread's root removes the
 /// whole thread file.
 pub fn delete_post(store: &Store, id: &str, now: DateTime<Utc>) -> Result<()> {

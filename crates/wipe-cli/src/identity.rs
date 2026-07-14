@@ -50,6 +50,50 @@ pub fn agent_env() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether `$WIPE_STRICT_IDENTITY` is set to a truthy value. In strict mode,
+/// board-mutating commands refuse to fall back to the repo's VCS user or a
+/// default identity - which every agent in a shared worktree would share, causing
+/// silent misattribution.
+pub fn strict() -> bool {
+    std::env::var("WIPE_STRICT_IDENTITY")
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Whether some *explicit* identity source is present (an override, `$WIPE_AGENT`,
+/// a bound session, or `$WIPE_AUTHOR`) - i.e. attribution won't silently fall back
+/// to the ambient VCS user / default.
+fn has_explicit_identity(explicit: Option<&str>) -> bool {
+    explicit.map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || override_id().is_some()
+        || agent_env().is_some()
+        || active().is_some()
+        || std::env::var("WIPE_AUTHOR")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+}
+
+/// In strict mode, require an explicit identity for a write. `explicit` is any
+/// per-command actor override (e.g. `comment add --author`). Returns an error the
+/// caller surfaces rather than attributing the write to the ambient git user.
+pub fn enforce_strict(explicit: Option<&str>) -> anyhow::Result<()> {
+    if !strict() || has_explicit_identity(explicit) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "WIPE_STRICT_IDENTITY is set but no explicit identity was given.\n  \
+         set $WIPE_AGENT=<id> (recommended for shared/multi-agent worktrees), bind one with \
+         `wipe identity use <id> --agent`, or pass --author <id>.\n  \
+         refusing to attribute this write to the ambient VCS user."
+    );
+}
+
 /// Resolve the author identity, given an optional explicit override.
 pub fn resolve(explicit: Option<String>) -> String {
     if let Some(a) = explicit.filter(|s| !s.trim().is_empty()) {
@@ -109,6 +153,40 @@ pub fn source(explicit: Option<&str>) -> &'static str {
         "project VCS"
     } else {
         "default identity"
+    }
+}
+
+/// If multiple identity signals disagree with the resolved one (a stomp /
+/// confusion hazard), a short note naming them; otherwise `None`. Surfaced by
+/// `whoami` so an agent notices when, e.g., a bound session and `$WIPE_AGENT`
+/// point at different ids - the classic shared-worktree misattribution.
+pub fn divergence() -> Option<String> {
+    let resolved = resolve(None);
+    let mut others: Vec<String> = Vec::new();
+    if let Some(a) = agent_env() {
+        if a != resolved {
+            others.push(format!("$WIPE_AGENT={a}"));
+        }
+    }
+    if let Some(a) = active() {
+        if a != resolved {
+            others.push(format!("session={a}"));
+        }
+    }
+    if let Ok(a) = std::env::var("WIPE_AUTHOR") {
+        let a = a.trim().to_string();
+        if !a.is_empty() && a != resolved {
+            others.push(format!("$WIPE_AUTHOR={a}"));
+        }
+    }
+    if others.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "other identity signals disagree with the active one: {}. \
+             a concurrent agent may attribute work to a different id - pin yours with $WIPE_AGENT",
+            others.join(", ")
+        ))
     }
 }
 

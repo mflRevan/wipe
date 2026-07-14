@@ -24,6 +24,35 @@ import type {
 
 const DEFAULT_BASE = 'http://localhost:6737';
 const STORAGE_KEY = 'wipe.apiBase';
+const TOKEN_KEY = 'wipe.token';
+
+/**
+ * Resolve the access token for an exposed daemon. On first load the daemon hands
+ * it out in the URL (`?token=...`); we capture it into localStorage and strip it
+ * from the address bar so it isn't left lying around or copied by accident.
+ */
+export function getToken(): string {
+  if (!browser) return '';
+  try {
+    const url = new URL(window.location.href);
+    const fromUrl = url.searchParams.get('token');
+    if (fromUrl && fromUrl.trim()) {
+      window.localStorage.setItem(TOKEN_KEY, fromUrl.trim());
+      url.searchParams.delete('token');
+      window.history.replaceState({}, '', url.toString());
+      return fromUrl.trim();
+    }
+    return window.localStorage.getItem(TOKEN_KEY)?.trim() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Authorization header for the token, or an empty object when there is none. */
+function authHeader(): Record<string, string> {
+  const t = getToken();
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
 
 /** Resolve the configured API base URL. Order: localStorage > VITE_WIPE_API > default. */
 export function getApiBase(): string {
@@ -70,7 +99,7 @@ async function parseError(res: Response): Promise<string> {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+    headers: { 'content-type': 'application/json', ...authHeader(), ...(init?.headers ?? {}) }
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as T;
@@ -123,7 +152,9 @@ export function mediaUrl(path: string, project?: string): string {
     .split('/')
     .map((seg) => encodeURIComponent(seg))
     .join('/');
-  return `${getApiBase()}/api/media/${encoded}${qs({ project })}`;
+  // Media loads via <img src>, which can't set an Authorization header, so the
+  // token (when present, i.e. exposed mode) rides along as a query parameter.
+  return `${getApiBase()}/api/media/${encoded}${qs({ project, token: getToken() || undefined })}`;
 }
 
 export const api = {
@@ -355,7 +386,7 @@ export const api = {
     form.append('file', file);
     const res = await fetch(
       `${getApiBase()}/api/tickets/${encodeURIComponent(id)}/attachments${qs({ project })}`,
-      { method: 'POST', body: form }
+      { method: 'POST', body: form, headers: { ...authHeader() } }
     );
     if (!res.ok) throw new Error(await parseError(res));
     return (await res.json()) as Attachment;
@@ -442,7 +473,13 @@ export function subscribeChanges(onChange: () => void): () => void {
   let retry = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const wsUrl = () => getApiBase().replace(/^http/, 'ws') + '/ws';
+  // Browser WebSockets can't set headers, so the token (exposed mode) goes on the
+  // query string, matching the daemon's `?token=` acceptance.
+  const wsUrl = () => {
+    const base = getApiBase().replace(/^http/, 'ws') + '/ws';
+    const t = getToken();
+    return t ? `${base}?token=${encodeURIComponent(t)}` : base;
+  };
 
   const connect = () => {
     if (closed) return;

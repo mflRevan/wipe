@@ -24,6 +24,12 @@ pub fn acceptance_id(n: u64) -> String {
     format!("ac-{n}")
 }
 
+/// Generate a fresh, URL-safe bearer token (a hyphen-free UUIDv4), used to guard
+/// an exposed daemon (`wipe serve --expose ...`).
+pub fn token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
 /// Turn a human name into a stable kebab-case slug used for list IDs.
 ///
 /// Non-alphanumeric runs collapse to a single `-`; the result is lowercased and

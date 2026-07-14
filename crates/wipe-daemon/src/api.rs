@@ -32,6 +32,13 @@ pub struct AppState {
     /// Number of live UI WebSocket clients. Drives idle-shutdown: when this is 0
     /// for long enough, an auto-served daemon exits.
     pub clients: Arc<AtomicUsize>,
+    /// Bearer token required on `/api` + `/ws` when the daemon is exposed beyond
+    /// localhost. `None` for localhost-only serves (no auth needed).
+    pub token: Option<String>,
+    /// Whether the daemon is reachable beyond localhost. When true, client-supplied
+    /// `actor`/`author` is ignored (a shared token can't verify per-user identity),
+    /// so writes are attributed to the board's own resolved identity instead.
+    pub exposed: bool,
 }
 
 /// An error that renders as a JSON `{ok:false,error}` body.
@@ -76,7 +83,13 @@ fn notify(state: &AppState) {
 /// Who to attribute a UI-driven mutation to for the activity timeline: an explicit
 /// `actor` from the request if given, else the repo's VCS user (git, Plastic, …),
 /// the board default, or the configured global default - never "unknown".
-fn resolve_actor(store: &Store, provided: Option<String>) -> String {
+///
+/// When the daemon is **exposed**, the request's `actor` is *not* trusted: a shared
+/// bearer token can't tie a request to a specific person, so honoring a
+/// client-supplied identity would let a remote caller impersonate anyone. In that
+/// mode we fall back to the board's own resolved identity.
+fn resolve_actor(state: &AppState, store: &Store, provided: Option<String>) -> String {
+    let provided = if state.exposed { None } else { provided };
     ops::resolve_identity(Some(store), provided.as_deref())
 }
 
@@ -270,7 +283,7 @@ pub async fn create_ticket(
     Json(b): Json<CreateTicketBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     let spec = NewTicket {
         title: b.title,
         body: b.body,
@@ -316,7 +329,7 @@ pub async fn move_ticket(
     Json(b): Json<MoveBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     ops::move_ticket(&store, &id, &b.to, b.pos, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "id": id, "list": b.to })))
@@ -342,7 +355,7 @@ pub async fn add_comment(
     // Resolve like every other authored action (falls back to the repo VCS/board
     // default) instead of stamping the sentinel "ui", so UI comments are attributed
     // to the real identity and render consistently with CLI/forum authorship.
-    let author = resolve_actor(&store, b.author);
+    let author = resolve_actor(&state, &store, b.author);
     let cid = ops::add_comment(&store, &id, &author, &b.body, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true, "ticket": id, "comment": cid })))
@@ -623,7 +636,7 @@ pub async fn patch_ticket(
     Json(b): Json<PatchBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     let patch = TicketPatch {
         title: b.title,
         body: b.body,
@@ -690,7 +703,7 @@ pub async fn upload_attachment(
     mut multipart: Multipart,
 ) -> ApiResult {
     let store = store_for(&state, q.project)?;
-    let actor = resolve_actor(&store, None);
+    let actor = resolve_actor(&state, &store, None);
     let max = store.load_settings()?.max_attachment_mb * 1024 * 1024;
 
     while let Some(field) = multipart
@@ -741,7 +754,7 @@ pub async fn delete_attachment(
     Json(b): Json<DetachBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     ops::remove_attachment(&store, &id, &b.path, &actor, Utc::now())?;
     notify(&state);
     Ok(Json(json!({ "ok": true })))
@@ -945,7 +958,7 @@ pub async fn forum_create(
     Json(b): Json<ForumPostBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     let t = forum::create_thread(
         &store,
         NewThread {
@@ -983,7 +996,7 @@ pub async fn forum_reply(
     Json(b): Json<ForumReplyBody>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project.or(b.project))?;
-    let actor = resolve_actor(&store, b.actor);
+    let actor = resolve_actor(&state, &store, b.actor);
     let child = forum::reply(
         &store,
         &id,
