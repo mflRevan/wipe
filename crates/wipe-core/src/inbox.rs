@@ -179,7 +179,7 @@ pub fn inbox(store: &Store, identity: &str, since: DateTime<Utc>) -> Result<Vec<
         }
     }
 
-    events.sort_by(|a, b| b.ts.cmp(&a.ts));
+    events.sort_by_key(|e| std::cmp::Reverse(e.ts));
     Ok(events)
 }
 
