@@ -1,12 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { Plus } from 'lucide-svelte';
-  import {
-    dndzone,
-    SHADOW_ITEM_MARKER_PROPERTY_NAME,
-    type DndEvent
-  } from 'svelte-dnd-action';
-  import { flip } from 'svelte/animate';
   import Column from './Column.svelte';
   import TrashZone from './TrashZone.svelte';
   import {
@@ -27,13 +21,7 @@
   const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const flipMs = reduced ? 0 : 150;
 
-  // svelte-dnd-action requires each draggable item to carry an `id`; our list
-  // objects key on `list`, so the columns fed to the board-level zone get an
-  // `id` alias alongside.
-  type Col = List & { id: string };
-  const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
-
-  let cols = $state<Col[]>([]);
+  let cols = $state<List[]>([]);
   // Deliberately a plain (untracked) local: the sync effect below must NOT re-run
   // the instant a drag ends, or it would rebuild `cols` from the not-yet-updated
   // store and snap the just-dropped card back to its origin. The effect still
@@ -67,30 +55,8 @@
   $effect(() => {
     const b = $board;
     if (!b || dragging) return;
-    cols = b.lists.map((l) => ({ ...l, id: l.list, tickets: [...l.tickets] }));
+    cols = b.lists.map((l) => ({ ...l, tickets: [...l.tickets] }));
   });
-
-  // --- list (column) drag-to-reorder ---------------------------------------
-  // A board-level dndzone reorders the columns themselves. It uses a distinct
-  // `type` so cards (in the columns' default-type zones) can never drop into it
-  // and vice-versa; grabbing a card starts a card drag, grabbing the column
-  // header starts a column drag.
-  function handleListConsider(e: CustomEvent<DndEvent<Col>>) {
-    dragging = true;
-    // Never let an empty items array blank the board (a defensive guard against a
-    // malformed/interrupted drag); a real reorder always carries every column.
-    if (e.detail.items.length) cols = e.detail.items;
-  }
-
-  function handleListFinalize(e: CustomEvent<DndEvent<Col>>) {
-    if (e.detail.items.length) cols = e.detail.items;
-    dragging = false;
-    if (e.detail.info.trigger === 'droppedIntoZone') {
-      const id = e.detail.info.id;
-      const pos = cols.findIndex((c) => c.list === id);
-      if (pos !== -1) void moveList(id, pos);
-    }
-  }
 
   function colById(id: string): List | undefined {
     return cols.find((c) => c.list === id);
@@ -123,48 +89,25 @@
 </script>
 
 <div class="board wp-scroll">
-  <div
-    class="lists"
-    use:dndzone={{
-      items: cols,
-      type: 'column',
-      flipDurationMs: flipMs,
-      dragDisabled: $rewinding,
-      dropTargetStyle: {},
-      morphDisabled: true,
-      transformDraggedElement: (el?: HTMLElement) => {
-        if (el) {
-          el.style.boxShadow = 'var(--wp-shadow-lift)';
-          el.style.borderRadius = 'var(--wp-r-lg)';
-          el.style.cursor = 'grabbing';
-        }
-      }
-    }}
-    onconsider={handleListConsider}
-    onfinalize={handleListFinalize}
-  >
-    {#each cols as col, i (col.list)}
-      <div class="col-wrap" class:ghost={marker in col} animate:flip={{ duration: flipMs }}>
-        <Column
-          listId={col.list}
-          name={col.name}
-          tickets={col.tickets}
-          {flipMs}
-          {dragActive}
-          dragDisabled={$rewinding}
-          canMoveLeft={i > 0}
-          canMoveRight={i < cols.length - 1}
-          {onopen}
-          {onadd}
-          onmove={handleMove}
-          onrename={(id, name) => renameList(id, name)}
-          ondelete={(id) => deleteList(id)}
-          onconsider={handleConsider}
-          onfinalize={handleFinalize}
-        />
-      </div>
-    {/each}
-  </div>
+  {#each cols as col, i (col.list)}
+    <Column
+      listId={col.list}
+      name={col.name}
+      tickets={col.tickets}
+      {flipMs}
+      {dragActive}
+      dragDisabled={$rewinding}
+      canMoveLeft={i > 0}
+      canMoveRight={i < cols.length - 1}
+      {onopen}
+      {onadd}
+      onmove={handleMove}
+      onrename={(id, name) => renameList(id, name)}
+      ondelete={(id) => deleteList(id)}
+      onconsider={handleConsider}
+      onfinalize={handleFinalize}
+    />
+  {/each}
 
   {#if !$rewinding}
     <div class="addcol">
@@ -215,32 +158,6 @@
        and scrolls internally; its drop zone keeps a comfortable min-height so
        even an empty list is an easy, reliable drop target. */
     align-items: flex-start;
-  }
-  /* The reorderable row of columns (a nested dndzone). Kept separate from the
-     board so the "+ Add list" affordance isn't treated as a draggable item. */
-  .lists {
-    display: flex;
-    gap: 12px;
-    align-items: flex-start;
-  }
-  .col-wrap {
-    flex: none;
-  }
-  /* The column header is the drag handle for reordering lists; a plain click on
-     its buttons still fires (a drag only starts once the pointer moves). */
-  .col-wrap :global(.col-head) {
-    cursor: grab;
-  }
-  /* The placeholder left where a dragged column will land: hide the real column
-     and show a dashed accent outline the same size. */
-  .col-wrap.ghost > :global(.column) {
-    visibility: hidden;
-  }
-  .col-wrap.ghost {
-    border-radius: var(--wp-r-lg);
-    background: color-mix(in srgb, var(--wp-accent) 10%, transparent);
-    outline: 2px dashed color-mix(in srgb, var(--wp-accent) 55%, transparent);
-    outline-offset: -2px;
   }
   .empty {
     color: var(--wp-text-muted);
