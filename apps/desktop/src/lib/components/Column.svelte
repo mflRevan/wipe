@@ -21,7 +21,8 @@
     onrename,
     ondelete,
     onconsider,
-    onfinalize
+    onfinalize,
+    ondragel
   }: {
     listId: string;
     name: string;
@@ -38,6 +39,7 @@
     ondelete?: (listId: string) => void;
     onconsider: (listId: string, items: Ticket[]) => void;
     onfinalize: (listId: string, items: Ticket[], info: { id: string; trigger: string }) => void;
+    ondragel?: (el: HTMLElement) => void;
   } = $props();
 
   const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
@@ -152,6 +154,10 @@
           el.style.boxShadow = 'var(--wp-shadow-lift)';
           el.style.borderRadius = 'var(--wp-r-md)';
           el.style.cursor = 'grabbing';
+          // Smoothly scale when the pointer is over the trash (Board drives this).
+          el.style.transition = 'transform 0.12s var(--wp-ease)';
+          el.style.transformOrigin = 'center';
+          ondragel?.(el);
         }
       }
     }}

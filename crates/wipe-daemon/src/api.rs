@@ -1086,6 +1086,12 @@ pub async fn forum_list(State(state): State<AppState>, Query(q): Query<ProjectQu
                 .chars()
                 .take(140)
                 .collect();
+            // Distinct authors anywhere in the thread, so the UI can filter by "who
+            // engaged" (participated), not just the OP.
+            let mut participants: Vec<String> =
+                thread_posts.iter().map(|p| p.author.clone()).collect();
+            participants.sort();
+            participants.dedup();
             json!({
                 "id": r.thread_id,
                 "title": r.thread_title,
@@ -1096,6 +1102,7 @@ pub async fn forum_list(State(state): State<AppState>, Query(q): Query<ProjectQu
                 "updated": last.created,
                 "last_author": last.author,
                 "snippet": snippet,
+                "participants": participants,
             })
         })
         .collect();

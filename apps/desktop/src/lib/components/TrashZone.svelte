@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import { Trash2, RotateCcw, X } from 'lucide-svelte';
   import {
     trash,
@@ -11,36 +10,26 @@
     emptyTrash,
     setTrashRetention
   } from '$lib/stores/board';
-  import type { Ticket } from '$lib/types';
 
   let {
     dragActive = false,
-    flipMs = 150,
-    ondelete
+    overTrash = false,
+    binEl = $bindable(null)
   }: {
     dragActive?: boolean;
-    flipMs?: number;
-    ondelete: (id: string) => void;
+    // Whether the dragged pointer is currently over the bin (Board hit-tests the
+    // POINTER, not the card, and drives this - a release then deletes).
+    overTrash?: boolean;
+    // The bin element, exposed so Board can hit-test the pointer against it.
+    binEl?: HTMLElement | null;
   } = $props();
 
-  // svelte-dnd-action drop zone: while a card hovers, the library parks a shadow
-  // item here (which we detect to glow, never render). On drop, the card is deleted.
-  let items = $state<Ticket[]>([]);
-  let over = $derived(items.length > 0);
+  let over = $derived(dragActive && overTrash);
 
   let panelOpen = $state(false);
   let root = $state<HTMLDivElement>();
   let editingRetention = $state(false);
   let retentionDraft = $state('');
-
-  function consider(e: CustomEvent<DndEvent<Ticket>>) {
-    items = e.detail.items;
-  }
-  function finalize(e: CustomEvent<DndEvent<Ticket>>) {
-    const dropped = e.detail.items;
-    items = [];
-    for (const t of dropped) ondelete(t.id);
-  }
 
   // Load the trash once so the badge count is present before the panel is opened.
   onMount(() => {
@@ -168,6 +157,7 @@
        and is clickable (with a hover lift) to open the restore panel. -->
   <div
     class="trash-bin"
+    bind:this={binEl}
     role="button"
     tabindex="0"
     aria-label={dragActive ? 'Drop to delete' : 'Open trash'}
@@ -185,26 +175,6 @@
     {:else if $trash.length > 0}
       <span class="trash-badge">{$trash.length}</span>
     {/if}
-  </div>
-
-  <!-- The dnd drop zone overlays the bin; only interactive during a drag so it
-       can never swallow a click meant to open the panel. -->
-  <div
-    class="trash-zone"
-    use:dndzone={{
-      items,
-      flipDurationMs: flipMs,
-      dropTargetStyle: {},
-      transformDraggedElement: (el?: HTMLElement) => {
-        if (el) el.style.opacity = '0';
-      }
-    }}
-    onconsider={consider}
-    onfinalize={finalize}
-  >
-    {#each items as t (t.id)}
-      <div class="sink" aria-hidden="true"></div>
-    {/each}
   </div>
 </div>
 
@@ -305,20 +275,6 @@
     font-family: var(--wp-font-mono);
     font-size: 10px;
     font-weight: 600;
-  }
-
-  .trash-zone {
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-  }
-  .trash-wrap.drag .trash-zone {
-    pointer-events: auto;
-  }
-  .sink {
-    width: 100%;
-    height: 100%;
   }
 
   /* --- restore panel ----------------------------------------------------- */

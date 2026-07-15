@@ -22,6 +22,40 @@
   const flipMs = reduced ? 0 : 150;
 
   let cols = $state<List[]>([]);
+
+  // --- trash-on-drag (pointer tracked, not a drop zone) --------------------
+  // The dragged card element (captured from svelte-dnd-action) and the trash bin
+  // element, so we can hit-test the POINTER against the bin and scale the card.
+  let draggedEl: HTMLElement | null = null;
+  let trashBinEl = $state<HTMLElement | null>(null);
+  // Reactive: pointer is currently over the trash (release would delete).
+  let overTrash = $state(false);
+
+  // While a card is being dragged, track the raw pointer position: if it's over
+  // the bin, shrink the dragged card to 0.7x (a release deletes it); else 1x.
+  $effect(() => {
+    if (!dragActive) return;
+    const onMove = (e: PointerEvent) => {
+      const el = trashBinEl;
+      if (!el) {
+        overTrash = false;
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const pad = 36; // generous margin so the bin is easy to reach
+      overTrash =
+        e.clientX >= r.left - pad &&
+        e.clientX <= r.right + pad &&
+        e.clientY >= r.top - pad &&
+        e.clientY <= r.bottom + pad;
+      if (draggedEl) draggedEl.style.transform = overTrash ? 'scale(0.7)' : 'scale(1)';
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      overTrash = false;
+    };
+  });
   // Deliberately a plain (untracked) local: the sync effect below must NOT re-run
   // the instant a drag ends, or it would rebuild `cols` from the not-yet-updated
   // store and snap the just-dropped card back to its origin. The effect still
@@ -76,8 +110,16 @@
   ) {
     const col = colById(listId);
     if (col) col.tickets = items;
+    const droppedOnTrash = overTrash;
     dragging = false;
     dragActive = false;
+    draggedEl = null;
+    // Dropping over the bin deletes the card - this wins even if the release also
+    // happened over a column zone. The optimistic delete + poll reconcile `cols`.
+    if (droppedOnTrash) {
+      void deleteTicket(info.id);
+      return;
+    }
     // Persist only from the destination zone (covers same-list reorders too).
     // `cols` already reflects the drop; because `dragging` is untracked the sync
     // effect won't revert it, and the ~0.5s poll confirms the move server-side.
@@ -106,6 +148,7 @@
       ondelete={(id) => deleteList(id)}
       onconsider={handleConsider}
       onfinalize={handleFinalize}
+      ondragel={(el) => (draggedEl = el)}
     />
   {/each}
 
@@ -140,10 +183,10 @@
   {/if}
 </div>
 
-<!-- Drag a card here to delete it. Hidden unless a drag is in progress, and only
-     while the board is live (not when viewing history). -->
+<!-- Always-visible trash: a click opens the restore panel; during a card drag the
+     pointer position (tracked above) decides whether a release deletes. -->
 {#if !$rewinding}
-  <TrashZone {dragActive} {flipMs} ondelete={(id) => deleteTicket(id)} />
+  <TrashZone {dragActive} {overTrash} bind:binEl={trashBinEl} />
 {/if}
 
 <style>

@@ -176,6 +176,8 @@ export interface ForumThreadSummary {
   last_author: string;
   /** One-line preview from the root post. */
   snippet: string;
+  /** Distinct authors who posted anywhere in the thread (for "who engaged" filters). */
+  participants?: string[];
 }
 
 /** A flattened post returned by forum search. */
