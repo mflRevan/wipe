@@ -39,7 +39,7 @@
     ondelete?: (listId: string) => void;
     onconsider: (listId: string, items: Ticket[]) => void;
     onfinalize: (listId: string, items: Ticket[], info: { id: string; trigger: string }) => void;
-    ondragel?: (el: HTMLElement) => void;
+    ondragel?: (el: HTMLElement | null) => void;
   } = $props();
 
   const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
@@ -154,10 +154,15 @@
           el.style.boxShadow = 'var(--wp-shadow-lift)';
           el.style.borderRadius = 'var(--wp-r-md)';
           el.style.cursor = 'grabbing';
-          // Smoothly scale when the pointer is over the trash (Board drives this).
-          el.style.transition = 'transform 0.12s var(--wp-ease)';
-          el.style.transformOrigin = 'center';
-          ondragel?.(el);
+          // svelte-dnd-action owns `el`'s transform (it translates it to follow the
+          // cursor), so we must NOT touch it - doing so makes the drag lag and snap.
+          // Hand Board the INNER card to scale (over the trash) instead.
+          const card = el.querySelector('.card') as HTMLElement | null;
+          if (card) {
+            card.style.transition = 'transform 0.12s var(--wp-ease)';
+            card.style.transformOrigin = 'center';
+          }
+          ondragel?.(card);
         }
       }
     }}
