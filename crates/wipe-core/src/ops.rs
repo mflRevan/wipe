@@ -79,6 +79,55 @@ pub fn create_ticket(
     Ok(ticket)
 }
 
+/// Duplicate a ticket: create a copy on the same list, immediately after the
+/// original. The copy carries the title (suffixed " (copy)"), body, priority,
+/// labels, assignees, checklist, acceptance criteria, and attachment references;
+/// comments and activity start fresh (a single `created` entry). Returns the copy.
+pub fn duplicate_ticket(
+    store: &Store,
+    ticket_id: &str,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<Ticket> {
+    let src = store.load_ticket(ticket_id)?;
+    let mut board = store.load_board()?;
+
+    let new_id = crate::id::ticket_id(board.next_ticket);
+    board.next_ticket += 1;
+
+    let mut copy = src.clone();
+    copy.id = new_id.clone();
+    copy.title = format!("{} (copy)", src.title);
+    copy.comments.clear();
+    copy.activity.clear();
+    copy.next_comment = 1;
+    copy.created = now;
+    copy.updated = now;
+    copy.log_activity(actor, "created", "", now);
+
+    // Insert directly after the original on its list (or append to the first list
+    // if the original card isn't found for some reason).
+    let (list_id, at) = board
+        .lists
+        .iter()
+        .find_map(|l| {
+            l.cards
+                .iter()
+                .position(|c| c == ticket_id)
+                .map(|p| (l.id.clone(), p + 1))
+        })
+        .or_else(|| board.lists.first().map(|l| (l.id.clone(), l.cards.len())))
+        .ok_or_else(|| Error::msg("board has no lists"))?;
+    let dest = board.list_mut(&list_id).expect("list id from board");
+    let at = at.min(dest.cards.len());
+    dest.cards.insert(at, new_id.clone());
+    board.updated = now;
+
+    store.save_ticket(&copy)?;
+    store.save_board(&board)?;
+    Ok(copy)
+}
+
 /// Move a ticket to `to_list` at an optional 0-based `position` (appended if
 /// `None`). Removes it from whatever list currently holds it.
 pub fn move_ticket(

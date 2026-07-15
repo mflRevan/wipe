@@ -100,7 +100,20 @@ Move a ticket across lists (lists come from `wipe list show`):
 
 ```bash
 wipe ticket move T-1 --to in-progress --json
-wipe ticket close T-1 --json      # convenience: move to the done list
+wipe ticket close T-1 --json          # convenience: move to the done list
+wipe ticket duplicate T-1 --json      # copy onto the same list, after the original
+```
+
+Deleting is a **soft delete**: the ticket goes to a restorable, gitignored trash
+(kept `trash.retention_days`, default 7) and is purged when it expires. Restore or
+purge it explicitly:
+
+```bash
+wipe ticket delete T-1 --yes --json           # -> trash (add --purge to delete for good)
+wipe trash list --json                         # what's recoverable, newest first
+wipe trash restore T-1 --json                  # back onto its original list
+wipe trash purge T-1 --json                    # permanently (omit id to empty the trash)
+wipe config --global set trash.retention_days 14   # user-wide retention window
 ```
 
 Inspect a ticket:

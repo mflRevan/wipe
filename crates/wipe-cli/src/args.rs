@@ -96,6 +96,11 @@ pub enum Command {
     /// Show unread activity on things you're assigned to, authored, or subscribed
     /// to - returns and exits (non-blocking), newest first.
     Inbox(InboxArgs),
+    /// Manage the trash: list, restore, or permanently purge deleted tickets.
+    Trash {
+        #[command(subcommand)]
+        cmd: TrashCmd,
+    },
     /// Commit the board's `.wipe/` changes as one atomic, wipe-attributed commit.
     Commit(CommitArgs),
     /// Diagnose the environment and the current board.
@@ -343,16 +348,41 @@ pub enum TicketCmd {
         /// Ticket ID.
         id: String,
     },
-    /// Delete a ticket.
+    /// Delete a ticket (moved to the restorable trash unless `--purge`).
     Delete {
         /// Ticket ID.
         id: String,
         /// Do not require confirmation (always required in non-interactive use).
         #[arg(long)]
         yes: bool,
+        /// Permanently delete instead of moving it to the trash.
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Duplicate a ticket (a copy on the same list, right after the original).
+    Duplicate {
+        /// Ticket ID.
+        id: String,
     },
     /// List tickets, optionally filtered.
     List(TicketListArgs),
+}
+
+/// `wipe trash ...` - the restorable, gitignored bin for deleted tickets.
+#[derive(Debug, Subcommand)]
+pub enum TrashCmd {
+    /// List trashed tickets, newest deletion first (purging expired ones first).
+    List,
+    /// Restore a trashed ticket back onto the board.
+    Restore {
+        /// Ticket ID.
+        id: String,
+    },
+    /// Permanently delete one trashed ticket (or all with no id).
+    Purge {
+        /// Ticket ID (omit to empty the whole trash).
+        id: Option<String>,
+    },
 }
 
 /// `wipe ticket create`

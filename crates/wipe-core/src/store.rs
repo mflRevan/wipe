@@ -66,6 +66,12 @@ impl Store {
         self.wipe_dir().join(".cache")
     }
 
+    /// Path to the (gitignored) soft-delete trash directory, where deleted tickets
+    /// are parked until restored or purged past the retention window.
+    pub fn trash_dir(&self) -> PathBuf {
+        self.cache_dir().join("trash")
+    }
+
     fn ticket_path(&self, id: &str) -> PathBuf {
         self.tickets_dir().join(format!("{id}.json"))
     }

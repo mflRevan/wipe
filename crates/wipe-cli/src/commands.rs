@@ -567,12 +567,28 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 json!({ "ok": true, "id": id, "list": target }),
             );
         }
-        TicketCmd::Delete { id, yes } => {
+        TicketCmd::Delete { id, yes, purge } => {
             if !yes {
                 bail!("refusing to delete {id} without --yes");
             }
-            ops::delete_ticket(&s, &id, Utc::now())?;
-            out.ok(format!("deleted {id}"), json!({ "ok": true, "id": id }));
+            if purge {
+                ops::delete_ticket(&s, &id, Utc::now())?;
+                out.ok(
+                    format!("permanently deleted {id}"),
+                    json!({ "ok": true, "id": id, "trashed": false }),
+                );
+            } else {
+                let days = GlobalConfig::load().trash_retention_days();
+                wipe_core::trash::trash_ticket(&s, &id, days, Utc::now())?;
+                out.ok(
+                    format!("deleted {id} (restorable from the trash for {days}d)"),
+                    json!({ "ok": true, "id": id, "trashed": days > 0, "retention_days": days }),
+                );
+            }
+        }
+        TicketCmd::Duplicate { id } => {
+            let t = ops::duplicate_ticket(&s, &id, &identity::resolve(None), Utc::now())?;
+            out.ok(format!("duplicated {id} -> {}", t.id), to_value(&t));
         }
         TicketCmd::List(a) => {
             let (board, view) = ops::board_view(&s)?;
@@ -1088,6 +1104,7 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                         .map(|r| r.join(", "))
                         .unwrap_or_else(|| "(home)".into())
                 );
+                println!("trash.retention_days {}", g.trash_retention_days());
             }
         }
         ConfigCmd::Get { key } => {
@@ -1106,6 +1123,7 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                 "identity.default" => json!(g.default_identity),
                 "identity.prefer" => json!(g.prefer_default_identity),
                 "scan.roots" => json!(g.scan_roots),
+                "trash.retention_days" => json!(g.trash_retention_days()),
                 other => bail!("unknown global key '{other}'"),
             };
             if out.json {
@@ -1175,6 +1193,13 @@ fn config_global(out: &Out, cmd: ConfigCmd) -> Result<()> {
                         .filter(|s| !s.is_empty())
                         .collect();
                     g.scan_roots = if roots.is_empty() { None } else { Some(roots) };
+                }
+                "trash.retention_days" => {
+                    g.trash_retention_days = Some(
+                        value
+                            .parse()
+                            .context("retention must be a whole number of days")?,
+                    );
                 }
                 other => bail!("unknown global key '{other}'"),
             }
@@ -1337,6 +1362,71 @@ pub fn inbox(out: &Out, a: InboxArgs) -> Result<()> {
                 e.detail
             ));
         }
+    }
+    Ok(())
+}
+
+/// `wipe trash ...` - the restorable, gitignored bin for deleted tickets.
+pub fn trash(out: &Out, cmd: TrashCmd) -> Result<()> {
+    let s = store()?;
+    let days = GlobalConfig::load().trash_retention_days();
+    match cmd {
+        TrashCmd::List => {
+            let entries = wipe_core::trash::list_trash(&s, days, Utc::now())?;
+            if out.json {
+                let rows: Vec<Value> = entries
+                    .iter()
+                    .map(|e| {
+                        json!({
+                            "id": e.ticket.id,
+                            "title": e.ticket.title,
+                            "list": e.list,
+                            "deleted_at": e.deleted_at.to_rfc3339(),
+                        })
+                    })
+                    .collect();
+                out.json_value(&json!({ "retention_days": days, "trash": rows }));
+            } else if entries.is_empty() {
+                out.line("trash is empty");
+            } else {
+                out.line(format!("{} trashed (retention {days}d):", entries.len()));
+                for e in &entries {
+                    out.line(format!(
+                        "  {}  {}  {}",
+                        e.ticket.id,
+                        dim(&e.deleted_at.format("%Y-%m-%d %H:%M").to_string()),
+                        e.ticket.title
+                    ));
+                }
+            }
+        }
+        TrashCmd::Restore { id } => {
+            let t = wipe_core::trash::restore_ticket(&s, &id, Utc::now())?;
+            out.ok(
+                format!("restored {} to {}", t.id, "the board"),
+                json!({ "ok": true, "id": t.id }),
+            );
+        }
+        TrashCmd::Purge { id } => match id {
+            Some(id) => {
+                let removed = wipe_core::trash::purge_ticket(&s, &id)?;
+                out.ok(
+                    if removed {
+                        format!("permanently deleted {id}")
+                    } else {
+                        format!("{id} was not in the trash")
+                    },
+                    json!({ "ok": true, "id": id, "purged": removed }),
+                );
+            }
+            None => {
+                let n = wipe_core::trash::empty(&s)?;
+                out.ok(
+                    format!("emptied the trash ({n} removed)"),
+                    json!({ "ok": true, "purged": n }),
+                );
+            }
+        },
     }
     Ok(())
 }

@@ -59,6 +59,23 @@ pub struct GlobalConfig {
     /// have locally). Empty/absent means "the user's home directory".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_roots: Option<Vec<String>>,
+    /// How many days a deleted ticket is kept in the (gitignored) trash before it
+    /// is permanently purged and can no longer be restored. Absent means the
+    /// built-in default (7). `0` disables the trash entirely (immediate purge).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trash_retention_days: Option<u64>,
+}
+
+/// The built-in default trash retention window, in days.
+pub const DEFAULT_TRASH_RETENTION_DAYS: u64 = 7;
+
+impl GlobalConfig {
+    /// The effective trash retention window in days (falls back to the built-in
+    /// default when unset).
+    pub fn trash_retention_days(&self) -> u64 {
+        self.trash_retention_days
+            .unwrap_or(DEFAULT_TRASH_RETENTION_DAYS)
+    }
 }
 
 impl GlobalConfig {

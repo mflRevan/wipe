@@ -19,7 +19,8 @@ import type {
   List,
   Project,
   Ticket,
-  TicketPatch
+  TicketPatch,
+  TrashListResponse
 } from './types';
 
 const DEFAULT_BASE = 'http://localhost:6737';
@@ -301,8 +302,43 @@ export const api = {
     });
   },
 
-  deleteTicket(id: string, project?: string): Promise<{ ok: boolean }> {
-    return req<{ ok: boolean }>(`/api/tickets/${encodeURIComponent(id)}${qs({ project })}`, {
+  deleteTicket(id: string, project?: string, purge = false): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(
+      `/api/tickets/${encodeURIComponent(id)}${qs({ project, purge: purge ? 'true' : undefined })}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async duplicateTicket(id: string, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(`/api/tickets/${encodeURIComponent(id)}/duplicate${qs({ project })}`, {
+        method: 'POST'
+      })
+    );
+  },
+
+  // --- trash (soft-deleted tickets) ----------------------------------------
+
+  trashList(project?: string): Promise<TrashListResponse> {
+    return req<TrashListResponse>(`/api/trash${qs({ project })}`);
+  },
+
+  async restoreTicket(id: string, project?: string): Promise<Ticket> {
+    return fillTicket(
+      await req<Ticket>(`/api/trash/${encodeURIComponent(id)}/restore${qs({ project })}`, {
+        method: 'POST'
+      })
+    );
+  },
+
+  purgeTrash(id: string, project?: string): Promise<{ ok: boolean; purged: boolean }> {
+    return req<{ ok: boolean; purged: boolean }>(`/api/trash/${encodeURIComponent(id)}${qs({ project })}`, {
+      method: 'DELETE'
+    });
+  },
+
+  emptyTrash(project?: string): Promise<{ ok: boolean; purged: number }> {
+    return req<{ ok: boolean; purged: number }>(`/api/trash${qs({ project })}`, {
       method: 'DELETE'
     });
   },
@@ -390,6 +426,13 @@ export const api = {
     );
     if (!res.ok) throw new Error(await parseError(res));
     return (await res.json()) as Attachment;
+  },
+
+  attachPath(id: string, path: string, project?: string): Promise<Attachment> {
+    return req<Attachment>(
+      `/api/tickets/${encodeURIComponent(id)}/attachments/path${qs({ project })}`,
+      { method: 'POST', body: JSON.stringify({ path }) }
+    );
   },
 
   deleteAttachment(id: string, path: string, project?: string): Promise<{ ok: boolean }> {

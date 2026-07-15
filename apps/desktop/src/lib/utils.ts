@@ -171,3 +171,32 @@ export function mediaKind(mime: string, name: string): MediaKind {
   if (m.startsWith('text/') || ['md', 'txt', 'csv', 'log', 'json'].includes(ext)) return 'text';
   return 'other';
 }
+
+/**
+ * Whether a pasted string looks like a single local filesystem path (Windows
+ * `C:\…`, UNC `\…`, POSIX `/…`, or `~/…`), so it can be attached rather than
+ * inserted as text. Multi-line or plain text returns false.
+ */
+export function looksLikePath(s: string): boolean {
+  const t = s.trim();
+  if (!t || /[\r\n]/.test(t)) return false;
+  return /^[a-zA-Z]:[\/]/.test(t) || /^\\/.test(t) || t.startsWith('/') || t.startsWith('~/');
+}
+
+/**
+ * Extract attachable files from a paste/drop `DataTransfer`: real files first,
+ * else file-kind items (e.g. a screenshot image blob).
+ */
+export function filesFromClipboard(dt: DataTransfer | null): File[] {
+  if (!dt) return [];
+  const files: File[] = [];
+  if (dt.files && dt.files.length) files.push(...Array.from(dt.files));
+  else
+    for (const item of Array.from(dt.items)) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+  return files;
+}

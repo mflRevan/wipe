@@ -164,6 +164,39 @@ export const CLI_GROUPS: CliGroup[] = [
         description: "Move a ticket to the done list.",
         example: "wipe ticket close T-1",
       },
+      {
+        command: "wipe ticket duplicate",
+        description: "Copy a ticket onto the same list, right after the original.",
+        example: "wipe ticket duplicate T-1",
+      },
+      {
+        command: "wipe ticket delete",
+        description:
+          "Delete a ticket (moved to the restorable trash unless --purge deletes it permanently).",
+        example: "wipe ticket delete T-1 --yes",
+      },
+    ],
+  },
+  {
+    name: "trash",
+    summary:
+      "The restorable, gitignored bin for deleted tickets (kept for a configurable retention window).",
+    commands: [
+      {
+        command: "wipe trash list",
+        description: "List trashed tickets, newest deletion first (expired ones are purged first).",
+        example: "wipe trash list --json",
+      },
+      {
+        command: "wipe trash restore",
+        description: "Restore a trashed ticket back onto the board.",
+        example: "wipe trash restore T-1",
+      },
+      {
+        command: "wipe trash purge",
+        description: "Permanently delete one trashed ticket (or all with no id).",
+        example: "wipe trash purge T-1",
+      },
     ],
   },
   {

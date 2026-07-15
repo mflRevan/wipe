@@ -639,6 +639,53 @@ fn author_correction_verbs_reattribute_with_audit() {
 }
 
 #[test]
+fn trash_soft_delete_restore_and_duplicate() {
+    let p = Project::new();
+    p.run(&["init", ".", "--name", "T"]);
+    p.json(&["ticket", "create", "--list", "todo", "-t", "A"]);
+    p.json(&["ticket", "create", "--list", "todo", "-t", "B"]);
+
+    // Duplicate places a "(copy)" right after the original.
+    let d = p.json(&["ticket", "duplicate", "T-1"]);
+    assert_eq!(d["id"], "T-3");
+    assert!(d["title"].as_str().unwrap().contains("(copy)"));
+
+    // Soft-delete goes to the (restorable) trash by default.
+    let del = p.json(&["ticket", "delete", "T-2", "--yes"]);
+    assert_eq!(del["trashed"], true);
+    assert!(!p
+        .cmd(&["ticket", "show", "T-2", "--json"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let tl = p.json(&["trash", "list"]);
+    assert!(tl["trash"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["id"] == "T-2"));
+
+    // Restore brings it back onto the board.
+    p.json(&["trash", "restore", "T-2"]);
+    assert!(p
+        .cmd(&["ticket", "show", "T-2", "--json"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+
+    // --purge deletes permanently (never enters the trash).
+    p.json(&["ticket", "delete", "T-1", "--yes", "--purge"]);
+    let tl2 = p.json(&["trash", "list"]);
+    assert!(!tl2["trash"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["id"] == "T-1"));
+}
+
+#[test]
 fn ticket_create_requires_a_list() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "L"]);

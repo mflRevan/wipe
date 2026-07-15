@@ -81,6 +81,10 @@ fn router(state: AppState) -> Router {
             patch(api::patch_ticket).delete(api::delete_ticket),
         )
         .route("/api/tickets/{id}/move", post(api::move_ticket))
+        .route("/api/tickets/{id}/duplicate", post(api::duplicate_ticket))
+        .route("/api/trash", get(api::trash_list).delete(api::trash_empty))
+        .route("/api/trash/{id}", delete(api::trash_purge))
+        .route("/api/trash/{id}/restore", post(api::trash_restore))
         .route("/api/tickets/{id}/comments", post(api::add_comment))
         .route(
             "/api/tickets/{id}/comments/{comment}",
@@ -111,6 +115,7 @@ fn router(state: AppState) -> Router {
             "/api/tickets/{id}/attachments",
             post(api::upload_attachment).delete(api::delete_attachment),
         )
+        .route("/api/tickets/{id}/attachments/path", post(api::attach_path))
         .route("/api/media/{*path}", get(api::serve_media))
         .route("/api/forum", get(api::forum_list).post(api::forum_create))
         .route("/api/forum/search", get(api::forum_search))

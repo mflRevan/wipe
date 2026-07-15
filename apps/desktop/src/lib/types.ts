@@ -87,6 +87,24 @@ export interface AppConfig {
   theme?: string | null;
   default_identity?: string | null;
   prefer_default_identity?: boolean;
+  /** Days a deleted ticket stays restorable in the trash before permanent purge. */
+  trash_retention_days?: number;
+}
+
+/** A soft-deleted ticket sitting in the trash. */
+export interface TrashItem {
+  id: string;
+  title: string;
+  list: string;
+  labels: string[];
+  /** RFC-3339 deletion timestamp. */
+  deleted_at: string;
+}
+
+export interface TrashListResponse {
+  retention_days: number;
+  count: number;
+  trash: TrashItem[];
 }
 
 export interface CommitInfo {

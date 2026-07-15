@@ -18,9 +18,18 @@
     currentProject,
     rewinding,
     markSelfChange,
-    applyTicket
+    applyTicket,
+    attachFile,
+    attachPath
   } from '$lib/stores/board';
-  import { formatDate, mediaKind, priorityColor, activityPhrase } from '$lib/utils';
+  import {
+    formatDate,
+    mediaKind,
+    priorityColor,
+    activityPhrase,
+    looksLikePath,
+    filesFromClipboard
+  } from '$lib/utils';
   import type { Activity, Attachment, Comment, Ticket, TicketPatch } from '$lib/types';
 
   type FeedItem =
@@ -233,6 +242,26 @@
   function resolveName(id: string) {
     return identityFor(id)?.display_name ?? displayActor(id);
   }
+  // Pasting media or a filesystem path into the title/description attaches it to
+  // the ticket instead of inserting text: clipboard files/images upload directly;
+  // a pasted local path is read by the daemon. Dedupe (incl. accidental double
+  // Ctrl+V) is handled server-side by content hash, so the same file never
+  // attaches twice.
+  async function onPasteAttach(e: ClipboardEvent) {
+    if (!ticket || readOnly) return;
+    const files = filesFromClipboard(e.clipboardData);
+    if (files.length) {
+      e.preventDefault();
+      for (const f of files) await attachFile(ticket.id, f);
+      return;
+    }
+    const text = e.clipboardData?.getData('text') ?? '';
+    if (looksLikePath(text)) {
+      e.preventDefault();
+      await attachPath(ticket.id, text.trim());
+    }
+  }
+
   function close() {
     // Closing with the editor open stashes the draft (it is NOT saved).
     if (editingBody) stashBody();
@@ -284,6 +313,7 @@
             rows="1"
             bind:value={titleDraft}
             use:autosize={titleDraft}
+            onpaste={onPasteAttach}
             onfocus={() => (titleFocused = true)}
             onblur={saveTitle}
             onkeydown={(e) => {
@@ -383,6 +413,7 @@
               class="body-edit wp-scroll"
               autofocus
               bind:value={bodyDraft}
+              onpaste={onPasteAttach}
               placeholder="Markdown supported…"
             ></textarea>
           {:else if ticket.body}

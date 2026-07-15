@@ -1,7 +1,17 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, subscribeChanges } from '$lib/api';
 import { applyServerDefaults } from '$lib/stores/theme';
-import type { Board, Definitions, GraphCommit, Health, Identity, Project, Ticket } from '$lib/types';
+import type {
+  Board,
+  Definitions,
+  GraphCommit,
+  Health,
+  Identity,
+  Project,
+  Ticket,
+  TicketPatch,
+  TrashItem
+} from '$lib/types';
 
 export const health = writable<Health | null>(null);
 export const healthError = writable<string | null>(null);
@@ -43,6 +53,11 @@ export const definitions = writable<Definitions>({
   priorities: []
 });
 export const identities = writable<Identity[]>([]);
+
+/** Soft-deleted tickets currently in the trash (loaded on demand). */
+export const trash = writable<TrashItem[]>([]);
+/** Days a deleted ticket stays restorable (global setting, mirrored for the UI). */
+export const trashRetentionDays = writable<number>(7);
 
 /** How a ticket just changed, so the UI can pick a fitting animation:
  *  `new` (materialize + typewriter), `moved` (float into its new list), or
@@ -345,9 +360,110 @@ export async function deleteTicket(id: string): Promise<void> {
       if (!b) return b;
       return { ...b, lists: b.lists.map((l) => ({ ...l, tickets: l.tickets.filter((t) => t.id !== id) })) };
     });
+    // Keep the trash badge/count fresh (best-effort; deletion is soft).
+    void loadTrash();
   } catch (e) {
     boardError.set(e instanceof Error ? e.message : String(e));
     await loadBoard(); // roll back to server truth
+  }
+}
+
+/** Patch a ticket's fields (priority/labels/assignees/title/body) and splice the
+ *  fresh copy in immediately. Used by the card quick-menu. */
+export async function updateTicket(id: string, patch: TicketPatch): Promise<void> {
+  markSelfChange(id);
+  try {
+    const next = await api.patchTicket(id, patch, project());
+    applyTicket(next);
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+    await loadBoard();
+  }
+}
+
+/** Duplicate a ticket, then refresh so the copy appears. */
+export async function duplicateTicket(id: string): Promise<void> {
+  try {
+    await api.duplicateTicket(id, project());
+    await loadBoard();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Attach one already-in-memory file to a ticket (e.g. a pasted image/file), then
+ *  refresh so the attachment shows. Server dedupes by content hash. */
+export async function attachFile(id: string, file: File): Promise<void> {
+  markSelfChange(id);
+  try {
+    await api.uploadAttachment(id, file, project());
+    await loadBoard();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Attach a file by local filesystem path (e.g. a pasted path); the daemon reads
+ *  it and applies the project-file/dedupe check. */
+export async function attachPath(id: string, path: string): Promise<void> {
+  markSelfChange(id);
+  try {
+    await api.attachPath(id, path, project());
+    await loadBoard();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Load the trash (soft-deleted tickets) for the current project. */
+export async function loadTrash(): Promise<void> {
+  try {
+    const r = await api.trashList(project());
+    trash.set(r.trash);
+    trashRetentionDays.set(r.retention_days);
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Restore a trashed ticket onto the board, then refresh both board and trash. */
+export async function restoreTicket(id: string): Promise<void> {
+  try {
+    await api.restoreTicket(id, project());
+    await Promise.all([loadBoard(), loadTrash()]);
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Permanently delete a single trashed ticket, then refresh the trash. */
+export async function purgeTrashTicket(id: string): Promise<void> {
+  try {
+    await api.purgeTrash(id, project());
+    await loadTrash();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Empty the whole trash, then refresh. */
+export async function emptyTrash(): Promise<void> {
+  try {
+    await api.emptyTrash(project());
+    await loadTrash();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Set the global trash-retention window (days), then refresh (re-purges expired). */
+export async function setTrashRetention(days: number): Promise<void> {
+  try {
+    const cfg = await api.patchConfig({ trash_retention_days: days });
+    trashRetentionDays.set(cfg.trash_retention_days ?? days);
+    await loadTrash();
+  } catch (e) {
+    boardError.set(e instanceof Error ? e.message : String(e));
   }
 }
 

@@ -166,6 +166,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Unsubscribe(a) => commands::subscribe(out, a, true),
         Command::Subscriptions { author } => commands::subscriptions(out, author),
         Command::Inbox(a) => commands::inbox(out, a),
+        Command::Trash { cmd } => commands::trash(out, cmd),
         Command::Commit(a) => commands::commit(out, a),
         Command::Doctor => commands::doctor(out),
         Command::Skill { cmd } => commands::skill(out, cmd),

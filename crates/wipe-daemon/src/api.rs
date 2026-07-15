@@ -123,6 +123,7 @@ pub async fn app_config() -> Json<Value> {
         "theme": g.ui_theme,
         "default_identity": g.default_identity,
         "prefer_default_identity": g.prefer_default_identity.unwrap_or(false),
+        "trash_retention_days": g.trash_retention_days(),
     }))
 }
 
@@ -137,6 +138,8 @@ pub struct ConfigPatch {
     default_identity: Option<String>,
     #[serde(default)]
     prefer_default_identity: Option<bool>,
+    #[serde(default)]
+    trash_retention_days: Option<u64>,
 }
 
 /// `PATCH /api/config` - update user-global preferences from the UI.
@@ -157,6 +160,9 @@ pub async fn patch_config(Json(b): Json<ConfigPatch>) -> ApiResult {
     if let Some(p) = b.prefer_default_identity {
         g.prefer_default_identity = Some(p);
     }
+    if let Some(d) = b.trash_retention_days {
+        g.trash_retention_days = Some(d);
+    }
     g.save()
         .map_err(|e| ApiError(anyhow::anyhow!("saving config: {e}")))?;
     Ok(Json(json!({
@@ -165,6 +171,7 @@ pub async fn patch_config(Json(b): Json<ConfigPatch>) -> ApiResult {
         "theme": g.ui_theme,
         "default_identity": g.default_identity,
         "prefer_default_identity": g.prefer_default_identity.unwrap_or(false),
+        "trash_retention_days": g.trash_retention_days(),
     })))
 }
 
@@ -297,17 +304,108 @@ pub async fn create_ticket(
     Ok(Json(serde_json::to_value(ticket)?))
 }
 
-/// `DELETE /api/tickets/{id}` - delete a ticket and remove its card from the
-/// board. Project comes from the `?project=` query.
+/// Query for `DELETE /api/tickets/{id}` - `purge=true` deletes permanently
+/// (used to discard a never-committed draft), otherwise it soft-deletes to trash.
+#[derive(Debug, Deserialize)]
+pub struct DeleteTicketQuery {
+    project: Option<String>,
+    #[serde(default)]
+    purge: bool,
+}
+
+/// `DELETE /api/tickets/{id}` - soft-delete a ticket: move it to the restorable
+/// trash (kept for the user's retention window), removing its card from the board.
+/// With `?purge=true` it is deleted outright (no trash). Permanent deletion of an
+/// already-trashed ticket happens via `DELETE /api/trash/{id}`.
 pub async fn delete_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteTicketQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    if q.purge {
+        ops::delete_ticket(&store, &id, Utc::now())?;
+        notify(&state);
+        return Ok(Json(json!({ "ok": true, "id": id, "trashed": false })));
+    }
+    let days = wipe_core::GlobalConfig::load().trash_retention_days();
+    wipe_core::trash::trash_ticket(&store, &id, days, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id, "trashed": days > 0 })))
+}
+
+/// `POST /api/tickets/{id}/duplicate` - copy a ticket onto the same list.
+pub async fn duplicate_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(pq): Query<ProjectQuery>,
 ) -> ApiResult {
     let store = store_for(&state, pq.project)?;
-    ops::delete_ticket(&store, &id, Utc::now())?;
+    let actor = resolve_actor(&state, &store, None);
+    let ticket = ops::duplicate_ticket(&store, &id, &actor, Utc::now())?;
     notify(&state);
-    Ok(Json(json!({ "ok": true, "id": id })))
+    Ok(Json(serde_json::to_value(ticket)?))
+}
+
+/// `GET /api/trash` - list trashed tickets (newest first), with the retention
+/// window, after purging anything past it.
+pub async fn trash_list(
+    State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    let days = wipe_core::GlobalConfig::load().trash_retention_days();
+    let entries = wipe_core::trash::list_trash(&store, days, Utc::now())?;
+    let items: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.ticket.id,
+                "title": e.ticket.title,
+                "list": e.list,
+                "labels": e.ticket.labels,
+                "deleted_at": e.deleted_at.to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(
+        json!({ "retention_days": days, "trash": items, "count": items.len() }),
+    ))
+}
+
+/// `POST /api/trash/{id}/restore` - restore a trashed ticket onto the board.
+pub async fn trash_restore(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    let ticket = wipe_core::trash::restore_ticket(&store, &id, Utc::now())?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(ticket)?))
+}
+
+/// `DELETE /api/trash/{id}` - permanently delete one trashed ticket.
+pub async fn trash_purge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    let removed = wipe_core::trash::purge_ticket(&store, &id)?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "id": id, "purged": removed })))
+}
+
+/// `DELETE /api/trash` - empty the whole trash.
+pub async fn trash_empty(
+    State(state): State<AppState>,
+    Query(pq): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, pq.project)?;
+    let n = wipe_core::trash::empty(&store)?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "purged": n })))
 }
 
 /// Body for moving a ticket.
@@ -735,6 +833,86 @@ pub async fn upload_attachment(
         return Ok(Json(serde_json::to_value(att)?));
     }
     Err(ApiError(anyhow::anyhow!("no `file` field in upload")))
+}
+
+/// Body for attaching a file that already exists on the local filesystem.
+#[derive(Debug, Deserialize)]
+pub struct AttachPathBody {
+    project: Option<String>,
+    path: String,
+}
+
+/// Best-effort MIME from a file name's extension (metadata only; storage is
+/// content-hashed regardless).
+fn guess_mime(name: &str) -> &'static str {
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "txt" | "md" => "text/plain",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `POST /api/tickets/{id}/attachments/path` - attach a file that already lives on
+/// the local filesystem (e.g. a path pasted into the editor). The daemon (which
+/// runs locally) reads it and applies the same content-hash dedupe + in-repo
+/// referencing as any attach, so pasting the same path twice never double-attaches.
+pub async fn attach_path(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<AttachPathBody>,
+) -> ApiResult {
+    let store = store_for(&state, b.project)?;
+    let path = std::path::PathBuf::from(b.path.trim());
+    if !path.is_file() {
+        return Err(ApiError(anyhow::anyhow!(
+            "not a file on this machine: {}",
+            path.display()
+        )));
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let bytes = std::fs::read(&path)
+        .map_err(|e| ApiError(anyhow::anyhow!("cannot read {}: {e}", path.display())))?;
+    let max = store.load_settings()?.max_attachment_mb * 1024 * 1024;
+    if bytes.len() as u64 > max {
+        return Err(ApiError(anyhow::anyhow!(
+            "attachment is {:.1} MB, over the {} MB limit",
+            bytes.len() as f64 / 1_048_576.0,
+            max / 1024 / 1024
+        )));
+    }
+    let actor = resolve_actor(&state, &store, None);
+    let att = ops::add_attachment(
+        &store,
+        &id,
+        &name,
+        &bytes,
+        guess_mime(&name),
+        &actor,
+        Utc::now(),
+    )?;
+    notify(&state);
+    Ok(Json(serde_json::to_value(att)?))
 }
 
 /// Body for detaching an attachment.

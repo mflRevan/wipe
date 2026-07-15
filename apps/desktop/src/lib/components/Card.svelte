@@ -5,6 +5,7 @@
   import { MessageSquare, Paperclip, CheckSquare, ShieldCheck } from 'lucide-svelte';
   import Chip from './ui/Chip.svelte';
   import Avatar from './Avatar.svelte';
+  import CardMenu from './CardMenu.svelte';
   import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
   import { mediaUrl } from '$lib/api';
   import { labelColorFor, priorityColor, mediaKind } from '$lib/utils';
@@ -76,6 +77,8 @@
   onclick={() => onopen(ticket)}
   onkeydown={(e) => (e.key === 'Enter' ? onopen(ticket) : null)}
 >
+  <div class="card-menu"><CardMenu {ticket} /></div>
+
   {#if cover}
     <div class="cover">
       <img
@@ -144,6 +147,7 @@
 
 <style>
   .card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -156,6 +160,17 @@
       background var(--wp-fast) var(--wp-ease),
       border-color var(--wp-fast) var(--wp-ease),
       box-shadow var(--wp-fast) var(--wp-ease);
+  }
+  /* Quick-actions meatballs, top-right; revealed on card hover (or when open). */
+  .card-menu {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+  }
+  .card:hover :global(.card-menu .cm-btn),
+  .card:focus-within :global(.card-menu .cm-btn) {
+    opacity: 1;
   }
   .card:hover {
     background: var(--wp-elevated);

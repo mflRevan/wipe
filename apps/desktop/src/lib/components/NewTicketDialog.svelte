@@ -2,13 +2,14 @@
   import { fade, scale } from 'svelte/transition';
   import { browser } from '$app/environment';
   import { get } from 'svelte/store';
-  import { X, Paperclip } from 'lucide-svelte';
-  import Button from './ui/Button.svelte';
+  import { X, Paperclip, CheckSquare, ShieldCheck } from 'lucide-svelte';
   import LabelPicker from './LabelPicker.svelte';
   import AssigneePicker from './AssigneePicker.svelte';
+  import LocalChecks from './LocalChecks.svelte';
   import { api } from '$lib/api';
-  import { definitions, currentProject } from '$lib/stores/board';
-  import { formatBytes } from '$lib/utils';
+  import { definitions, currentProject, loadBoard } from '$lib/stores/board';
+  import { formatBytes, filesFromClipboard, looksLikePath } from '$lib/utils';
+  import type { ChecklistItem } from '$lib/types';
 
   let {
     open = $bindable(false),
@@ -17,16 +18,29 @@
   }: { open?: boolean; listId: string; listName: string } = $props();
 
   const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const dur = reduced ? 0 : 160;
+  const dur = reduced ? 0 : 180;
 
+  // Everything is staged locally; nothing is persisted until Create is pressed.
   let title = $state('');
   let priority = $state('');
   let body = $state('');
   let labels = $state<string[]>([]);
   let assignees = $state<string[]>([]);
+  let checklist = $state<ChecklistItem[]>([]);
+  let acceptance = $state<ChecklistItem[]>([]);
   let files = $state<File[]>([]);
+  // Local filesystem paths pasted into the form; attached (server-read) on create.
+  let pendingPaths = $state<string[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
+
+  // Reset the whole form whenever the dialog (re)opens, so a previous draft never
+  // leaks into a new card.
+  let wasOpen = $state(false);
+  $effect(() => {
+    if (open && !wasOpen) reset();
+    wasOpen = open;
+  });
 
   function reset() {
     title = '';
@@ -34,7 +48,10 @@
     body = '';
     labels = [];
     assignees = [];
+    checklist = [];
+    acceptance = [];
     files = [];
+    pendingPaths = [];
     error = null;
   }
 
@@ -46,12 +63,37 @@
   function removeFile(i: number) {
     files = files.filter((_, idx) => idx !== i);
   }
+  function removePath(i: number) {
+    pendingPaths = pendingPaths.filter((_, idx) => idx !== i);
+  }
+  function baseName(p: string): string {
+    return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  }
+
+  // Paste media/path into the form: file/image blobs are staged like picked files;
+  // a pasted local path is staged and attached (server-read) on create.
+  function onPasteStage(e: ClipboardEvent) {
+    const fs = filesFromClipboard(e.clipboardData);
+    if (fs.length) {
+      e.preventDefault();
+      files = [...files, ...fs];
+      return;
+    }
+    const text = e.clipboardData?.getData('text') ?? '';
+    if (looksLikePath(text)) {
+      e.preventDefault();
+      const p = text.trim();
+      if (!pendingPaths.includes(p)) pendingPaths = [...pendingPaths, p];
+    }
+  }
+
+  function autofocus(node: HTMLTextAreaElement) {
+    requestAnimationFrame(() => node.focus());
+    return {};
+  }
 
   async function submit() {
     const t = title.trim();
-    // Guard the Enter path too (the button is disabled while busy, but key-repeat
-    // or a double-Enter re-enters here): without this each keypress POSTs another
-    // identical ticket.
     if (!t || busy) return;
     busy = true;
     error = null;
@@ -68,10 +110,26 @@
         },
         project
       );
-      // Attachments are per-ticket, so upload them once the ticket exists.
-      for (const f of files) {
-        await api.uploadAttachment(ticket.id, f, project);
+      // Persist staged checklist / acceptance items (in order), carrying their
+      // done state, now that the ticket exists.
+      for (const it of checklist) {
+        const tk = await api.addCheckItem('checklist', ticket.id, it.text, project);
+        if (it.done) {
+          const last = tk.checklist[tk.checklist.length - 1];
+          if (last) await api.setCheckItem('checklist', ticket.id, last.id, { done: true }, project);
+        }
       }
+      for (const it of acceptance) {
+        const tk = await api.addCheckItem('acceptance', ticket.id, it.text, project);
+        if (it.done) {
+          const last = tk.acceptance[tk.acceptance.length - 1];
+          if (last)
+            await api.setCheckItem('acceptance', ticket.id, last.id, { done: true }, project);
+        }
+      }
+      for (const f of files) await api.uploadAttachment(ticket.id, f, project);
+      for (const p of pendingPaths) await api.attachPath(ticket.id, p, project);
+      await loadBoard();
       reset();
       open = false;
     } catch (e) {
@@ -80,7 +138,13 @@
       busy = false;
     }
   }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && open && !e.defaultPrevented) open = false;
+  }
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 {#if open}
   <div
@@ -92,73 +156,118 @@
   <div class="modal-wrap">
     <div
       class="modal wp-scroll"
-      transition:scale={{ duration: dur, start: 0.96 }}
+      transition:scale={{ duration: dur, start: 0.97 }}
       role="dialog"
       aria-modal="true"
+      aria-label="New card"
     >
-      <header class="m-head">
-        <h3>New card in <span class="ln">{listName}</span></h3>
-        <button class="close" aria-label="Close" onclick={() => (open = false)}
-          ><X size={18} /></button
-        >
-      </header>
+      <button class="close" aria-label="Close" onclick={() => (open = false)}><X size={18} /></button>
 
-      <label class="fl" for="nt-title">Title</label>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        id="nt-title"
-        class="in"
-        autofocus
-        bind:value={title}
-        onkeydown={(e) => e.key === 'Enter' && submit()}
-        placeholder="What needs doing?"
-      />
-
-      <label class="fl" for="nt-prio">Priority</label>
-      <select id="nt-prio" class="in" bind:value={priority}>
-        <option value="">- none -</option>
-        {#each $definitions.priorities as p (p)}<option value={p}>{p}</option>{/each}
-      </select>
-
-      <span class="fl">Labels</span>
-      <LabelPicker selected={labels} onchange={(v) => (labels = v)} />
-
-      <span class="fl">Members</span>
-      <AssigneePicker selected={assignees} onchange={(v) => (assignees = v)} />
-
-      <label class="fl" for="nt-body">Description</label>
-      <textarea
-        id="nt-body"
-        class="in ta"
-        rows="4"
-        bind:value={body}
-        placeholder="Markdown supported…"
-      ></textarea>
-
-      <span class="fl">Attachments</span>
-      <label class="filebtn">
-        <Paperclip size={14} /> Add files
-        <input type="file" multiple onchange={onFiles} hidden />
-      </label>
-      {#if files.length}
-        <div class="files">
-          {#each files as f, i (f.name + i)}
-            <span class="file">
-              <span class="fname">{f.name}</span>
-              <span class="fsize">{formatBytes(f.size)}</span>
-              <button class="frm" aria-label="Remove file" onclick={() => removeFile(i)}>×</button>
-            </span>
-          {/each}
+      <div class="pad">
+        <div class="idrow">
+          <span class="listtag">{listName}</span>
+          <span class="tid">New card</span>
         </div>
-      {/if}
 
-      {#if error}<div class="err">{error}</div>{/if}
+        <!-- svelte-ignore a11y_autofocus -->
+        <textarea
+          class="title-input"
+          rows="1"
+          placeholder="Card title…"
+          bind:value={title}
+          use:autofocus
+          onpaste={onPasteStage}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+        ></textarea>
 
-      <div class="actions">
-        <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-        <Button variant="primary" disabled={busy || !title.trim()} onclick={submit}>
+        <div class="two-col">
+          <div class="field">
+            <span class="flabel">Labels</span>
+            <LabelPicker selected={labels} onchange={(v) => (labels = v)} />
+          </div>
+          <div class="field">
+            <span class="flabel">Members</span>
+            <AssigneePicker selected={assignees} onchange={(v) => (assignees = v)} />
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="flabel">Priority</span>
+          <select class="in" bind:value={priority}>
+            <option value="">— none —</option>
+            {#each $definitions.priorities as p (p)}<option value={p}>{p}</option>{/each}
+          </select>
+        </div>
+
+        <div class="field">
+          <span class="flabel">Description</span>
+          <textarea
+            class="in ta"
+            rows="4"
+            bind:value={body}
+            onpaste={onPasteStage}
+            placeholder="Markdown supported…"
+          ></textarea>
+        </div>
+
+        <LocalChecks
+          bind:items={checklist}
+          label="Checklist"
+          icon={CheckSquare}
+          placeholder="Add an item…"
+        />
+        <LocalChecks
+          bind:items={acceptance}
+          label="Acceptance criteria"
+          icon={ShieldCheck}
+          placeholder="Add a criterion…"
+          accent
+        />
+
+        <div class="field">
+          <span class="flabel">Attachments</span>
+          <label class="filebtn">
+            <Paperclip size={14} /> Add files
+            <input type="file" multiple onchange={onFiles} hidden />
+          </label>
+          {#if files.length || pendingPaths.length}
+            <div class="files">
+              {#each files as f, i (f.name + i)}
+                <span class="file">
+                  <span class="fname">{f.name}</span>
+                  <span class="fsize">{formatBytes(f.size)}</span>
+                  <button class="frm" aria-label="Remove file" onclick={() => removeFile(i)}
+                    >×</button
+                  >
+                </span>
+              {/each}
+              {#each pendingPaths as p, i (p + i)}
+                <span class="file">
+                  <span class="fname">{baseName(p)}</span>
+                  <span class="fsize">path</span>
+                  <button class="frm" aria-label="Remove path" onclick={() => removePath(i)}
+                    >×</button
+                  >
+                </span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        {#if error}<div class="err">{error}</div>{/if}
+      </div>
+
+      <!-- Floating Create/Cancel bar pinned to the popup's bottom-right border. -->
+      <div class="foot">
+        <button class="fb ghost" onclick={() => (open = false)}>Cancel</button>
+        <button class="fb primary" disabled={busy || !title.trim()} onclick={submit}>
           {busy ? 'Creating…' : 'Create card'}
-        </Button>
+        </button>
       </div>
     </div>
   </div>
@@ -168,49 +277,36 @@
   .scrim {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    z-index: 90;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 80;
   }
   .modal-wrap {
     position: fixed;
     inset: 0;
-    z-index: 91;
+    z-index: 81;
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    padding: 10vh 16px 5vh;
+    padding: 6vh 16px 4vh;
     pointer-events: none;
     overflow-y: auto;
   }
   .modal {
+    position: relative;
     pointer-events: auto;
-    width: min(480px, 94vw);
-    max-height: 85vh;
+    width: min(640px, 100%);
+    max-height: 88vh;
     overflow-y: auto;
     background: var(--wp-card);
     border: 1px solid var(--wp-border);
     border-radius: var(--wp-r-lg);
     box-shadow: var(--wp-shadow-lift);
-    padding: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .m-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 4px;
-  }
-  .m-head h3 {
-    font-family: var(--wp-font-display);
-    font-size: 16px;
-    font-weight: 600;
-  }
-  .ln {
-    color: var(--wp-accent);
   }
   .close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
     display: inline-flex;
     padding: 6px;
     border: none;
@@ -223,11 +319,72 @@
     background: var(--wp-elevated);
     color: var(--wp-text);
   }
-  .fl {
+  .pad {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px 22px 18px;
+  }
+  .idrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .listtag {
+    padding: 2px 8px;
+    border-radius: var(--wp-r-pill);
+    background: color-mix(in srgb, var(--wp-accent) 14%, transparent);
+    color: var(--wp-accent);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
+  }
+  .tid {
+    font-family: var(--wp-font-mono);
+    font-size: 12px;
+    color: var(--wp-text-subtle);
+  }
+  .title-input {
+    width: 100%;
+    border: none;
+    background: none;
+    resize: none;
+    overflow: hidden;
+    color: var(--wp-text);
+    font-family: var(--wp-font-display);
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.3;
+    padding: 0;
+  }
+  .title-input:focus {
+    outline: none;
+  }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 520px) {
+    .two-col {
+      grid-template-columns: 1fr;
+    }
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .flabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: fit-content;
+    font-family: var(--wp-font-display);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     color: var(--wp-text-muted);
-    margin-top: 6px;
   }
   .in {
     height: 34px;
@@ -243,6 +400,7 @@
     padding: 8px 10px;
     resize: vertical;
     font-family: var(--wp-font-sans);
+    line-height: 1.5;
   }
   .filebtn {
     display: inline-flex;
@@ -304,10 +462,53 @@
     font-size: 12px;
     color: var(--wp-error);
   }
-  .actions {
+  /* Sticky action bar, aligned to the popup's bottom-right border. */
+  .foot {
+    position: sticky;
+    bottom: 0;
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 10px;
+    gap: 10px;
+    padding: 12px 22px;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--wp-card) 0%, transparent),
+      var(--wp-card) 45%
+    );
+    border-top: 1px solid var(--wp-border);
+    border-radius: 0 0 var(--wp-r-lg) var(--wp-r-lg);
+  }
+  .fb {
+    height: 34px;
+    padding: 0 16px;
+    border-radius: var(--wp-r-sm);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition:
+      background var(--wp-fast) var(--wp-ease),
+      border-color var(--wp-fast) var(--wp-ease),
+      opacity var(--wp-fast) var(--wp-ease);
+  }
+  .fb.ghost {
+    background: none;
+    border-color: var(--wp-border-strong);
+    color: var(--wp-text-muted);
+  }
+  .fb.ghost:hover {
+    background: var(--wp-elevated);
+    color: var(--wp-text);
+  }
+  .fb.primary {
+    background: var(--wp-accent);
+    color: var(--wp-on-accent, #fff);
+  }
+  .fb.primary:hover:not(:disabled) {
+    filter: brightness(1.05);
+  }
+  .fb.primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 </style>
