@@ -202,6 +202,23 @@
        even an empty list is an easy, reliable drop target. */
     align-items: flex-start;
   }
+  /* Phones: one list per screen, swiped between with snap points; the next list
+     peeks in at the edge so it's obvious there is more. */
+  @media (max-width: 700px) {
+    .board {
+      gap: 10px;
+      padding: 0 12px 8px;
+      scroll-snap-type: x mandatory;
+      scroll-padding: 0 12px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .board > :global(*) {
+      scroll-snap-align: start;
+    }
+    .addcol {
+      width: 84vw;
+    }
+  }
   .empty {
     color: var(--wp-text-muted);
     font-size: 14px;

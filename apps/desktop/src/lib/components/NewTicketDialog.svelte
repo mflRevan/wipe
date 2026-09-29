@@ -6,9 +6,10 @@
   import LabelPicker from './LabelPicker.svelte';
   import AssigneePicker from './AssigneePicker.svelte';
   import LocalChecks from './LocalChecks.svelte';
+  import StagedMedia from './StagedMedia.svelte';
   import { api } from '$lib/api';
   import { definitions, currentProject, loadBoard } from '$lib/stores/board';
-  import { formatBytes, filesFromClipboard, looksLikePath } from '$lib/utils';
+  import { filesFromClipboard, looksLikePath, autosize } from '$lib/utils';
   import type { ChecklistItem } from '$lib/types';
 
   let {
@@ -66,8 +67,13 @@
   function removePath(i: number) {
     pendingPaths = pendingPaths.filter((_, idx) => idx !== i);
   }
-  function baseName(p: string): string {
-    return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  let dragOver = $state(false);
+  function onDrop(e: DragEvent) {
+    const fs = filesFromClipboard(e.dataTransfer);
+    dragOver = false;
+    if (!fs.length) return;
+    e.preventDefault();
+    files = [...files, ...fs];
   }
 
   // Paste media/path into the form: file/image blobs are staged like picked files;
@@ -157,9 +163,21 @@
     <div
       class="modal wp-scroll"
       transition:scale={{ duration: dur, start: 0.97 }}
+      class:dragover={dragOver}
       role="dialog"
       aria-modal="true"
       aria-label="New card"
+      tabindex="-1"
+      ondragover={(e) => {
+        if (e.dataTransfer?.types.includes('Files')) {
+          e.preventDefault();
+          dragOver = true;
+        }
+      }}
+      ondragleave={(e) => {
+        if (e.currentTarget === e.target) dragOver = false;
+      }}
+      ondrop={onDrop}
     >
       <button class="close" aria-label="Close" onclick={() => (open = false)}><X size={18} /></button>
 
@@ -176,6 +194,7 @@
           placeholder="Card title…"
           bind:value={title}
           use:autofocus
+          use:autosize={title}
           onpaste={onPasteStage}
           onkeydown={(e) => {
             if (e.key === 'Enter') {
@@ -210,6 +229,7 @@
             class="in ta"
             rows="4"
             bind:value={body}
+            use:autosize={body}
             onpaste={onPasteStage}
             placeholder="Markdown supported…"
           ></textarea>
@@ -235,28 +255,12 @@
             <Paperclip size={14} /> Add files
             <input type="file" multiple onchange={onFiles} hidden />
           </label>
-          {#if files.length || pendingPaths.length}
-            <div class="files">
-              {#each files as f, i (f.name + i)}
-                <span class="file">
-                  <span class="fname">{f.name}</span>
-                  <span class="fsize">{formatBytes(f.size)}</span>
-                  <button class="frm" aria-label="Remove file" onclick={() => removeFile(i)}
-                    >×</button
-                  >
-                </span>
-              {/each}
-              {#each pendingPaths as p, i (p + i)}
-                <span class="file">
-                  <span class="fname">{baseName(p)}</span>
-                  <span class="fsize">path</span>
-                  <button class="frm" aria-label="Remove path" onclick={() => removePath(i)}
-                    >×</button
-                  >
-                </span>
-              {/each}
-            </div>
-          {/if}
+          <StagedMedia
+            {files}
+            paths={pendingPaths}
+            onremovefile={removeFile}
+            onremovepath={removePath}
+          />
         </div>
 
         {#if error}<div class="err">{error}</div>{/if}
@@ -301,6 +305,26 @@
     border: 1px solid var(--wp-border);
     border-radius: var(--wp-r-lg);
     box-shadow: var(--wp-shadow-lift);
+  }
+  /* Phones: the dialog takes the whole screen; the action bar stays reachable. */
+  @media (max-width: 700px) {
+    .modal-wrap {
+      padding: 0;
+    }
+    .modal {
+      width: 100%;
+      max-height: none;
+      height: 100dvh;
+      border-radius: 0;
+      border: none;
+    }
+    .foot {
+      border-radius: 0;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+    .pad {
+      padding: 16px 16px 18px;
+    }
   }
   .close {
     position: absolute;
@@ -397,6 +421,7 @@
   }
   .ta {
     height: auto;
+    min-height: 96px;
     padding: 8px 10px;
     resize: vertical;
     font-family: var(--wp-font-sans);
@@ -419,44 +444,10 @@
     color: var(--wp-text);
     background: var(--wp-elevated);
   }
-  .files {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 6px;
-    border-radius: var(--wp-r-sm);
-    background: var(--wp-surface);
-    border: 1px solid var(--wp-border);
-    font-size: 12px;
-  }
-  .fname {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .fsize {
-    font-family: var(--wp-font-mono);
-    font-size: 11px;
-    color: var(--wp-text-subtle);
-  }
-  .frm {
-    border: none;
-    background: none;
-    color: var(--wp-text-subtle);
-    cursor: pointer;
-    font-size: 15px;
-    line-height: 1;
-    padding: 0;
-  }
-  .frm:hover {
-    color: var(--wp-text);
+  .modal.dragover {
+    box-shadow:
+      0 0 0 2px var(--wp-accent),
+      var(--wp-shadow-lift);
   }
   .err {
     font-size: 12px;

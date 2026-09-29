@@ -72,6 +72,25 @@ impl Store {
         self.cache_dir().join("trash")
     }
 
+    /// Take the board's exclusive write lock, blocking until it is free. Every
+    /// read-modify-write of the board (CLI command, daemon mutation) runs under it,
+    /// so concurrent writers - several agents in one worktree, or an agent and the
+    /// UI - serialize instead of losing updates or allocating the same ticket id.
+    /// The lock file lives in the gitignored cache; the OS releases the lock when
+    /// the guard drops or the process dies, so a crash never leaves it stuck.
+    pub fn lock(&self) -> Result<BoardLock> {
+        let dir = self.cache_dir();
+        fs::create_dir_all(&dir)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.join("write.lock"))?;
+        file.lock()?;
+        Ok(BoardLock { _file: file })
+    }
+
     fn ticket_path(&self, id: &str) -> PathBuf {
         self.tickets_dir().join(format!("{id}.json"))
     }
@@ -382,6 +401,12 @@ impl Store {
             .map(|id| self.load_thread(id))
             .collect()
     }
+}
+
+/// Guard for [`Store::lock`]; the exclusive lock is held until it is dropped.
+#[derive(Debug)]
+pub struct BoardLock {
+    _file: fs::File,
 }
 
 /// A ticket ID must be `T-` followed by digits only. Rejecting anything else

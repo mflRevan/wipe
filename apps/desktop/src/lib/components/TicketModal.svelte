@@ -10,6 +10,8 @@
   import AssigneePicker from './AssigneePicker.svelte';
   import Attachments from './Attachments.svelte';
   import ChecksSection from './ChecksSection.svelte';
+  import StagedMedia from './StagedMedia.svelte';
+  import { openLightbox } from '$lib/stores/lightbox';
   import { api, mediaUrl } from '$lib/api';
   import {
     board,
@@ -28,7 +30,8 @@
     priorityColor,
     activityPhrase,
     looksLikePath,
-    filesFromClipboard
+    filesFromClipboard,
+    autosize
   } from '$lib/utils';
   import type { Activity, Attachment, Comment, Ticket, TicketPatch } from '$lib/types';
 
@@ -90,17 +93,6 @@
   $effect(() => {
     if (!titleFocused && ticket) titleDraft = ticket.title;
   });
-
-  /** Auto-grow the title textarea so long titles wrap instead of truncating. */
-  function autosize(node: HTMLTextAreaElement, _dep?: unknown) {
-    const fit = () => {
-      node.style.height = 'auto';
-      node.style.height = `${node.scrollHeight}px`;
-    };
-    fit();
-    node.addEventListener('input', fit);
-    return { update: fit, destroy: () => node.removeEventListener('input', fit) };
-  }
 
   async function saveTitle() {
     titleFocused = false;
@@ -247,20 +239,36 @@
   // a pasted local path is read by the daemon. Dedupe (incl. accidental double
   // Ctrl+V) is handled server-side by content hash, so the same file never
   // attaches twice.
-  async function onPasteAttach(e: ClipboardEvent) {
+  //
+  // What was just pasted is previewed right where it was pasted (under that
+  // field), so it can be inspected in place without scrolling to Attachments.
+  let pasted = $state<{ at: 'title' | 'body'; files: File[]; paths: string[] }>({
+    at: 'body',
+    files: [],
+    paths: []
+  });
+  async function onPasteAttach(e: ClipboardEvent, at: 'title' | 'body' = 'body') {
     if (!ticket || readOnly) return;
     const files = filesFromClipboard(e.clipboardData);
     if (files.length) {
       e.preventDefault();
+      pasted = { at, files: [...(pasted.at === at ? pasted.files : []), ...files], paths: pasted.at === at ? pasted.paths : [] };
       for (const f of files) await attachFile(ticket.id, f);
       return;
     }
     const text = e.clipboardData?.getData('text') ?? '';
     if (looksLikePath(text)) {
       e.preventDefault();
-      await attachPath(ticket.id, text.trim());
+      const p = text.trim();
+      pasted = { at, files: pasted.at === at ? pasted.files : [], paths: [...(pasted.at === at ? pasted.paths : []), p] };
+      await attachPath(ticket.id, p);
     }
   }
+  $effect(() => {
+    // A different ticket never shows the previous one's pastes.
+    void ticketId;
+    pasted = { at: 'body', files: [], paths: [] };
+  });
 
   function close() {
     // Closing with the editor open stashes the draft (it is NOT saved).
@@ -313,7 +321,7 @@
             rows="1"
             bind:value={titleDraft}
             use:autosize={titleDraft}
-            onpaste={onPasteAttach}
+            onpaste={(e) => onPasteAttach(e, 'title')}
             onfocus={() => (titleFocused = true)}
             onblur={saveTitle}
             onkeydown={(e) => {
@@ -323,6 +331,11 @@
               }
             }}
           ></textarea>
+          {#if pasted.at === 'title' && (pasted.files.length || pasted.paths.length)}
+            <div class="pasted"><span class="pasted-cap">Attached</span>
+              <StagedMedia files={pasted.files} paths={pasted.paths} />
+            </div>
+          {/if}
         {/if}
 
         <!-- labels + members -->
@@ -413,7 +426,8 @@
               class="body-edit wp-scroll"
               autofocus
               bind:value={bodyDraft}
-              onpaste={onPasteAttach}
+              use:autosize={bodyDraft}
+              onpaste={(e) => onPasteAttach(e, 'body')}
               placeholder="Markdown supported…"
             ></textarea>
           {:else if ticket.body}
@@ -426,6 +440,11 @@
             </button>
           {:else}
             <span class="dim">No description.</span>
+          {/if}
+          {#if pasted.at === 'body' && (pasted.files.length || pasted.paths.length)}
+            <div class="pasted"><span class="pasted-cap">Attached</span>
+              <StagedMedia files={pasted.files} paths={pasted.paths} />
+            </div>
           {/if}
         </div>
 
@@ -617,6 +636,39 @@
     gap: 12px;
     border-left: 1px solid var(--wp-border);
     padding-left: 20px;
+  }
+  .pasted {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .pasted-cap {
+    font-size: 11px;
+    color: var(--wp-text-subtle);
+  }
+  /* Phones: full-screen sheet, safe-area aware. */
+  @media (max-width: 700px) {
+    .modal-wrap {
+      padding: 0;
+    }
+    .modal {
+      width: 100%;
+      max-height: none;
+      height: 100dvh;
+      border-radius: 0;
+      border: none;
+    }
+    .cover,
+    .cover img {
+      border-radius: 0;
+      max-height: 180px;
+    }
+    .pad {
+      padding: 16px 16px max(22px, env(safe-area-inset-bottom));
+    }
+    .close {
+      top: max(10px, env(safe-area-inset-top));
+    }
   }
   @media (max-width: 720px) {
     .pad {

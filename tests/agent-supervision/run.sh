@@ -24,6 +24,7 @@ echo "==> model:    $MODEL"
   git init -q
   git config user.email "supervisor@wipe.dev"
   git config user.name "Supervisor"
+  export WIPE_AUTHOR="Supervisor <supervisor@wipe.dev>"
   "$WIPE" init . --name "Calc Service" >/dev/null
   "$WIPE" ticket create --title "Implement add(a, b) in calc.py" --list todo \
     --body "Create a file calc.py at the repository root that defines a function add(a, b) returning a + b.
@@ -53,6 +54,8 @@ EOF
 
 echo "==> launching subordinate agent (timeout ${TIMEOUT}s)..."
 export PATH="$WIPE_DIR:$PATH"
+# The harness assigns the subordinate its identity (wipe has no default one).
+export WIPE_AGENT="opencode-sub"
 timeout "${TIMEOUT}s" opencode run --dir "$WORK" --model "$MODEL" --auto "$PROMPT" \
   >"$WORK/agent-output.log" 2>&1 || echo "(subordinate exited non-zero or timed out)"
 

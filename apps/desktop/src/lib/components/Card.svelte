@@ -172,6 +172,13 @@
   .card:focus-within :global(.card-menu .cm-btn) {
     opacity: 1;
   }
+  /* No hover on touch screens: keep the quick menu (move, labels, delete)
+     visible so every action is one tap away. */
+  @media (hover: none) {
+    .card :global(.card-menu .cm-btn) {
+      opacity: 0.75;
+    }
+  }
   .card:hover {
     background: var(--wp-elevated);
     box-shadow: var(--wp-shadow);

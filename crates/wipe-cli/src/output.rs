@@ -9,20 +9,27 @@ use serde_json::Value;
 pub struct Out {
     /// Whether `--json` was requested.
     pub json: bool,
+    /// Whether `--echo` was requested: writes print the full updated object
+    /// instead of a short receipt.
+    pub echo: bool,
+    /// Whether `--pretty` was requested (indented JSON instead of one line).
+    pub pretty: bool,
 }
 
 impl Out {
     /// Create an output mode.
-    pub fn new(json: bool) -> Self {
-        Out { json }
+    pub fn new(json: bool, echo: bool, pretty: bool) -> Self {
+        Out { json, echo, pretty }
     }
 
-    /// Print a JSON value (pretty) to stdout.
+    /// Print a JSON value to stdout: one compact line, or indented with `--pretty`.
     pub fn json_value(&self, value: &Value) {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(value).expect("serializable")
-        );
+        let s = if self.pretty {
+            serde_json::to_string_pretty(value)
+        } else {
+            serde_json::to_string(value)
+        };
+        println!("{}", s.expect("serializable"));
     }
 
     /// Report success. In JSON mode prints `value`; otherwise prints `human`.
@@ -38,12 +45,35 @@ impl Out {
         }
     }
 
+    /// Report a successful write. JSON mode prints the short `receipt` - or, with
+    /// `--echo`, the `full` object; human mode prints `human` (plus the full
+    /// object as JSON under `--echo`, for piping).
+    pub fn write(&self, human: impl AsRef<str>, receipt: Value, full: impl FnOnce() -> Value) {
+        if self.json {
+            self.json_value(&if self.echo { full() } else { receipt });
+        } else {
+            self.ok(human, Value::Null);
+            if self.echo {
+                self.json_value(&full());
+            }
+        }
+    }
+
     /// Print a plain human line (ignored in JSON mode).
     pub fn line(&self, text: impl AsRef<str>) {
         if !self.json {
             println!("{}", text.as_ref());
         }
     }
+}
+
+/// A one-line hint on stderr (so `--json` stdout stays a single object).
+pub fn hint(text: impl AsRef<str>) {
+    eprintln!(
+        "{}",
+        format!("hint: {}", text.as_ref())
+            .if_supports_color(Stream::Stderr, |t| t.dimmed().to_string())
+    );
 }
 
 /// Style a ticket ID for human output.
@@ -64,10 +94,7 @@ pub fn dim(text: &str) -> String {
 pub fn emit_error(json: bool, msg: &str) {
     if json {
         let v = serde_json::json!({ "ok": false, "error": msg });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&v).expect("serializable")
-        );
+        println!("{}", serde_json::to_string(&v).expect("serializable"));
     } else {
         let tag =
             "error:".if_supports_color(Stream::Stderr, |t| t.style(Style::new().red().bold()));

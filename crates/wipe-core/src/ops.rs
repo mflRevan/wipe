@@ -12,7 +12,7 @@ use crate::git;
 use crate::id::{slug, ticket_id};
 use crate::model::{
     next_label_color, Attachment, AttachmentSource, Board, ChecklistItem, Identity, IdentityKind,
-    LabelDef, List, Ticket,
+    LabelDef, List, OriginalNote, Relation, RelationKind, Ticket,
 };
 use crate::store::Store;
 
@@ -72,7 +72,8 @@ pub fn create_ticket(
         .expect("checked above")
         .cards
         .push(id.clone());
-    board.updated = now;
+    // Card-only change: `board.updated` is left alone so concurrent card
+    // moves in different worktrees do not all conflict on that one line.
 
     store.save_ticket(&ticket)?;
     store.save_board(&board)?;
@@ -121,7 +122,8 @@ pub fn duplicate_ticket(
     let dest = board.list_mut(&list_id).expect("list id from board");
     let at = at.min(dest.cards.len());
     dest.cards.insert(at, new_id.clone());
-    board.updated = now;
+    // Card-only change: `board.updated` is left alone so concurrent card
+    // moves in different worktrees do not all conflict on that one line.
 
     store.save_ticket(&copy)?;
     store.save_board(&board)?;
@@ -161,7 +163,8 @@ pub fn move_ticket(
     let dest = board.list_mut(to_list).expect("checked above");
     let pos = position.unwrap_or(dest.cards.len()).min(dest.cards.len());
     dest.cards.insert(pos, ticket_id.to_string());
-    board.updated = now;
+    // Card-only change: `board.updated` is left alone so concurrent card
+    // moves in different worktrees do not all conflict on that one line.
 
     // Touch the ticket so its own `updated` reflects the move; log it as activity
     // only when the containing list actually changed.
@@ -176,13 +179,14 @@ pub fn move_ticket(
 }
 
 /// Delete a ticket file and remove its card from the board.
-pub fn delete_ticket(store: &Store, ticket_id: &str, now: DateTime<Utc>) -> Result<()> {
+pub fn delete_ticket(store: &Store, ticket_id: &str, _now: DateTime<Utc>) -> Result<()> {
     store.delete_ticket(ticket_id)?; // errors if missing
     let mut board = store.load_board()?;
     for list in &mut board.lists {
         list.cards.retain(|c| c != ticket_id);
     }
-    board.updated = now;
+    // Card-only change: `board.updated` is left alone so concurrent card
+    // moves in different worktrees do not all conflict on that one line.
     store.save_board(&board)?;
     Ok(())
 }
@@ -607,6 +611,23 @@ pub fn update_ticket(
     now: DateTime<Utc>,
 ) -> Result<Ticket> {
     let mut t = store.load_ticket(id)?;
+    // The first time someone other than the creator rewrites the title or body,
+    // freeze the creator's own wording so it survives the rewrite.
+    let rewrites = patch.title.as_ref().is_some_and(|v| *v != t.title)
+        || patch.body.as_ref().is_some_and(|v| *v != t.body);
+    if rewrites && t.original.is_none() {
+        if let Some(creator) = t.creator().map(str::to_string) {
+            if creator != actor {
+                t.original = Some(OriginalNote {
+                    title: t.title.clone(),
+                    body: t.body.clone(),
+                    author: creator,
+                    preserved: now,
+                    rewritten_by: actor.to_string(),
+                });
+            }
+        }
+    }
     if let Some(v) = patch.title {
         if v != t.title {
             t.log_activity(actor, "renamed", v.clone(), now);
@@ -668,6 +689,115 @@ pub fn update_ticket(
     t.updated = now;
     store.save_ticket(&t)?;
     Ok(t)
+}
+
+/// Record that `ticket_id` is blocked by `blocker` (stored once, as a
+/// `blocked-by` relation on the waiting ticket). Rejects unknown tickets, a
+/// ticket blocking itself, and any link that would close a dependency cycle.
+/// Returns false when the link already existed.
+pub fn add_blocker(
+    store: &Store,
+    ticket_id: &str,
+    blocker: &str,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    if ticket_id == blocker {
+        return Err(Error::msg(format!("{ticket_id} cannot block itself")));
+    }
+    let mut t = store.load_ticket(ticket_id)?;
+    store.load_ticket(blocker)?;
+    if t.blocked_by().any(|b| b == blocker) {
+        return Ok(false);
+    }
+    // Would `blocker` (transitively) wait on `ticket_id`? Then this closes a cycle.
+    let mut stack = vec![blocker.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(cur) = stack.pop() {
+        if cur == ticket_id {
+            return Err(Error::msg(format!(
+                "{blocker} already waits on {ticket_id} (directly or through other tickets) - \
+                 blocking {ticket_id} by it would create a dependency cycle"
+            )));
+        }
+        if seen.insert(cur.clone()) {
+            if let Ok(next) = store.load_ticket(&cur) {
+                stack.extend(next.blocked_by().map(str::to_string));
+            }
+        }
+    }
+    t.relations.push(Relation {
+        kind: RelationKind::BlockedBy,
+        target: blocker.to_string(),
+    });
+    t.log_activity(actor, "blocked-by", blocker, now);
+    t.updated = now;
+    store.save_ticket(&t)?;
+    Ok(true)
+}
+
+/// Remove a `blocked-by` link. Returns false when there was none.
+pub fn remove_blocker(
+    store: &Store,
+    ticket_id: &str,
+    blocker: &str,
+    actor: &str,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let mut t = store.load_ticket(ticket_id)?;
+    let before = t.relations.len();
+    t.relations
+        .retain(|r| !(r.kind == RelationKind::BlockedBy && r.target == blocker));
+    if t.relations.len() == before {
+        return Ok(false);
+    }
+    t.log_activity(actor, "unblocked", blocker, now);
+    t.updated = now;
+    store.save_ticket(&t)?;
+    Ok(true)
+}
+
+/// The blockers of `t` that are still open: not on `done_list` and not gone
+/// from the board. A ticket with none is "ready".
+pub fn open_blockers(t: &Ticket, board: &Board, done_list: &str) -> Vec<String> {
+    t.blocked_by()
+        .filter(|b| match board.locate_card(b) {
+            Some((list, _)) => list != done_list,
+            // Deleted/trashed blockers no longer hold anything up.
+            None => false,
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// Resolve the board's workflow lists: `(review, done, rework)`. Configured
+/// settings win when they name an existing list; otherwise they are detected by
+/// convention. `review` is `None` when the board has no review-like list.
+pub fn workflow_lists(
+    board: &Board,
+    settings: &crate::model::Settings,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let exists = |id: &Option<String>| id.clone().filter(|i| board.list(i).is_some());
+    let review = exists(&settings.review_list).or_else(|| {
+        board
+            .lists
+            .iter()
+            .find(|l| l.id.contains("review") || l.name.to_ascii_lowercase().contains("review"))
+            .map(|l| l.id.clone())
+    });
+    let done = exists(&settings.done_list).or_else(|| {
+        board
+            .list("done")
+            .map(|l| l.id.clone())
+            .or_else(|| board.lists.last().map(|l| l.id.clone()))
+    });
+    let rework = exists(&settings.rework_list).or_else(|| {
+        board
+            .list("todo")
+            .map(|l| l.id.clone())
+            .or_else(|| board.lists.first().map(|l| l.id.clone()))
+    });
+    (review, done, rework)
 }
 
 /// Create a label. If `color` is `None`, auto-pick the first unused palette color.
@@ -1240,6 +1370,163 @@ mod tests {
         let t = s.load_ticket("T-1").unwrap();
         assert!(t.activity.iter().any(|a| a.kind == "label-removed"));
         assert!(t.activity.iter().any(|a| a.kind == "unassigned"));
+    }
+
+    fn new_ticket(s: &Store, title: &str, actor: &str) -> Ticket {
+        create_ticket(
+            s,
+            NewTicket {
+                title: title.into(),
+                body: Some(format!("{title} body")),
+                list: Some("todo".into()),
+                ..Default::default()
+            },
+            actor,
+            now(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rewrite_by_someone_else_preserves_the_original_once() {
+        let (_d, s) = project();
+        new_ticket(&s, "raw note", "bilal");
+        // The creator editing their own note does not freeze anything.
+        let t = update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                body: Some("raw note, typo fixed".into()),
+                ..Default::default()
+            },
+            "bilal",
+            now(),
+        )
+        .unwrap();
+        assert!(t.original.is_none());
+
+        // An agent's rewrite freezes the creator's current wording...
+        let t = update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                title: Some("Proper ticket".into()),
+                body: Some("## Plan\n...".into()),
+                ..Default::default()
+            },
+            "claude",
+            now(),
+        )
+        .unwrap();
+        let o = t.original.clone().unwrap();
+        assert_eq!(
+            (o.title.as_str(), o.body.as_str()),
+            ("raw note", "raw note, typo fixed")
+        );
+        assert_eq!(
+            (o.author.as_str(), o.rewritten_by.as_str()),
+            ("bilal", "claude")
+        );
+
+        // ...and later rewrites never touch it.
+        let t = update_ticket(
+            &s,
+            "T-1",
+            TicketPatch {
+                body: Some("third version".into()),
+                ..Default::default()
+            },
+            "someone-else",
+            now(),
+        )
+        .unwrap();
+        assert_eq!(t.original, Some(o));
+    }
+
+    #[test]
+    fn blockers_link_unlink_and_reject_cycles() {
+        let (_d, s) = project();
+        for n in ["a", "b", "c"] {
+            new_ticket(&s, n, "tester");
+        }
+        assert!(add_blocker(&s, "T-2", "T-1", "tester", now()).unwrap());
+        assert!(!add_blocker(&s, "T-2", "T-1", "tester", now()).unwrap()); // idempotent
+        assert!(add_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
+        // T-1 <- T-2 <- T-3: making T-1 wait on T-3 would close the loop.
+        let err = add_blocker(&s, "T-1", "T-3", "tester", now()).unwrap_err();
+        assert!(err.to_string().contains("cycle"), "{err}");
+        assert!(add_blocker(&s, "T-1", "T-1", "tester", now()).is_err());
+        assert!(add_blocker(&s, "T-1", "T-99", "tester", now()).is_err());
+
+        // Open blockers ignore ones that reached the done list.
+        let board = s.load_board().unwrap();
+        let t3 = s.load_ticket("T-3").unwrap();
+        assert_eq!(open_blockers(&t3, &board, "done"), vec!["T-2"]);
+        move_ticket(&s, "T-2", "done", None, "tester", now()).unwrap();
+        let board = s.load_board().unwrap();
+        assert!(open_blockers(&t3, &board, "done").is_empty());
+
+        assert!(remove_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
+        assert!(!remove_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
+        let kinds: Vec<String> = s
+            .load_ticket("T-3")
+            .unwrap()
+            .activity
+            .iter()
+            .map(|a| a.kind.clone())
+            .collect();
+        assert!(
+            kinds.contains(&"blocked-by".to_string()) && kinds.contains(&"unblocked".to_string())
+        );
+    }
+
+    #[test]
+    fn card_moves_leave_board_updated_alone() {
+        let (_d, s) = project();
+        let before = s.load_board().unwrap().updated;
+        let later = now() + chrono::Duration::hours(1);
+        create_ticket(
+            &s,
+            NewTicket {
+                title: "A".into(),
+                list: Some("todo".into()),
+                ..Default::default()
+            },
+            "t",
+            later,
+        )
+        .unwrap();
+        move_ticket(&s, "T-1", "done", None, "t", later).unwrap();
+        assert_eq!(s.load_board().unwrap().updated, before);
+        // Structural list changes still stamp it.
+        add_list(&s, "Review", later).unwrap();
+        assert_eq!(s.load_board().unwrap().updated, later);
+    }
+
+    #[test]
+    fn workflow_lists_detect_and_honor_settings() {
+        let (_d, s) = project();
+        let board = s.load_board().unwrap();
+        let mut settings = s.load_settings().unwrap();
+        let (review, done, rework) = workflow_lists(&board, &settings);
+        assert_eq!(review, None);
+        assert_eq!(done.as_deref(), Some("done"));
+        assert_eq!(rework.as_deref(), Some("todo"));
+
+        add_list(&s, "In Review", now()).unwrap();
+        let board = s.load_board().unwrap();
+        assert_eq!(
+            workflow_lists(&board, &settings).0.as_deref(),
+            Some("in-review")
+        );
+
+        settings.rework_list = Some("backlog".into());
+        settings.done_list = Some("no-such-list".into()); // ignored: falls back
+        let (_, done, rework) = workflow_lists(&board, &settings);
+        assert_eq!(
+            (done.as_deref(), rework.as_deref()),
+            (Some("done"), Some("backlog"))
+        );
     }
 
     #[test]

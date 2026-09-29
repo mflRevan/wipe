@@ -34,6 +34,7 @@ try {
     git init -q
     git config user.email "supervisor@wipe.dev"
     git config user.name "Supervisor"
+    $env:WIPE_AUTHOR = "Supervisor <supervisor@wipe.dev>"
 
     & $wipeExe init . --name "Calc Service" | Out-Null
     $body = @"
@@ -71,6 +72,8 @@ Write-Host "==> launching subordinate agent (timeout ${TimeoutSec}s)..."
 $job = Start-Job -ScriptBlock {
     param($work, $model, $prompt, $wipeDir)
     $env:PATH = "$wipeDir$([System.IO.Path]::PathSeparator)$env:PATH"
+    # The harness assigns the subordinate its identity (wipe has no default one).
+    $env:WIPE_AGENT = "opencode-sub"
     Set-Location $work
     opencode run --dir $work --model $model --auto $prompt 2>&1
 } -ArgumentList $Work, $Model, $prompt, $wipeDir

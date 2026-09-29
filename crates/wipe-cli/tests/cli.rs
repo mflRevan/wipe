@@ -4,100 +4,13 @@
 //! board, run the exact commands an agent would run, and assert on both the
 //! human output and the `--json` contract. Reuse [`Project`] for new flows.
 
-use std::path::Path;
+mod common;
+
 use std::process::Command as StdCommand;
 
 use assert_cmd::prelude::*;
+use common::Project;
 use serde_json::Value;
-use tempfile::TempDir;
-
-/// A throwaway wipe project rooted in a temp dir, with a deterministic identity.
-struct Project {
-    dir: TempDir,
-}
-
-impl Project {
-    fn new() -> Self {
-        Project {
-            dir: tempfile::tempdir().unwrap(),
-        }
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-
-    /// Run a raw `git` command in the project dir, asserting success.
-    fn git(&self, args: &[&str]) {
-        let ok = StdCommand::new("git")
-            .current_dir(self.dir.path())
-            .args(args)
-            .output()
-            .unwrap()
-            .status
-            .success();
-        assert!(ok, "git {args:?} failed");
-    }
-
-    /// The author of the current `HEAD` commit as `Name <email>`.
-    fn head_author(&self) -> String {
-        let out = StdCommand::new("git")
-            .current_dir(self.dir.path())
-            .args(["--no-pager", "log", "-1", "--format=%an <%ae>"])
-            .output()
-            .unwrap();
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
-    }
-
-    /// Build a `wipe` invocation rooted at this project with a fixed author and
-    /// an isolated global-config dir (so tests never read/write the real one).
-    fn cmd(&self, args: &[&str]) -> StdCommand {
-        let mut c = StdCommand::cargo_bin("wipe").unwrap();
-        c.current_dir(self.dir.path());
-        c.env("WIPE_AUTHOR", "Tester <t@example.com>");
-        c.env("WIPE_CONFIG_DIR", self.dir.path());
-        c.args(args);
-        c
-    }
-
-    /// Run a command, assert success, and return stdout as a String.
-    fn run(&self, args: &[&str]) -> String {
-        let out = self.cmd(args).output().unwrap();
-        assert!(
-            out.status.success(),
-            "command {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap()
-    }
-
-    /// Run a command with `--json` and parse stdout as JSON.
-    fn json(&self, args: &[&str]) -> Value {
-        let mut v = args.to_vec();
-        v.push("--json");
-        let stdout = self.run(&v);
-        serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad json from {args:?}: {e}\n{stdout}"))
-    }
-
-    /// Run a `--json` command as a specific author (each `wipe` call is a distinct
-    /// process, mirroring how independent agents drive the same board).
-    fn json_as(&self, author: &str, args: &[&str]) -> Value {
-        let mut v = args.to_vec();
-        v.push("--json");
-        let mut c = self.cmd(&v);
-        c.env("WIPE_AUTHOR", author);
-        let out = c.output().unwrap();
-        assert!(
-            out.status.success(),
-            "command {args:?} as {author} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let stdout = String::from_utf8(out.stdout).unwrap();
-        serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("bad json from {args:?}: {e}\n{stdout}"))
-    }
-}
 
 #[test]
 fn init_creates_board_and_status_shows_lists() {
@@ -108,7 +21,7 @@ fn init_creates_board_and_status_shows_lists() {
     assert_eq!(status["board"], "Demo");
     let lists = status["lists"].as_array().unwrap();
     assert_eq!(lists.len(), 4);
-    assert_eq!(lists[0]["list"], "backlog");
+    assert_eq!(lists[0]["id"], "backlog");
 }
 
 #[test]
@@ -533,35 +446,100 @@ fn subscriptions_and_inbox_flow() {
 }
 
 #[test]
-fn strict_identity_refuses_ambient_fallback() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "L"]);
+fn writes_without_an_identity_are_refused_with_guidance() {
+    let p = Project::with_board("L");
+    p.run(&[
+        "identity",
+        "use",
+        "bilal@example.com",
+        "--human",
+        "--name",
+        "Bilal",
+    ]);
+    p.run(&["identity", "clear"]);
 
-    // Strict mode with no explicit identity (no WIPE_AUTHOR/AGENT/session) refuses
-    // to attribute the write to the ambient VCS user.
-    let mut c = p.cmd(&["ticket", "create", "--list", "todo", "-t", "X", "--json"]);
-    c.env_remove("WIPE_AUTHOR");
-    c.env("WIPE_STRICT_IDENTITY", "1");
-    let out = c.output().unwrap();
-    assert!(
-        !out.status.success(),
-        "strict mode must reject ambient fallback"
-    );
+    // No identity of any kind: the write is refused, nothing is created, and the
+    // error lists the board's identities, how to pick one, and asks agents to
+    // check with their user instead of guessing.
+    let out = p
+        .bare(&["ticket", "create", "X", "--list", "todo", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a write without identity must fail");
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["error"]
-        .as_str()
-        .unwrap()
-        .contains("WIPE_STRICT_IDENTITY"));
+    let err = v["error"].as_str().unwrap();
+    for needle in [
+        "no identity chosen",
+        "bilal@example.com",
+        "wipe identity use <id>",
+        "WIPE_AGENT",
+        "--agentid",
+        "ask your user",
+    ] {
+        assert!(err.contains(needle), "missing `{needle}` in: {err}");
+    }
+    assert!(!p.path().join(".wipe/tickets/T-1.json").exists());
 
-    // With an explicit $WIPE_AGENT it proceeds.
-    let mut c = p.cmd(&["ticket", "create", "--list", "todo", "-t", "Y", "--json"]);
-    c.env_remove("WIPE_AUTHOR");
-    c.env("WIPE_STRICT_IDENTITY", "1");
+    // The legacy strict flag changes nothing: writes are always strict now.
+    let mut c = p.bare(&["ticket", "create", "X", "--list", "todo", "--json"]);
+    c.env("WIPE_STRICT_IDENTITY", "0");
+    assert!(!c.output().unwrap().status.success());
+
+    // Reads never need an identity.
+    for read in [
+        vec!["status", "--json"],
+        vec!["ticket", "list", "--json"],
+        vec!["list", "show", "--json"],
+        vec!["forum", "list", "--json"],
+        vec!["identity", "whoami", "--json"],
+    ] {
+        let out = p.bare(&read).output().unwrap();
+        assert!(
+            out.status.success(),
+            "read {read:?} failed without identity"
+        );
+    }
+    let who: Value = serde_json::from_slice(
+        &p.bare(&["identity", "whoami", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert!(who["identity"].is_null());
+
+    // Any explicit source unlocks writes: $WIPE_AGENT, --agentid, or a session.
+    let mut c = p.bare(&["ticket", "create", "Y", "--list", "todo", "--json"]);
     c.env("WIPE_AGENT", "claude-dev");
     assert!(
         c.output().unwrap().status.success(),
-        "explicit $WIPE_AGENT satisfies strict mode"
+        "$WIPE_AGENT unlocks writes"
     );
+    let out = p
+        .bare(&[
+            "--agentid",
+            "gizmo",
+            "ticket",
+            "create",
+            "Z",
+            "--list",
+            "todo",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "--agentid unlocks writes");
+    assert!(p
+        .bare(&["identity", "use", "claude", "--agent"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let out = p
+        .bare(&["ticket", "create", "W", "--list", "todo", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "a bound session unlocks writes");
 }
 
 #[test]
@@ -900,61 +878,62 @@ fn supervision_protocol_offline() {
     assert!(!done["comments"].as_array().unwrap().is_empty());
 }
 
-/// Identity resolution: a non-git board never attributes to "unknown"; a
+/// Identity resolution: a fresh session has NO identity (writes refused); a
 /// session-bound identity and a one-shot `--agentid` override both attribute
-/// correctly; and `identity list` surfaces the agent as active.
+/// correctly; sessions never leak between terminals; `identity list` marks the
+/// active one.
 #[test]
 fn identity_session_and_agentid_override() {
-    let p = Project::new();
-    p.run(&["init", "--yes", "--name", "Ids"]);
-
-    let base = p.path().to_path_buf();
-    // Run with NO WIPE_AUTHOR, a fixed session, and isolated global config, so we
-    // exercise the real resolution chain rather than the env override.
-    let run = |args: &[&str]| -> Value {
+    let p = Project::with_board("Ids");
+    let run_in = |session: &str, args: &[&str]| -> std::process::Output {
         let mut v = args.to_vec();
         v.push("--json");
-        let mut c = StdCommand::cargo_bin("wipe").unwrap();
-        c.current_dir(&base);
-        c.env_remove("WIPE_AUTHOR");
-        c.env("WIPE_CONFIG_DIR", &base);
-        c.env("WIPE_SESSION", "sess-A");
-        c.args(&v);
-        let out = c.output().unwrap();
+        let mut c = p.bare(&v);
+        c.env("WIPE_SESSION", session);
+        c.output().unwrap()
+    };
+    let run = |args: &[&str]| -> Value {
+        let out = run_in("sess-A", args);
         assert!(
             out.status.success(),
             "command {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&out.stdout)
         );
         serde_json::from_slice(&out.stdout).unwrap()
     };
 
-    // No session identity yet: author is a real default, never "unknown"/empty.
-    let t1 = run(&["ticket", "create", "--list", "backlog", "-t", "one"]);
-    let a1 = t1["activity"][0]["actor"].as_str().unwrap();
+    // No session identity yet: the write is refused (no VCS/default fallback).
     assert!(
-        !a1.is_empty() && a1 != "unknown",
-        "default author was '{a1}'"
+        !run_in("sess-A", &["ticket", "create", "one", "--list", "backlog"])
+            .status
+            .success()
     );
 
     // Bind a session identity; the next ticket is authored by it.
     run(&["identity", "use", "claude", "--agent", "--name", "Claude"]);
-    let t2 = run(&["ticket", "create", "--list", "backlog", "-t", "two"]);
+    let t2 = run(&["--echo", "ticket", "create", "two", "--list", "backlog"]);
     assert_eq!(t2["activity"][0]["actor"], "claude");
 
     // whoami reflects the bound identity.
     assert_eq!(run(&["identity", "whoami"])["identity"], "claude");
 
+    // Another terminal (session) does NOT inherit it.
+    assert!(
+        !run_in("sess-B", &["ticket", "create", "x", "--list", "backlog"])
+            .status
+            .success()
+    );
+
     // A single-command --agentid override wins over the session.
     let t3 = run(&[
+        "--echo",
         "--agentid",
         "gizmo",
         "ticket",
         "create",
+        "three",
         "--list",
         "backlog",
-        "-t",
-        "three",
     ]);
     assert_eq!(t3["activity"][0]["actor"], "gizmo");
 
@@ -968,8 +947,11 @@ fn identity_session_and_agentid_override() {
         .any(|i| i["id"] == "claude" && i["kind"] == "agent");
     assert!(has_agent, "claude should be listed as an agent");
 
-    // Clearing the session reverts to the default author.
+    // Clearing the session makes writes refused again.
     run(&["identity", "clear"]);
-    let t4 = run(&["ticket", "create", "--list", "backlog", "-t", "four"]);
-    assert_ne!(t4["activity"][0]["actor"], "claude");
+    assert!(
+        !run_in("sess-A", &["ticket", "create", "four", "--list", "backlog"])
+            .status
+            .success()
+    );
 }

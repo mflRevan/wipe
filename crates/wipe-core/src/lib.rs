@@ -23,4 +23,4 @@ pub mod vcs;
 
 pub use config::GlobalConfig;
 pub use error::{Error, Result};
-pub use store::{Store, WIPE_DIR};
+pub use store::{BoardLock, Store, WIPE_DIR};

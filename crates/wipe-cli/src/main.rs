@@ -8,10 +8,12 @@ mod commands;
 mod first_run;
 mod forum_cmd;
 mod identity;
+mod input;
 mod onboard;
 mod output;
 mod skills;
 mod update_check;
+mod view;
 
 use std::process::ExitCode;
 
@@ -40,14 +42,6 @@ fn main() -> ExitCode {
 
     // Record the global --agentid override before any command resolves an author.
     identity::set_override(cli.agentid.clone());
-    if let Some(id) = cli.agentid.as_deref() {
-        // Make the agent visible in the board's identity list (best-effort).
-        identity::ensure_registered(id, None, true);
-    } else if let Some(id) = identity::agent_env() {
-        // A per-terminal $WIPE_AGENT identity registers as an agent too, so it shows
-        // up in the board like any other author (best-effort, insert-only).
-        identity::ensure_registered(&id, None, true);
-    }
 
     // On the very first interactive run of a fresh install, offer the guided global
     // setup. Skipped for the commands that either *are* that setup (`onboard`) or run
@@ -57,7 +51,7 @@ fn main() -> ExitCode {
         Command::Onboard(_) | Command::Init(_) | Command::Completions { .. }
     ) && first_run::should_offer(cli.json);
 
-    let out = Out::new(cli.json);
+    let out = Out::new(cli.json, cli.echo, cli.pretty);
 
     if may_offer_onboarding && first_run::offer() {
         if let Err(e) = commands::onboard(&out, args::OnboardArgs { yes: false }) {
@@ -65,22 +59,39 @@ fn main() -> ExitCode {
         }
     }
 
-    // In strict-identity mode, refuse a board mutation that would fall back to the
-    // ambient VCS user (the shared-worktree stomp hazard) before it runs.
-    if mutates_board(&cli.command) {
-        if let Err(e) = identity::enforce_strict(actor_override(&cli.command)) {
-            emit_error(cli.json, &format!("{e:#}"));
+    let write = is_write(&cli.command);
+    // Every write needs a chosen identity - there is no default to fall back to.
+    // Refuse up front, before anything is read or written, with guidance.
+    let mut _lock = None;
+    if write {
+        let Some(who) = identity::resolve_opt(actor_override(&cli.command)) else {
+            emit_error(cli.json, &identity::missing_identity_message());
             return ExitCode::FAILURE;
+        };
+        // Serialize with every other writer of this board (other agents, the UI).
+        if let Ok(s) = wipe_core::Store::discover(".") {
+            match s.lock() {
+                Ok(l) => _lock = Some(l),
+                Err(e) => {
+                    emit_error(cli.json, &format!("cannot take the board write lock: {e}"));
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        // An agent named by --agentid / $WIPE_AGENT shows up in the board's
+        // identity list like any other author (best-effort, insert-only).
+        if cli.agentid.is_some() || identity::agent_env().is_some() {
+            identity::ensure_registered(&who, None, true);
         }
     }
 
-    let autocommit_after = mutates_board(&cli.command);
+    let is_commit = matches!(cli.command, Command::Commit(_));
     let result = dispatch(&out, cli.command);
 
     match result {
         Ok(()) => {
-            if autocommit_after {
-                maybe_autocommit(&out);
+            if write && !is_commit {
+                after_write(&out);
             }
             ExitCode::SUCCESS
         }
@@ -91,56 +102,79 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether a command can change board (`.wipe/`) state - the set eligible for
-/// `board.autocommit`. Read-only sub-verbs are still covered but harmless: the
-/// follow-up commit simply finds nothing staged and does nothing.
-fn mutates_board(c: &Command) -> bool {
-    matches!(
-        c,
-        Command::Board(_)
-            | Command::List(_)
-            | Command::Ticket(_)
-            | Command::Comment(_)
-            | Command::Checklist(_)
-            | Command::Criteria(_)
-            | Command::Label(_)
-            | Command::Media(_)
-            | Command::Forum(_)
-    )
+/// Whether a command writes to the board (and so needs an identity, takes the
+/// write lock, and is eligible for `board.autocommit`). Reads - including
+/// identity-scoped ones like `inbox` - are never gated.
+fn is_write(c: &Command) -> bool {
+    use args::*;
+    match c {
+        Command::Board(b) => !matches!(b, BoardCmd::Show),
+        Command::List(l) => !matches!(l, ListCmd::Show),
+        Command::Ticket(t) => !matches!(t, TicketCmd::Show(_) | TicketCmd::List(_)),
+        Command::Comment(x) => !matches!(x, CommentCmd::List { .. }),
+        Command::Checklist(x) | Command::Criteria(x) => !matches!(x, ChecklistCmd::List { .. }),
+        Command::Label(x) => !matches!(x, LabelCmd::List),
+        Command::Media(x) => !matches!(x, MediaCmd::List { .. }),
+        Command::Forum(x) => matches!(
+            x,
+            ForumCmd::Post(_)
+                | ForumCmd::Reply(_)
+                | ForumCmd::Edit { .. }
+                | ForumCmd::Delete { .. }
+                | ForumCmd::Pin { .. }
+                | ForumCmd::Unpin { .. }
+        ),
+        Command::Subscribe(_) | Command::Unsubscribe(_) | Command::Commit(_) => true,
+        Command::Trash { cmd } => !matches!(cmd, TrashCmd::List),
+        Command::Config { global, cmd } => !global && matches!(cmd, ConfigCmd::Set { .. }),
+        _ => false,
+    }
 }
 
-/// The per-command *actor* override, if the command carries one (only the
-/// commands that author new content do). Reattribution targets (e.g.
-/// `ticket edit --author`, `comment reattribute --to`) are NOT actor overrides -
-/// those writes are still performed by the ambient identity.
+/// The per-command *actor* override, if the command carries one. Reattribution
+/// targets (e.g. `ticket edit --author`, `comment reattribute --to`) are NOT actor
+/// overrides - those writes are still performed by the session identity.
 fn actor_override(c: &Command) -> Option<&str> {
     use args::{CommentCmd, ForumCmd};
     match c {
         Command::Comment(CommentCmd::Add { author, .. }) => author.as_deref(),
         Command::Forum(ForumCmd::Post(a)) => a.author.as_deref(),
         Command::Forum(ForumCmd::Reply(a)) => a.author.as_deref(),
+        Command::Subscribe(a) | Command::Unsubscribe(a) => a.author.as_deref(),
+        Command::Commit(a) => a.author.as_deref(),
         _ => None,
     }
 }
 
-/// If the board opts into `board.autocommit`, commit `.wipe/` after a successful
-/// mutation. Best-effort and silent in `--json` mode so the single-object stdout
-/// contract is never broken.
-fn maybe_autocommit(out: &Out) {
+/// After a successful write: auto-commit `.wipe/` if the board opts in; else -
+/// until `wipe commit` has been used once on this machine - a one-line stderr
+/// hint that the board changed and how to record it. Best-effort; stdout (and so
+/// the `--json` contract) is never touched.
+fn after_write(out: &Out) {
     let Ok(s) = wipe_core::Store::discover(".") else {
         return;
     };
     let Ok(settings) = s.load_settings() else {
         return;
     };
-    if !settings.autocommit || !wipe_core::git::is_repo(s.root()) {
+    if !wipe_core::git::is_repo(s.root()) {
         return;
     }
-    let who = identity::resolve(None);
-    if let Ok(Some(h)) = wipe_core::ops::commit_board(&s, None, None, &who) {
-        if !out.json {
-            eprintln!("  auto-committed {h}");
+    if settings.autocommit {
+        let Some(who) = identity::resolve_opt(None) else {
+            return;
+        };
+        if let Ok(Some(h)) = wipe_core::ops::commit_board(&s, None, None, &who) {
+            if !out.json {
+                eprintln!("  auto-committed {h}");
+            }
         }
+    } else if wipe_core::GlobalConfig::load().commit_hint_seen != Some(true) {
+        output::hint(
+            "board changed - `wipe commit` records it as one wipe-attributed commit (and keeps \
+             .wipe/ out of your own commits); `wipe config set board.autocommit true` commits \
+             after every write",
+        );
     }
 }
 
@@ -150,7 +184,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Onboard(a) => commands::onboard(out, a),
         Command::Identity(c) => commands::identity(out, c),
         Command::Scan(a) => commands::scan(out, a),
-        Command::Status => commands::status(out),
+        Command::Status(a) => commands::status(out, a),
         Command::Board(c) => commands::board(out, c),
         Command::List(c) => commands::list(out, c),
         Command::Ticket(c) => commands::ticket(out, c),

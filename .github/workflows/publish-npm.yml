@@ -37,10 +37,12 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.28.2/cargo-dist-installer.sh | sh
       - name: Build the npm installer package
         run: dist build --artifacts=global
-      - name: Patch installer for Windows tar drive letters
-        # cargo-dist's installer extracts with `tar xf C:\...`, which GNU tar (on
-        # PATH ahead of bsdtar, e.g. Git for Windows) rejects. Make it use a
-        # relative archive path + cwd so `npm i -g` works on those machines too.
+      - name: Patch installer for Windows
+        # (1) cargo-dist extracts with `tar xf C:\...`, which GNU tar (on PATH
+        # ahead of bsdtar, e.g. Git for Windows) rejects - pin Windows' bsdtar.
+        # (2) Mark shim launches (WIPE_NPM_SHIM) for `wipe doctor`. (3) Place the
+        # native wipe.exe beside npm's shims so `wipe` bypasses wipe.cmd/cmd.exe,
+        # which truncates multi-line arguments at the first line break.
         run: |
           f="$(find target/distrib -name binary-install.js -path '*npm-package*' | head -1)"
           test -n "$f" || { echo "binary-install.js not found"; exit 1; }

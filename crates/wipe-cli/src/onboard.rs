@@ -97,22 +97,7 @@ pub fn wizard(default_name: &str, default_starter: Starter, g: &GlobalConfig) ->
         .prompt()
         .map_err(cancel)?;
 
-    let expose = match Select::new(
-        "[4/6] How should the UI be reachable?",
-        vec![
-            "Local only (recommended)",
-            "Tailscale network",
-            "Behind a reverse proxy",
-        ],
-    )
-    .raw_prompt()
-    .map_err(cancel)?
-    .index
-    {
-        1 => Exposure::Tailscale,
-        2 => Exposure::Proxy,
-        _ => Exposure::None,
-    };
+    let expose = expose_prompt("[4/6] How should the UI be reachable?", Exposure::default())?;
 
     let autoserve = Confirm::new("[5/6] Auto-stop the UI server when no one is viewing it?")
         .with_default(g.autoserve.unwrap_or(true))
@@ -185,29 +170,10 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
         .map_err(cancel)?;
     out.default_port = Some(port);
 
-    out.default_expose = Some(
-        match Select::new(
-            &step(2, N, "How should the UI be reachable by default?"),
-            vec![
-                "Local only (recommended)",
-                "Tailscale network",
-                "Behind a reverse proxy",
-            ],
-        )
-        .with_starting_cursor(match g.default_expose.unwrap_or_default() {
-            Exposure::None => 0,
-            Exposure::Tailscale => 1,
-            Exposure::Proxy => 2,
-        })
-        .raw_prompt()
-        .map_err(cancel)?
-        .index
-        {
-            1 => Exposure::Tailscale,
-            2 => Exposure::Proxy,
-            _ => Exposure::None,
-        },
-    );
+    out.default_expose = Some(expose_prompt(
+        &step(2, N, "How should the UI be reachable by default?"),
+        g.default_expose.unwrap_or_default(),
+    )?);
 
     let autoserve = Confirm::new(&step(
         3,
@@ -330,8 +296,9 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
             .to_string(),
     );
 
-    // Default identity: used when a project's VCS reports no user. Mandatory - it
-    // must never be empty, so a blank answer falls back to "human".
+    // UI identity: what the board UI (`wipe serve`) credits edits to when the
+    // project VCS reports no user. The CLI never falls back to it - every CLI
+    // session must choose an identity explicitly (`wipe identity use`).
     let id_default = g
         .default_identity
         .clone()
@@ -340,7 +307,7 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
     let default_id = Text::new(&step(
         10,
         N,
-        "Default identity when your version control reports none",
+        "Identity the board UI credits your edits to when version control reports none",
     ))
     .with_default(&id_default)
     .with_help_message("e.g. \"Ada <ada@example.com>\" or just \"human\"")
@@ -357,7 +324,7 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
         Confirm::new(&step(
             11,
             N,
-            "Always use that identity, even when version control reports one?",
+            "Always use that identity in the UI, even when version control reports one?",
         ))
         .with_default(g.prefer_default_identity.unwrap_or(false))
         .prompt()
@@ -365,6 +332,25 @@ pub fn global_wizard(g: &GlobalConfig) -> Result<GlobalConfig> {
     );
 
     Ok(out)
+}
+
+/// Ask how the UI daemon should be reachable, starting on `current`.
+fn expose_prompt(prompt: &str, current: Exposure) -> Result<Exposure> {
+    const MODES: [(Exposure, &str); 4] = [
+        (
+            Exposure::Lan,
+            "Local network - phones and other devices, token-protected (recommended)",
+        ),
+        (Exposure::Local, "This machine only"),
+        (Exposure::Tailscale, "Tailscale network"),
+        (Exposure::Proxy, "Behind a reverse proxy"),
+    ];
+    let idx = Select::new(prompt, MODES.iter().map(|(_, l)| *l).collect())
+        .with_starting_cursor(MODES.iter().position(|(m, _)| *m == current).unwrap_or(0))
+        .raw_prompt()
+        .map_err(cancel)?
+        .index;
+    Ok(MODES[idx].0)
 }
 
 /// Turn an inquire cancellation into a clean, quiet abort message.

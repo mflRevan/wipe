@@ -22,6 +22,10 @@ notify = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
 directories = "5"
+# Enumerate interfaces so `wipe serve` can print its LAN / Tailscale URLs.
+if-addrs = "0.13"
+# Terminal QR code for opening the board on a phone.
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tempfile.workspace = true

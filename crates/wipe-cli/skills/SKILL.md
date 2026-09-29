@@ -1,308 +1,187 @@
 ---
 name: wipe
-description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, checklists, acceptance criteria, and board state, AND to post/search/subscribe in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
+description: Drive a wipe board and forum - a git-native, CLI-first task board plus a threaded discussion forum for humans and AI agents. Use to read or update tickets, lists, comments, labels, checklists, acceptance criteria, dependencies, reviews, and board state, AND to post/search/pin in the project forum where agents and humans share decisions, gotchas, conventions, and durable project knowledge. Works in any repo with a `.wipe/` directory (or run `wipe init` to create one). All interaction is through the `wipe` CLI with `--json`.
 ---
 
 # wipe - agent operating guide
 
 `wipe` is a git-native task board that lives inside a repository under `.wipe/`.
-**As an agent you interact only through the `wipe` CLI - never read or edit files
-under `.wipe/` directly.** The CLI keeps the on-disk JSON deterministic and
-merge-friendly; hand-editing breaks that guarantee.
+Humans usually work it from the web UI (`wipe serve`); you work it from the CLI.
+
+## Start of every session (do this first)
+
+Your context may have been reset since you last looked. Catch up in three cheap
+calls instead of reading the whole board:
+
+```bash
+wipe identity whoami --json               # who am I here? (null = choose one, see below)
+wipe inbox --unread --json                # what others changed on my tickets since I last looked
+wipe ticket list --exclude-list done --json   # compact rows: id, title, list, labels, blockers...
+```
+
+Then drill into single tickets with `wipe ticket show T-7 --json`. Useful narrower
+views: `wipe ticket list --list todo --json`, `--ready` (not waiting on anything),
+`--assignee me`, `--since 1d`, `--fields id,title`. `wipe inbox --all --json` shows
+everything anyone else changed, not just your tickets. After a long break, that
+plus `wipe forum digest` is the whole catch-up.
 
 ## Golden rules
 
-1. Add `--json` to every command. Output is a single JSON object/array on stdout.
-2. On success the exit code is `0`. On failure it is non-zero and, in `--json`
-   mode, stdout contains `{"ok": false, "error": "..."}`. Always check the exit code.
-3. Never write to `.wipe/` yourself. Use the commands below.
-4. IDs are stable: tickets are `T-<n>`, comments `c-<n>`, checklist items
-   `ck-<n>`, acceptance criteria `ac-<n>`, lists are kebab-case slugs (e.g.
-   `in-progress`).
-5. Prefer small, explicit commands over guessing. Run `wipe <group> --help` to
-   discover exact flags - the CLI is self-documenting.
+1. Add `--json` to every command. Output is ONE compact JSON line on stdout (add
+   `--pretty` only if you need to eyeball it).
+2. Exit code `0` = success. On failure it is non-zero and stdout is
+   `{"ok": false, "error": "..."}` - the error says how to fix the call.
+3. Writes answer with a short receipt (`{"ok":true,"id":"T-3","list":"review"}`).
+   Pass `--echo` only when you need the full updated object back.
+4. **Multi-line text goes through a file or stdin, never a quoted argument:**
+   `--body-file notes.md`, or `--body -` with the text on stdin. (Through
+   Windows' `wipe.cmd`/`cmd.exe`, an argument is silently cut at its first line
+   break.) Same for `--comment-file`, `--message-file`, forum `--body-file`.
+5. Never read or write files under `.wipe/` - their format is internal and
+   differs from the CLI's JSON. Everything you need is a command away.
+6. IDs are stable: tickets `T-<n>`, comments `c-<n>`, checklist `ck-<n>`,
+   criteria `ac-<n>`, forum posts `F-<n>` / `F-<n>.<m>`, lists are slugs
+   (`in-progress`) that survive renames.
+7. Unsure about a flag? `wipe <group> --help`.
 
-## Setup
+## Identity - required before any write
 
-```bash
-wipe init .            # create a board in the current project (once)
-wipe status --json     # see lists and tickets
-```
-
-## Identity - do this first
-
-Everything you author (tickets, comments, forum posts) is attributed to an
-identity. **Establish yours before you start** so your work isn't mislabeled - in
-non-git repos (e.g. Plastic/Unity VCS) an unset identity would otherwise fall back
-to a generic default.
-
-1. **Look before you create.** List existing identities to see if one is already
-   meant for you:
-
-   ```bash
-   wipe identity list --json     # -> {"active":..,"default":..,"identities":[{id,display_name,kind}]}
-   ```
-
-2. **Bind your identity to this session.** This registers it (as an agent) and
-   attributes every later command in this terminal to it:
-
-   ```bash
-   wipe identity use claude --agent --name "Claude" --json
-   # prints an `export`/`$env:` line - eval it so tool-spawned subshells inherit it too
-   ```
-
-3. **Confirm** who you are and where it came from:
-
-   ```bash
-   wipe identity whoami --json   # -> {"identity":"claude","source":"session (wipe identity use)"}
-   ```
-
-Alternatively, attribute a **single** command without binding a session by passing
-the global `--agentid` flag: `wipe --agentid claude ticket create --list todo -t "…" --json`.
-
-**Multiple agents on one machine / shared worktree? Use `$WIPE_AGENT`.** Export
-`WIPE_AGENT=<your-id>` once per terminal and every `wipe` command in that terminal
-(and its child processes) is attributed to you — no `wipe identity use`, no
-`--agentid` on each call. Because it's a plain env var it is per-process and can
-**never be stomped by a concurrent agent**, unlike the session binding (which lives
-in a shared file and *will* be overwritten when several agents share a box). This is
-the reliable pattern for fan-out/multi-agent setups:
+Every write (create, edit, comment, move, post, ...) is attributed to an
+identity, and **there is no default**: until you choose one, writes are refused
+with a list of the board's identities. Reads never need one.
 
 ```bash
-export WIPE_AGENT="claude-dev"       # bash;  $env:WIPE_AGENT = "claude-dev"  (PowerShell)
-wipe ticket create --list todo -t "Add login" --json   # authored as claude-dev, race-free
+wipe identity list --json                 # existing identities (humans + agents)
+wipe identity use claude --agent --name "Claude" --json   # bind to THIS session
+wipe identity whoami --json               # {"identity":"claude","source":"session ..."}
 ```
 
-Resolution order (highest first): `--author`/`--agentid` → `$WIPE_AGENT` → session
-identity (`wipe identity use`) → `$WIPE_AUTHOR` → the project's VCS user → the
-board/global default. (If the user set `identity.prefer`, the configured default
-overrides the VCS user.) Interactive single-agent sessions can still use
-`wipe identity use`; it's keyed by `$WIPE_SESSION`.
-
-**Strict mode (`$WIPE_STRICT_IDENTITY=1`).** Set this in a shared/multi-agent
-worktree to make every board-mutating command **fail** unless an explicit identity
-is set (`$WIPE_AGENT`, a session, `$WIPE_AUTHOR`, or `--author`), rather than
-silently attributing the write to the repo's git user that all agents share.
-`wipe identity whoami --json` also reports a `warning` when your identity signals
-disagree (e.g. a session and `$WIPE_AGENT` point at different ids) - check it if
-attribution looks off.
+- A binding lasts for this agent session (or terminal tab). A new session starts
+  with no identity again - just re-run `wipe identity use <you>`.
+- In harnesses that start a fresh shell per command, or when several agents share
+  one machine, pin it per process instead: `export WIPE_AGENT=claude-dev`
+  (PowerShell: `$env:WIPE_AGENT = "claude-dev"`), or pass `--agentid <id>` on a
+  single command.
+- **If no listed identity fits you, stop and ask your user which one to use.**
+  Never guess, and never write as a human's identity.
 
 ## Everyday flows
 
-Create and place a ticket:
-
 ```bash
-wipe ticket create --list todo --title "Add login" --priority high --json
-# -> {"id":"T-1", ...}
-```
-
-Move a ticket across lists (lists come from `wipe list show`):
-
-```bash
+wipe ticket create "Add login" --list todo --label app --json      # -> {"id":"T-1",...}
+wipe ticket create "Fix crash" --list todo --body-file report.md --json
 wipe ticket move T-1 --to in-progress --json
-wipe ticket close T-1 --json          # convenience: move to the done list
-wipe ticket duplicate T-1 --json      # copy onto the same list, after the original
+wipe comment add T-1 "Spec clarified: OAuth" --json                # short text inline is fine
+wipe comment add T-1 --body-file findings.md --json                # anything multi-line
+wipe label assign T-1 app bug --json                               # several labels at once
 ```
 
-Deleting is a **soft delete**: the ticket goes to a restorable, gitignored trash
-(kept `trash.retention_days`, default 7) and is purged when it expires. Restore or
-purge it explicitly:
+**Change many things in one call** - title, body, labels, assignees, blockers,
+list and a comment together (validated before anything is written):
 
 ```bash
-wipe ticket delete T-1 --yes --json           # -> trash (add --purge to delete for good)
-wipe trash list --json                         # what's recoverable, newest first
-wipe trash restore T-1 --json                  # back onto its original list
-wipe trash purge T-1 --json                    # permanently (omit id to empty the trash)
-wipe config --global set trash.retention_days 14   # user-wide retention window
+wipe ticket edit T-4 -t "Proper title" --body-file plan.md \
+  --label app --remove-label raw --assignee claude \
+  --blocked-by T-2 --to todo -m "Rewrote Bilal's note into a ticket" --json
 ```
 
-Inspect a ticket:
+When you rewrite a ticket someone else created, their original title/body is
+kept automatically (`original` in `ticket show`) - rewriting a human's raw note
+is safe; quote it anyway if you refer to it.
+
+`wipe ticket show T-1 --json` also lists commits whose messages mention `T-1`,
+so put ticket ids in your commit messages (`fix login redirect (T-1)`). Trim big
+tickets with `--comments 5`, `--comments-only`, `--no-activity`.
+
+## The review loop (human <-> agent)
 
 ```bash
-wipe ticket show T-1 --json
-wipe ticket list --list in-progress --json
+# you, when the work is done:
+wipe ticket submit T-1 -m "Implemented OAuth device flow" \
+  --tested "unit + integration tests" --untested "iOS device" --json
+#   -> comment with Tested / Not tested sections, moved to the review list
+# the reviewer (human or agent):
+wipe ticket approve T-1 -m "Looks good" --json    # -> done (refuses while criteria are unticked; --force)
+wipe ticket reject T-1 -m "Crashes on launch: steps..." --json   # reason required -> back to todo
 ```
 
-Collaborate via comments (this is the human↔agent / agent↔agent channel):
+A rejection lands in your `wipe inbox` with the reason. Acceptance criteria are the
+definition of done: read them before starting (`wipe criteria list T-1`), the
+reviewer ticks them (`wipe criteria check T-1 ac-1`). Workflow lists are
+detected (a list named like "review", `done`, `todo`) or configured:
+`wipe config set board.review_list <list>` (also `board.done_list`, `board.rework_list`).
+
+## Dependencies - "what can be done next?"
 
 ```bash
-wipe comment add T-1 --body "Spec clarified: use OAuth" --json
-wipe comment list T-1 --json
-wipe comment edit T-1 c-2 --body "Spec clarified: use OAuth 2.1" --json   # fix a body
-wipe comment remove T-1 c-2 --json    # delete a comment (ids are never reused)
+wipe ticket block T-5 --by T-3 --json      # T-5 waits on T-3 (cycles are refused)
+wipe ticket list --ready --json            # open work not waiting on an open blocker
+wipe ticket list --blocked --json
+wipe ticket unblock T-5 --by T-3 --json
 ```
 
-**Fix a wrong author (identity correction).** If something was authored under the
-wrong identity (e.g. a concurrent agent stomped the session), correct it with an
-**audit trail** rather than deleting and re-posting:
+A blocker stops counting once it reaches the done list.
+
+## Checklists and acceptance criteria
 
 ```bash
-wipe comment reattribute T-1 c-2 --to claude-dev --json   # logs a `reattributed` activity
-wipe ticket edit T-1 --author claude-dev --json           # rewrite the ticket's creator
-wipe forum edit F-3 --author claude-dev --json            # reattribute a forum post
-```
-
-Break a ticket into checklist items and tick them off as you go. Items get stable
-`ck-<n>` IDs; `list` reports how many are done:
-
-```bash
-wipe checklist add T-1 --text "Add the OAuth device-flow endpoint" --json
 wipe checklist add T-1 --text "Write integration tests" --json
-wipe checklist list T-1 --json          # -> items with {id, text, done}
-wipe checklist check T-1 ck-1 --json    # also: uncheck, toggle
-wipe checklist edit T-1 ck-2 --text "Write end-to-end tests" --json
-wipe checklist move T-1 ck-2 0 --json   # reorder (0-based); remove to delete
+wipe checklist check T-1 ck-1 --json        # also: uncheck, toggle, edit, move, remove
+wipe criteria add T-1 --text "All tests pass in CI" --json
 ```
-
-**Acceptance criteria** are a second, reviewer-owned checklist: the conditions a
-ticket must meet to be accepted. Same verbs as `checklist`, but the group is
-`criteria` and items are `ac-<n>`. Convention: whoever *works* a ticket reads the
-criteria as the definition of done; whoever *reviews* it ticks each one and, if
-any fail, unticks them and moves the ticket back - so the worker instantly sees
-exactly what is left. As a reviewer:
-
-```bash
-wipe criteria add T-1 --text "All tests pass in CI" --json   # usually set when the ticket is written
-wipe criteria list T-1 --json           # -> {id, text, done}; see what's required and what's met
-wipe criteria check T-1 ac-1 --json     # met; uncheck/toggle when a review fails
-wipe ticket move T-1 --to todo --json   # bounce it back with the unmet criteria visible
-```
-
-Labels (the only categorization - there is no "type" or "tags"). New labels are
-auto-assigned a color if you don't pass one:
-
-```bash
-wipe label create needs-review --json
-wipe label assign T-1 needs-review --json
-```
-
-## The forum - shared, compounding project knowledge
-
-The forum is a **git-tracked, threaded discussion hub** that lives beside the board
-(`.wipe/forum/`). Tickets track *work*; the forum is for everything around it that
-should **compound over the life of the project**: decisions and their rationale,
-gotchas and workarounds, conventions and discovered rules, questions, and hand-offs.
-It is how agents and humans cooperate **asynchronously** - within one worktree and
-across many - beyond any single ticket.
-
-**Use the forum to make your work compound.** Before starting non-trivial work,
-*search* the forum for prior decisions and gotchas. When you discover something
-another agent/human will need later (a rule, a pitfall, why a choice was made),
-*post* it. This is the project's durable, searchable memory.
-
-Posts form a tree. IDs are dotted and self-describing: a thread root is `F-1`, its
-replies are `F-1.1`, `F-1.2`, and nested replies `F-1.1.1`. Deleting a post deletes
-its whole subtree. Authorship uses the same identities as tickets/comments.
-
-### Post and reply
-
-```bash
-wipe forum post --title "Auth decision" \
-  --body "Using OAuth 2.1 + PKCE; sessions are stateless JWTs." \
-  --label decision --json                 # -> {"id":"F-1", ...}
-
-wipe forum reply F-1 --body "Gotcha: refresh has a race; guard it with a mutex." \
-  --label gotcha --json                    # -> {"id":"F-1.1", ...}
-
-wipe forum show F-1 --json                 # read a whole thread (tree)
-wipe forum list --json                     # newest threads first
-```
-
-Posts may carry `--label` (same pool as tickets), `--ref T-3` / `--ref <url>`
-references, and `--attach <path>` files.
-
-### Search - your first move (this is the important part)
-
-Search is regex-first and composes filters. Output is lean (one line per match:
-`id  author  [labels]  snippet`); dive into any hit with `wipe forum show <id>`.
-
-```bash
-wipe forum search "oauth|jwt"                    # regex over post bodies (case-insensitive)
-wipe forum search "deploy" --author claude       # by who posted (substring)
-wipe forum search --label gotcha                 # by label (no pattern = all with that label)
-wipe forum search "cache" --scope F-1            # within one thread/subtree
-wipe forum search "TODO" --titles                # match thread titles only
-wipe forum search "race" --depth 1 --limit 20 --json
-```
-
-Conventions you already know apply: it's a real regex, filters AND together, and
-`--json` gives structured results. The raw files are plain JSON under
-`.wipe/forum/`, so `grep -r "<pattern>" .wipe/forum` also works for ad-hoc digs -
-but prefer `wipe forum search` for clean, filtered output.
-
-### Subscribe to events (async coordination)
-
-`wipe forum watch` blocks and streams **one JSON object per new matching post**
-(newline-delimited) to stdout. Point it at a pattern/label/author/scope and react to
-each line - this is how you get notified when another agent posts something relevant.
-
-```bash
-wipe forum watch --pattern "blocked|need help"      # react to calls for help
-wipe forum watch --label decision                   # track new decisions
-wipe forum watch --scope F-7                         # follow one thread
-```
-
-Your harness can launch this as a background listener and act on each event. Emit
-`--replay` to also receive currently-matching posts once before streaming new ones.
-
-### Etiquette
-
-- Search before you ask; reply in-thread instead of starting duplicates.
-- Post durable, factual insights (rules, gotchas, decisions) - not chatter.
-- Label posts so others can filter (`decision`, `gotcha`, `rule`, `question`, ...).
-- Reference tickets/URLs with `--ref` so knowledge links back to work.
-
-## Your inbox - non-blocking coordination
-
-`wipe forum watch` blocks; **`wipe inbox` does not** - it returns what's new and
-exits, so an agent can poll it each loop without holding a process open. It reports
-activity by *other* actors on tickets you're **assigned to**, **authored**, or
-**subscribed to** (your own actions are excluded).
-
-```bash
-wipe subscribe T-3 --json          # watch a ticket
-wipe subscribe todo --json         # watch a whole list
-wipe subscribe F-2 --json          # watch a forum thread   (forum = all forum)
-wipe subscriptions --json          # what you're watching
-wipe inbox --json                  # everything new, newest first
-wipe inbox --unread --json         # only since you last read; then mark read
-wipe inbox --since 2026-07-14T00:00:00Z --json
-```
-
-Being assigned a ticket (`wipe ticket assign T-3 <you>`) auto-subscribes you to it.
-The `--unread` cursor is per-identity and stored in the gitignored cache, so it
-never dirties the repo. Typical agent loop: `wipe inbox --unread --json`, act on
-each event, repeat.
-
-## Working with a supervisor
-
-When another agent or a human supervises you, treat tickets as the unit of work
-and comments as the conversation. Typical loop:
-
-1. `wipe ticket list --list todo --json` to find assigned work.
-2. Do the work in the repo.
-3. `wipe comment add <id> --body "<what you did / questions>" --json`.
-4. `wipe ticket move <id> --to in-progress|done --json` to reflect status.
-
-Keep comments concise and factual; they are the spec-driven coordination record.
 
 ## Committing board changes
 
-wipe writes plain JSON under `.wipe/`; committing it is normal git. Use
-`wipe commit` when you want an **atomic, wipe-attributed** commit of just the
-board (it never sweeps in unrelated staged changes):
+Board changes are plain files under `.wipe/`. Record them separately from your
+code so a human's UI edits never ride along in your commits:
 
 ```bash
-wipe commit --json                         # commit all of .wipe/ (auto message)
-wipe commit T-3 -m "spec T-3" --json       # commit only that ticket's file
-wipe config set board.autocommit true      # or: auto-commit .wipe/ after every change
+wipe commit --json                  # one commit of .wipe/ only, authored as you
+wipe commit T-3 -m "spec T-3" --json
+wipe config set board.autocommit true   # or: commit after every write automatically
 ```
 
-The commit is authored *and* committed as your resolved identity, so board history
-is attributed to you (or your agent id) rather than the ambient git user.
+Run `wipe commit` before your own `git add -A` (or add paths explicitly).
+Until `wipe commit` has been used once on a machine, writes print a reminder on
+stderr. `wipe doctor --json` reports uncommitted board files.
 
-## Discoverability
+## The forum - durable project knowledge
 
-Every command and group supports `--help`. If unsure about a flag, run
-`wipe ticket --help`, `wipe comment --help`, etc. `wipe doctor` reports whether
-you are inside a board and whether git is available.
+Tickets track work; the forum holds what should outlive it: decisions, gotchas,
+conventions. Search before you start, post what you learn.
+
+```bash
+wipe forum search "oauth|jwt" --json              # regex; --label, --author, --scope F-1
+wipe forum post -t "Auth decision" --body-file decision.md --label decision --json
+wipe forum reply F-1 --body "Gotcha: refresh races; guard it." --json
+wipe forum show F-1 --depth 1 --json
+wipe forum pin F-1 --json                          # pinned threads form the digest
+wipe forum digest                                  # compact Markdown of pinned threads (<= 4000 bytes)
+```
+
+`wipe forum digest` is built to be loaded into your context at session start
+(e.g. from a hook or referenced in CLAUDE.md). Pin the few threads that every
+session should know.
+
+## Inbox and subscriptions
+
+`wipe inbox` returns activity by *others* on tickets you're assigned to,
+authored, or subscribed to, newest first (capped at 50; `total` has the full
+count). `--unread` shows only what's new since you last used it and marks it read.
+
+```bash
+wipe subscribe todo --json          # a list; also T-3, F-2, forum, all
+wipe inbox --unread --json
+wipe inbox --since 2026-09-01 --json
+```
+
+## Deleting and restoring
+
+`wipe ticket delete T-1 --yes` moves a ticket to the restorable trash
+(`wipe trash list|restore|purge`); `--purge` deletes for good.
+
+## Output size
+
+Compact views are designed for agent context: see `docs/OUTPUT-AUDIT.md` in the
+wipe repo for measured sizes. Avoid `status --full` / `ticket list --full` /
+`inbox --limit 0` in loops - they grow with the entire board.

@@ -158,6 +158,11 @@ export function mediaUrl(path: string, project?: string): string {
   return `${getApiBase()}/api/media/${encoded}${qs({ project, token: getToken() || undefined })}`;
 }
 
+/** URL previewing a local file by path (this machine only) before it's attached. */
+export function localFileUrl(path: string): string {
+  return `${getApiBase()}/api/local-file${qs({ path, token: getToken() || undefined })}`;
+}
+
 export const api = {
   health(): Promise<Health> {
     return req<Health>('/api/health');

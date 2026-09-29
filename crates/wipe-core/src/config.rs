@@ -64,6 +64,10 @@ pub struct GlobalConfig {
     /// built-in default (7). `0` disables the trash entirely (immediate purge).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trash_retention_days: Option<u64>,
+    /// Set once `wipe commit` has been used on this machine; until then every
+    /// board write ends with a one-line hint pointing at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_hint_seen: Option<bool>,
 }
 
 /// The built-in default trash retention window, in days.

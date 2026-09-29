@@ -312,7 +312,7 @@
   onDestroy(() => unsub?.());
 </script>
 
-<div class="forum" style="--sw:{sidebarWidth}px">
+<div class="forum" class:reading={!!selectedId} style="--sw:{sidebarWidth}px">
   <aside class="side wp-scroll">
     <div class="side-head">
       <span class="h">Forum</span>
@@ -476,6 +476,7 @@
   <section class="thread">
     {#if error}<div class="err">{error}</div>{/if}
     {#if thread}
+      <button class="back" onclick={() => (selectedId = null)}>&larr; All threads</button>
       <header class="th-head">
         <h2>{thread.title}</h2>
         <div class="th-meta">
@@ -541,6 +542,40 @@
     gap: 14px;
     height: 100%;
     min-height: 0;
+  }
+  .back {
+    display: none;
+  }
+  /* Phones: one pane at a time - the thread list, or the open thread with a
+     way back to the list. */
+  @media (max-width: 700px) {
+    .forum {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 0 12px;
+    }
+    .resizer {
+      display: none;
+    }
+    .side {
+      border-right: none;
+      padding-right: 0;
+    }
+    .forum.reading .side,
+    .forum:not(.reading) .thread {
+      display: none;
+    }
+    .back {
+      display: inline-flex;
+      align-self: flex-start;
+      margin-bottom: 8px;
+      padding: 6px 10px;
+      border-radius: var(--wp-r-sm);
+      border: 1px solid var(--wp-border);
+      background: var(--wp-card);
+      color: var(--wp-text-muted);
+      font-size: 13px;
+      cursor: pointer;
+    }
   }
   .side {
     display: flex;

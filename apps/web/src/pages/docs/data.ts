@@ -53,7 +53,8 @@ export const CLI_GROUPS: CliGroup[] = [
   },
   {
     name: "identity",
-    summary: "See and manage who your actions are attributed to (humans and agents).",
+    summary:
+      "Choose who your writes are attributed to. There is no default: each new terminal or agent session picks an identity before its first write.",
     commands: [
       {
         command: "wipe identity whoami",
@@ -69,7 +70,7 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe identity use",
         description:
-          "Bind an identity to this terminal session (creating it if new). Use --agent for an agent identity.",
+          "Bind an identity to this terminal tab or agent session (creating it if new). Use --agent for an agent identity; scripts and parallel agents can export WIPE_AGENT instead.",
         example: "wipe identity use planner-bot --agent",
       },
     ],
@@ -81,7 +82,7 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe status",
         description:
-          "Print every list and its tickets. Add --json for machine-readable output.",
+          "Compact rows per list (done collapses to a count), plus your unread count. --all expands done; --full dumps every ticket's content.",
         example: "wipe status --json",
       },
     ],
@@ -130,8 +131,8 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe ticket create",
         description:
-          "Create a ticket in a target list (--list is required), with a title, priority, labels, and assignees.",
-        example: 'wipe ticket create --list todo --title "Add login" --priority high --json',
+          "Create a ticket in a target list (--list is required). Long bodies via --body-file <path> or --body - (stdin); --blocked-by links dependencies.",
+        example: 'wipe ticket create "Add login" --list todo --body-file spec.md --json',
       },
       {
         command: "wipe ticket move",
@@ -141,8 +142,8 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe ticket edit",
         description:
-          "Edit a ticket's title, body, or priority; --author reattributes its creator (audited).",
-        example: 'wipe ticket edit T-1 --priority urgent',
+          "Change title, body, priority, labels, assignees, blockers, list, and add a comment - in one call. The creator's original wording is kept when someone else rewrites it.",
+        example: 'wipe ticket edit T-1 -t "Proper title" --body-file plan.md --label app --to todo -m "rewrote the note"',
       },
       {
         command: "wipe ticket assign",
@@ -151,13 +152,26 @@ export const CLI_GROUPS: CliGroup[] = [
       },
       {
         command: "wipe ticket show",
-        description: "Show a single ticket with all of its fields and comments.",
+        description:
+          "Show a single ticket with its comments, activity, and the commits that mention it (--comments N, --comments-only, --no-activity trim it).",
         example: "wipe ticket show T-1 --json",
       },
       {
         command: "wipe ticket list",
-        description: "List tickets, optionally filtered by list or label.",
-        example: "wipe ticket list --list todo --json",
+        description:
+          "Compact rows, filtered by --list / --exclude-list / --label / --assignee me / --since 2d / --ready / --blocked, with --fields to pick columns.",
+        example: "wipe ticket list --exclude-list done --ready --json",
+      },
+      {
+        command: "wipe ticket submit / approve / reject",
+        description:
+          "The review loop: submit comments (with Tested / Not tested) and moves to the review list; approve moves to done once criteria are ticked; reject needs a reason and sends it back.",
+        example: 'wipe ticket submit T-1 -m "Implemented" --tested "unit tests" --untested "iOS"',
+      },
+      {
+        command: "wipe ticket block / unblock",
+        description: "Record that a ticket waits on others; `ticket list --ready` shows what can be done next.",
+        example: "wipe ticket block T-5 --by T-3",
       },
       {
         command: "wipe ticket close",
@@ -353,6 +367,12 @@ export const CLI_GROUPS: CliGroup[] = [
           "Stream new matching posts as newline-delimited JSON - agent harnesses react to each line.",
         example: "wipe forum watch --replay",
       },
+      {
+        command: "wipe forum pin / digest",
+        description:
+          "Pin the threads every session should know; `forum digest` prints them as a compact, size-bounded Markdown summary to load into an agent's context.",
+        example: "wipe forum digest --max-bytes 4000",
+      },
     ],
   },
   {
@@ -381,7 +401,7 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe inbox",
         description:
-          "Print new events newest-first and exit. --unread shows only what's new since you last read, then advances your per-identity read cursor.",
+          "Print new events newest-first (50 by default) and exit. --unread shows only what's new since you last read and advances your read cursor; --all covers everything anyone else changed.",
         example: "wipe inbox --unread --json",
       },
     ],
@@ -400,12 +420,12 @@ export const CLI_GROUPS: CliGroup[] = [
   },
   {
     name: "serve",
-    summary: "Launch the local desktop UI.",
+    summary: "Launch the board UI - on this machine and, token-protected, on your phone.",
     commands: [
       {
         command: "wipe serve",
         description:
-          "Start the local daemon and open the drag-and-drop desktop app for every board on this machine.",
+          "Serve the UI on all local networks by default (prints token URLs and a QR code for phones; this machine needs no token). --local for this machine only, --tailscale for your tailnet, --host <ip> for one address.",
         example: "wipe serve --open",
       },
     ],

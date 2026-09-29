@@ -29,7 +29,8 @@ pub struct InboxEvent {
     pub actor: String,
     /// Human-readable detail (a comment/post snippet, or the activity detail).
     pub detail: String,
-    /// Why it reached your inbox: `assigned`, `authored`, or `subscribed`.
+    /// Why it reached your inbox: `assigned`, `authored`, `subscribed`, or
+    /// `board` (only with the board-wide view, `inbox --all`).
     pub reason: String,
 }
 
@@ -95,9 +96,21 @@ fn snippet(s: &str, n: usize) -> String {
 /// is assigned to, authored, or subscribed to - excluding the identity's own
 /// actions. Sorted newest-first.
 pub fn inbox(store: &Store, identity: &str, since: DateTime<Utc>) -> Result<Vec<InboxEvent>> {
+    inbox_with(store, identity, since, false)
+}
+
+/// [`inbox`], optionally widened to `everything` on the board (as if subscribed
+/// to `board:*`) - "what did anyone else change since then?". Such events carry
+/// the reason `board` unless a narrower reason also applies.
+pub fn inbox_with(
+    store: &Store,
+    identity: &str,
+    since: DateTime<Utc>,
+    everything: bool,
+) -> Result<Vec<InboxEvent>> {
     let subs = subscriptions_of(store, identity)?;
     let sub_set: HashSet<String> = subs.into_iter().collect();
-    let all = sub_set.contains("board:*");
+    let all = everything || sub_set.contains("board:*");
     let all_forum = all || sub_set.contains("forum:*");
 
     // ticket id -> its list id, for `list:<id>` subscriptions.
@@ -126,12 +139,19 @@ pub fn inbox(store: &Store, identity: &str, since: DateTime<Utc>) -> Result<Vec<
         if !(assigned || authored || subbed) {
             continue;
         }
+        let explicitly_subbed = sub_set.contains("board:*")
+            || sub_set.contains(&id)
+            || ticket_list
+                .get(&id)
+                .is_some_and(|l| sub_set.contains(&format!("list:{l}")));
         let reason = if assigned {
             "assigned"
         } else if authored {
             "authored"
-        } else {
+        } else if explicitly_subbed {
             "subscribed"
+        } else {
+            "board"
         };
 
         for c in &t.comments {
@@ -174,7 +194,14 @@ pub fn inbox(store: &Store, identity: &str, since: DateTime<Utc>) -> Result<Vec<
                 title: p.thread_title.clone(),
                 actor: p.author.clone(),
                 detail: snippet(&p.body, 120),
-                reason: "subscribed".into(),
+                reason: if sub_set.contains("board:*")
+                    || sub_set.contains("forum:*")
+                    || sub_set.contains(&format!("forum:{}", p.thread_id))
+                {
+                    "subscribed".into()
+                } else {
+                    "board".into()
+                },
             });
         }
     }

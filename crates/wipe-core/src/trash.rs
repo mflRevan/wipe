@@ -93,7 +93,6 @@ pub fn trash_ticket(
     for l in &mut board.lists {
         l.cards.retain(|c| c != ticket_id);
     }
-    board.updated = now;
 
     // Park it in the trash (unless retention is disabled), then drop the file.
     if retention_days > 0 {
@@ -153,7 +152,6 @@ pub fn restore_ticket(store: &Store, ticket_id: &str, now: DateTime<Utc>) -> Res
     // Guard against a stale index if the list shrank since deletion.
     let pos = entry.index.min(dest.cards.len());
     dest.cards.insert(pos, ticket_id.to_string());
-    board.updated = now;
 
     let mut ticket = entry.ticket;
     ticket.updated = now;

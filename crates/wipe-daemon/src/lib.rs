@@ -7,14 +7,15 @@
 
 mod api;
 mod assets;
+mod net;
 mod registry;
 mod watch;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -40,6 +41,10 @@ pub struct ServeConfig {
     pub port: u16,
     /// How the daemon is exposed beyond localhost.
     pub expose: Exposure,
+    /// Bind exactly this address instead of the mode's default plan.
+    pub host: Option<IpAddr>,
+    /// Print a QR code of the first remote URL (for opening it on a phone).
+    pub qr: bool,
     /// Whether to open a browser once bound (best-effort; currently a hint).
     pub open: bool,
     /// If set, the daemon shuts itself down after this long with no connected UI
@@ -117,6 +122,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/tickets/{id}/attachments/path", post(api::attach_path))
         .route("/api/media/{*path}", get(api::serve_media))
+        .route("/api/local-file", get(api::local_file))
         .route("/api/forum", get(api::forum_list).post(api::forum_create))
         .route("/api/forum/search", get(api::forum_search))
         .route(
@@ -128,25 +134,72 @@ fn router(state: AppState) -> Router {
         .route("/api/forum/{id}/reply", post(api::forum_reply))
         .route("/ws", get(api::ws_handler))
         .fallback(assets::static_handler)
-        // Exposed daemons get a locked-down CORS policy and a bearer-token gate on
-        // the API/WS; localhost-only keeps the permissive policy for dev ergonomics.
+        // Exposed daemons only answer cross-origin calls from this machine's own
+        // front-ends (the desktop app, a local dev server) and gate the API/WS on a
+        // bearer token for remote peers; localhost-only keeps the permissive policy.
         .layer(if state.exposed {
             CorsLayer::new()
+                .allow_origin(tower_http::cors::AllowOrigin::predicate(|o, _| {
+                    local_origin(o.to_str().unwrap_or(""))
+                }))
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any)
         } else {
             CorsLayer::permissive()
         })
+        .layer(middleware::from_fn_with_state(state.clone(), write_lock))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
 }
 
+/// Whether a browser `Origin` belongs to a front-end on this machine: a loopback
+/// http(s) origin (any port) or the Tauri desktop shell.
+fn local_origin(origin: &str) -> bool {
+    if matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) {
+        return true;
+    }
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let host = match rest.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => rest.split(':').next().unwrap_or(""),
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// Whether the request came from this machine (loopback peer address). Requests
+/// without connection info (in-process tests) count as remote.
+fn from_loopback(req: &Request) -> bool {
+    let ext = req.extensions();
+    ext.get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a)
+        // What `MockConnectInfo` (tests) provides instead.
+        .or_else(|| {
+            ext.get::<axum::extract::connect_info::MockConnectInfo<SocketAddr>>()
+                .map(|m| m.0)
+        })
+        .is_some_and(|a| a.ip().is_loopback())
+}
+
 /// Auth gate: when a token is configured (exposed mode), every `/api` request
 /// (except the unauthenticated health probe) and the `/ws` upgrade must carry the
-/// token as `Authorization: Bearer <t>` or a `?token=<t>` query parameter.
+/// token as `Authorization: Bearer <t>` or a `?token=<t>` query parameter -
+/// unless it comes from this machine and loopback is trusted (every mode but
+/// `proxy`, where all traffic arrives via loopback). Also records, for the
+/// request, whether its client-supplied identity may be believed.
 async fn require_token(State(state): State<api::AppState>, req: Request, next: Next) -> Response {
+    let local = state.trust_loopback && from_loopback(&req);
     if let Some(token) = state.token.clone() {
         let path = req.uri().path();
         let guarded = (path.starts_with("/api") && path != "/api/health") || path == "/ws";
-        if guarded && !request_has_token(&req, &token) {
+        if guarded && !local && !request_has_token(&req, &token) {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "ok": false, "error": "missing or invalid token" })),
@@ -154,7 +207,37 @@ async fn require_token(State(state): State<api::AppState>, req: Request, next: N
                 .into_response();
         }
     }
-    next.run(req).await
+    let trusted = !state.exposed || local;
+    api::TRUSTED.scope(trusted, next.run(req)).await
+}
+
+/// Serialize board writes: every mutating API request holds the target board's
+/// write lock (shared with the CLI) for its duration, so a UI edit and an agent's
+/// `wipe` command never interleave a read-modify-write.
+async fn write_lock(State(state): State<api::AppState>, req: Request, next: Next) -> Response {
+    let mutating = !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    if !mutating || !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
+    }
+    let project = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix("project="))
+            .map(api::percent_decode)
+    });
+    let root = project.map(PathBuf::from).or_else(|| state.current.clone());
+    let guard = match root.and_then(|r| wipe_core::Store::open(r).ok()) {
+        Some(store) => tokio::task::spawn_blocking(move || store.lock().ok())
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let res = next.run(req).await;
+    drop(guard);
+    res
 }
 
 /// Whether `req` presents the expected bearer `token`, via the `Authorization`
@@ -186,9 +269,11 @@ fn request_has_token(req: &Request, token: &str) -> bool {
     false
 }
 
-/// Resolve the bearer token for an exposed serve: `$WIPE_TOKEN` wins; otherwise the
-/// board's persisted `daemon.token` (generated and saved on first exposed serve so
-/// the shareable URL stays stable); otherwise a fresh ephemeral token.
+/// Resolve the bearer token for an exposed serve: `$WIPE_TOKEN` wins; then a
+/// token already saved in the board's `daemon.token` (pre-0.4 boards); otherwise
+/// this machine's own token, generated once and kept in the user config dir so
+/// the phone bookmark stays valid across restarts. It is deliberately never
+/// written into the git-tracked board: a secret must not ride along in commits.
 fn resolve_token(root: Option<&PathBuf>) -> String {
     if let Ok(t) = std::env::var("WIPE_TOKEN") {
         let t = t.trim().to_string();
@@ -196,25 +281,38 @@ fn resolve_token(root: Option<&PathBuf>) -> String {
             return t;
         }
     }
-    if let Some(root) = root {
-        if let Ok(store) = wipe_core::Store::open(root) {
-            if let Ok(mut settings) = store.load_settings() {
-                if let Some(t) = settings
-                    .daemon
-                    .token
-                    .clone()
-                    .filter(|s| !s.trim().is_empty())
-                {
-                    return t;
-                }
-                let t = wipe_core::id::token();
-                settings.daemon.token = Some(t.clone());
-                let _ = store.save_settings(&settings);
-                return t;
+    if let Some(t) = root
+        .and_then(|r| wipe_core::Store::open(r).ok())
+        .and_then(|s| s.load_settings().ok())
+        .and_then(|st| st.daemon.token)
+        .filter(|t| !t.trim().is_empty())
+    {
+        return t;
+    }
+    let path =
+        wipe_core::GlobalConfig::path().and_then(|p| p.parent().map(|d| d.join("serve-token")));
+    if let Some(t) = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+    {
+        return t;
+    }
+    let t = wipe_core::id::token();
+    if let Some(p) = &path {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(p, &t).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
             }
         }
     }
-    wipe_core::id::token()
+    t
 }
 
 /// Start the daemon and serve until the process is stopped (Ctrl-C).
@@ -223,10 +321,13 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         registry::register(root);
     }
 
+    let addrs = net::bind_plan(cfg.expose, cfg.host, cfg.port)?;
     let (tx, _rx) = broadcast::channel::<String>(64);
     let clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let exposed = !matches!(cfg.expose, Exposure::None);
-    // Only exposed daemons require a token; localhost-only serves stay auth-free.
+    let proxy = matches!(cfg.expose, Exposure::Proxy);
+    let exposed = net::is_remote(&addrs) || proxy;
+    // Reachable-from-elsewhere daemons require a token from remote clients; a
+    // loopback-only serve stays auth-free.
     let token = if exposed {
         Some(resolve_token(cfg.root.as_ref()))
     } else {
@@ -238,6 +339,7 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         clients: clients.clone(),
         token: token.clone(),
         exposed,
+        trust_loopback: !proxy,
     };
 
     // Watch the launch project's `.wipe` for live updates; keep the watcher alive
@@ -251,44 +353,82 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         eprintln!("warning: file watching unavailable; live updates disabled");
     }
 
-    let ip = match cfg.expose {
-        Exposure::None => Ipv4Addr::LOCALHOST,
-        Exposure::Tailscale | Exposure::Proxy => Ipv4Addr::UNSPECIFIED,
-    };
-    let addr = SocketAddr::from((ip, cfg.port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let bound = listener.local_addr()?;
+    let mut listeners = Vec::new();
+    let mut bound = Vec::new();
+    for addr in &addrs {
+        let l = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+            anyhow::anyhow!(
+                "cannot listen on {addr}: {e} (another server on this port? try --port)"
+            )
+        })?;
+        bound.push(l.local_addr()?);
+        listeners.push(l);
+    }
 
-    let shown = if bound.ip().is_unspecified() {
-        SocketAddr::from((Ipv4Addr::LOCALHOST, bound.port()))
-    } else {
-        bound
-    };
-    // Exposed serves hand out the token in the URL so the first open authenticates;
-    // the UI persists it and sends it on every later API/WS call.
-    let url = match &token {
-        Some(t) => format!("http://{shown}/?token={t}"),
-        None => format!("http://{shown}"),
-    };
+    // Remote URLs carry the token so the first open authenticates; the UI keeps it
+    // and sends it on every later API/WS call.
+    let urls = net::urls(&bound, token.as_deref(), proxy);
     match cfg.idle_timeout {
         Some(d) => println!(
-            "wipe UI serving on {url}  (Ctrl-C to stop; auto-stops after {}s idle)",
+            "wipe UI serving  (Ctrl-C to stop; auto-stops after {}s idle)",
             d.as_secs()
         ),
-        None => println!("wipe UI serving on {url}  (Ctrl-C to stop)"),
+        None => println!("wipe UI serving  (Ctrl-C to stop)"),
     }
-    if token.is_some() {
-        println!("  exposed beyond localhost - this URL includes an access token; share it only with trusted peers.");
+    let width = urls.iter().map(|u| u.label.len()).max().unwrap_or(0);
+    for u in &urls {
+        println!("  {:<width$}  {}", u.label, u.url);
+    }
+    if cfg.expose == Exposure::Tailscale {
+        if let (Some(name), Some(ts)) = (net::tailscale_dns_name(), token.as_deref()) {
+            println!(
+                "  {:<width$}  http://{name}:{}/?token={ts}",
+                "tailscale dns",
+                bound[0].port()
+            );
+        }
+    }
+    let remote: Vec<&net::ShownUrl> = urls.iter().filter(|u| u.label != "this machine").collect();
+    if exposed {
+        if cfg.qr {
+            if let Some(q) = remote.first().and_then(|u| net::qr(&u.url)) {
+                println!("\n  scan to open on your phone ({}):", remote[0].label);
+                for line in q.lines() {
+                    println!("  {line}");
+                }
+            }
+        }
+        println!(
+            "  anyone holding a token URL can read and edit this board - share it only with \
+             trusted devices. this machine only: `wipe serve --local`."
+        );
     }
     if cfg.open {
-        open_browser(&url);
+        open_browser(&urls[0].url);
     }
 
     let app = router(state);
     let idle = cfg.idle_timeout;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown_signal(clients, idle).await })
-        .await?;
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let mut servers = Vec::new();
+    for l in listeners {
+        let mut rx = stop_rx.clone();
+        let svc = app
+            .clone()
+            .into_make_service_with_connect_info::<SocketAddr>();
+        servers.push(tokio::spawn(async move {
+            axum::serve(l, svc)
+                .with_graceful_shutdown(async move {
+                    let _ = rx.wait_for(|stop| *stop).await;
+                })
+                .await
+        }));
+    }
+    shutdown_signal(clients, idle).await;
+    let _ = stop_tx.send(true);
+    for s in servers {
+        s.await??;
+    }
     Ok(())
 }
 
@@ -359,6 +499,7 @@ mod tests {
             clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             token: None,
             exposed: false,
+            trust_loopback: true,
         }
     }
 
@@ -371,6 +512,7 @@ mod tests {
             clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             token: Some(token.to_string()),
             exposed: true,
+            trust_loopback: true,
         }
     }
 
@@ -431,6 +573,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(q.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn only_local_front_ends_are_cors_origins() {
+        for ok in [
+            "http://localhost:5173",
+            "http://127.0.0.1:6737",
+            "http://[::1]:8080",
+            "tauri://localhost",
+            "http://tauri.localhost",
+        ] {
+            assert!(local_origin(ok), "{ok}");
+        }
+        for bad in [
+            "http://evil.example",
+            "http://localhost.evil.example",
+            "http://192.168.1.5:6737",
+            "",
+        ] {
+            assert!(!local_origin(bad), "{bad}");
+        }
+    }
+
+    /// Requests from this machine skip the token (unless behind a proxy);
+    /// remote ones still need it.
+    #[tokio::test]
+    async fn loopback_is_trusted_except_behind_a_proxy() {
+        use axum::extract::connect_info::MockConnectInfo;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path(), "Auth", chrono::Utc::now()).unwrap();
+        let get = |app: Router| async move {
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/board")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        };
+        let state = test_state_exposed(store.root().to_path_buf(), "secret123");
+        let local =
+            router(state.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+        assert_eq!(get(local).await, StatusCode::OK);
+
+        let remote = router(state.clone())
+            .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 9], 5555))));
+        assert_eq!(get(remote).await, StatusCode::UNAUTHORIZED);
+
+        let mut proxied = state;
+        proxied.trust_loopback = false;
+        let behind_proxy =
+            router(proxied).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+        assert_eq!(get(behind_proxy).await, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

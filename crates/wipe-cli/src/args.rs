@@ -12,6 +12,9 @@ use clap::{Args, Parser, Subcommand};
 /// `wipe` stores a Trello-style board as flat JSON under `.wipe/`, engineered for
 /// clean git diffs. Agents drive it through this CLI (add `--json` to any command);
 /// humans use the local UI via `wipe serve`.
+///
+/// Every write needs a chosen identity (`wipe identity use <id>`, `$WIPE_AGENT`, or
+/// `--agentid`). Start a session with `wipe inbox` and `wipe ticket list`.
 #[derive(Debug, Parser)]
 #[command(name = "wipe", version, about, long_about = None, propagate_version = true)]
 pub struct Cli {
@@ -27,6 +30,16 @@ pub struct Cli {
     /// agent id). Overrides the session/VCS identity; see `wipe identity`.
     #[arg(long = "agentid", global = true, value_name = "ID")]
     pub agentid: Option<String>,
+
+    /// On writes, print the full updated object instead of the short receipt
+    /// (`{"ok":true,"id":...}`) that write commands return by default.
+    #[arg(long, global = true)]
+    pub echo: bool,
+
+    /// Pretty-print `--json` output (indented, multi-line). By default it is a
+    /// single compact line - about half the bytes, which matters to agents.
+    #[arg(long, global = true)]
+    pub pretty: bool,
 
     #[command(subcommand)]
     pub command: Command,
@@ -44,8 +57,9 @@ pub enum Command {
     Identity(IdentityCmd),
     /// Discover `.wipe` boards on disk and add them to the local registry.
     Scan(ScanArgs),
-    /// Show the board at a glance.
-    Status,
+    /// Show the board at a glance: per list, a compact row per ticket (done
+    /// tickets collapse to a count). For one list, `wipe ticket list --list <id>`.
+    Status(StatusArgs),
     /// Inspect and manage the board itself.
     #[command(subcommand)]
     Board(BoardCmd),
@@ -117,6 +131,21 @@ pub enum Command {
     },
 }
 
+/// `wipe status`
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// Include every ticket's full content (body, comments, activity) - the
+    /// pre-0.4 output. Large on real boards; prefer `wipe ticket show <id>`.
+    #[arg(long)]
+    pub full: bool,
+    /// Also list the tickets on the done list instead of just counting them.
+    #[arg(long)]
+    pub all: bool,
+    /// Skip a list entirely (repeatable).
+    #[arg(long = "exclude-list", value_name = "LIST")]
+    pub exclude_lists: Vec<String>,
+}
+
 /// `wipe subscribe` / `wipe unsubscribe`
 #[derive(Debug, Args)]
 pub struct SubscribeArgs {
@@ -131,8 +160,8 @@ pub struct SubscribeArgs {
 /// `wipe inbox`
 #[derive(Debug, Args)]
 pub struct InboxArgs {
-    /// Only events strictly after this RFC-3339 timestamp (e.g.
-    /// `2026-07-14T00:00:00Z`).
+    /// Only events after this time: RFC-3339, a date (2026-09-01), or a span
+    /// ago (`30m`, `12h`, `2d`, `1w`).
     #[arg(long)]
     pub since: Option<String>,
     /// Use *and advance* your stored read-cursor: show only what's new since you
@@ -142,9 +171,14 @@ pub struct InboxArgs {
     /// Act as this identity instead of the resolved one.
     #[arg(long)]
     pub author: Option<String>,
-    /// Cap the number of events returned.
+    /// Cap the number of events returned, newest first (`0` = no cap). The JSON
+    /// `total` says how many there were.
+    #[arg(long, default_value = "50")]
+    pub limit: usize,
+    /// Everything anyone else changed on the board, not just what you are
+    /// assigned to, authored, or subscribed to ("what happened while I was away").
     #[arg(long)]
-    pub limit: Option<usize>,
+    pub all: bool,
 }
 
 /// `wipe commit`
@@ -194,11 +228,12 @@ pub enum IdentityCmd {
     /// Agents: run this FIRST to see whether an identity for you already exists
     /// before creating a new one with `wipe identity use`.
     List,
-    /// Bind an identity to this terminal session (creates it if new).
+    /// Bind an identity to this terminal tab / agent session (creates it if new).
+    /// Each new terminal or agent session starts with no identity.
     Use(IdentityUseArgs),
     /// Show who actions are currently attributed to, and why.
     Whoami,
-    /// Unbind this session's identity (revert to VCS/default resolution).
+    /// Unbind this session's identity (writes are refused until one is chosen).
     Clear,
 }
 
@@ -310,12 +345,10 @@ pub enum ListCmd {
 pub enum TicketCmd {
     /// Create a ticket.
     Create(TicketCreateArgs),
-    /// Show a ticket in full.
-    Show {
-        /// Ticket ID, e.g. T-1.
-        id: String,
-    },
-    /// Edit a ticket's core fields.
+    /// Show a ticket in full (plus commits that mention it, in git repos).
+    Show(TicketShowArgs),
+    /// Edit a ticket: fields, labels, assignees, blockers, list, and a comment -
+    /// all in one call.
     Edit(TicketEditArgs),
     /// Move a ticket to another list.
     Move {
@@ -343,6 +376,19 @@ pub enum TicketCmd {
         /// Ticket ID.
         id: String,
     },
+    /// Hand work in for review: comment + move to the review list. The comment
+    /// can carry what was tested and what was NOT.
+    Submit(TicketSubmitArgs),
+    /// Accept reviewed work: move it to the done list (refuses while acceptance
+    /// criteria are unmet, unless --force), with an optional comment.
+    Approve(TicketApproveArgs),
+    /// Send reviewed work back: a reason is required; comment + move to the
+    /// rework list (todo by default).
+    Reject(TicketRejectArgs),
+    /// Mark a ticket as blocked by other tickets (`--by T-3`, repeatable).
+    Block(TicketBlockArgs),
+    /// Remove blocked-by links (`--by T-3`, repeatable).
+    Unblock(TicketBlockArgs),
     /// Move a ticket back to the first list.
     Reopen {
         /// Ticket ID.
@@ -388,12 +434,19 @@ pub enum TrashCmd {
 /// `wipe ticket create`
 #[derive(Debug, Args)]
 pub struct TicketCreateArgs {
+    /// Short title (or pass it with --title).
+    #[arg(value_name = "TITLE")]
+    pub title_pos: Option<String>,
     /// Short title.
-    #[arg(long, short)]
-    pub title: String,
-    /// Long-form body (Markdown allowed).
-    #[arg(long, short)]
+    #[arg(long, short, conflicts_with = "title_pos")]
+    pub title: Option<String>,
+    /// Long-form body (Markdown allowed). `-` reads it from stdin.
+    #[arg(long, short, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// Read the body from a file (`-` = stdin). Safe for multi-line text on every
+    /// platform and shell.
+    #[arg(long, value_name = "PATH", conflicts_with = "body")]
+    pub body_file: Option<PathBuf>,
     /// Priority.
     #[arg(long)]
     pub priority: Option<String>,
@@ -406,6 +459,29 @@ pub struct TicketCreateArgs {
     /// Assignee (repeatable).
     #[arg(long = "assignee", value_name = "WHO")]
     pub assignees: Vec<String>,
+    /// Ticket this one waits on (repeatable).
+    #[arg(long = "blocked-by", value_name = "ID")]
+    pub blocked_by: Vec<String>,
+}
+
+/// `wipe ticket show`
+#[derive(Debug, Args)]
+pub struct TicketShowArgs {
+    /// Ticket ID, e.g. T-1.
+    pub id: String,
+    /// Only the comment thread (no body, activity, or commits).
+    #[arg(long)]
+    pub comments_only: bool,
+    /// Leave out the activity log.
+    #[arg(long)]
+    pub no_activity: bool,
+    /// Leave out the commits whose messages mention this ticket.
+    #[arg(long)]
+    pub no_commits: bool,
+    /// Only the newest N comments (`0` = none); the JSON `comments_total` keeps
+    /// the full count.
+    #[arg(long, value_name = "N")]
+    pub comments: Option<usize>,
 }
 
 /// `wipe ticket edit`
@@ -414,29 +490,167 @@ pub struct TicketEditArgs {
     /// Ticket ID.
     pub id: String,
     /// New title.
-    #[arg(long)]
+    #[arg(long, short)]
     pub title: Option<String>,
-    /// New body.
-    #[arg(long)]
+    /// New body. `-` reads it from stdin. The creator's original wording is kept
+    /// the first time someone else rewrites it (see `ticket show`).
+    #[arg(long, short, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// Read the new body from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "body")]
+    pub body_file: Option<PathBuf>,
     /// New priority.
     #[arg(long)]
     pub priority: Option<String>,
+    /// Add a label (repeatable).
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Remove a label (repeatable).
+    #[arg(long = "remove-label", value_name = "LABEL")]
+    pub remove_labels: Vec<String>,
+    /// Add an assignee (repeatable).
+    #[arg(long = "assignee", value_name = "WHO")]
+    pub assignees: Vec<String>,
+    /// Remove an assignee (repeatable).
+    #[arg(long = "unassign", value_name = "WHO")]
+    pub unassign: Vec<String>,
+    /// Add a blocked-by link (repeatable).
+    #[arg(long = "blocked-by", value_name = "ID")]
+    pub blocked_by: Vec<String>,
+    /// Remove a blocked-by link (repeatable).
+    #[arg(long = "unblock", value_name = "ID")]
+    pub unblock: Vec<String>,
+    /// Move the ticket to this list.
+    #[arg(long, value_name = "LIST")]
+    pub to: Option<String>,
+    /// Also add this comment (`-` = stdin).
+    #[arg(long, short = 'm', allow_hyphen_values = true)]
+    pub comment: Option<String>,
+    /// Read the comment from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "comment")]
+    pub comment_file: Option<PathBuf>,
     /// Reattribute the ticket's creation to this identity (records an audit
     /// entry). Corrects a ticket created under the wrong/stomped identity.
     #[arg(long)]
     pub author: Option<String>,
 }
 
+/// `wipe ticket submit`
+#[derive(Debug, Args)]
+pub struct TicketSubmitArgs {
+    /// Ticket ID.
+    pub id: String,
+    /// What was done (`-` = stdin).
+    #[arg(
+        long,
+        short = 'm',
+        visible_alias = "body",
+        short_alias = 'b',
+        allow_hyphen_values = true
+    )]
+    pub message: Option<String>,
+    /// Read the message from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "message")]
+    pub message_file: Option<PathBuf>,
+    /// Something you verified (repeatable) - listed under "Tested".
+    #[arg(long, value_name = "WHAT")]
+    pub tested: Vec<String>,
+    /// Something you did NOT verify (repeatable) - listed under "Not tested".
+    #[arg(long, value_name = "WHAT")]
+    pub untested: Vec<String>,
+    /// Review list to move it to (default: `board.review_list`, else the list
+    /// whose name contains "review").
+    #[arg(long, value_name = "LIST")]
+    pub to: Option<String>,
+}
+
+/// `wipe ticket approve`
+#[derive(Debug, Args)]
+pub struct TicketApproveArgs {
+    /// Ticket ID.
+    pub id: String,
+    /// Optional comment (`-` = stdin).
+    #[arg(
+        long,
+        short = 'm',
+        visible_alias = "body",
+        short_alias = 'b',
+        allow_hyphen_values = true
+    )]
+    pub message: Option<String>,
+    /// Approve even though some acceptance criteria are unchecked.
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// `wipe ticket reject`
+#[derive(Debug, Args)]
+pub struct TicketRejectArgs {
+    /// Ticket ID.
+    pub id: String,
+    /// Why it goes back - required (`-` = stdin).
+    #[arg(
+        long,
+        short = 'm',
+        visible_alias = "body",
+        short_alias = 'b',
+        allow_hyphen_values = true
+    )]
+    pub message: Option<String>,
+    /// Read the reason from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "message")]
+    pub message_file: Option<PathBuf>,
+    /// List to send it back to (default: `board.rework_list`, else `todo`).
+    #[arg(long, value_name = "LIST")]
+    pub to: Option<String>,
+}
+
+/// `wipe ticket block` / `wipe ticket unblock`
+#[derive(Debug, Args)]
+pub struct TicketBlockArgs {
+    /// The waiting ticket.
+    pub id: String,
+    /// The ticket it waits on (repeatable).
+    #[arg(long = "by", value_name = "ID", required = true)]
+    pub by: Vec<String>,
+}
+
 /// `wipe ticket list`
 #[derive(Debug, Args)]
 pub struct TicketListArgs {
-    /// Only tickets on this list.
+    /// Only tickets on this list (repeatable).
+    #[arg(long = "list", value_name = "LIST")]
+    pub lists: Vec<String>,
+    /// Skip tickets on this list (repeatable), e.g. `--exclude-list done`.
+    #[arg(long = "exclude-list", value_name = "LIST")]
+    pub exclude_lists: Vec<String>,
+    /// Only tickets carrying this label (repeatable; all must match).
+    #[arg(long = "label", value_name = "LABEL")]
+    pub labels: Vec<String>,
+    /// Only tickets assigned to this identity (`me` = yours).
+    #[arg(long, value_name = "WHO")]
+    pub assignee: Option<String>,
+    /// Only tickets changed since: RFC-3339, a date (2026-09-01), or a span
+    /// ago (`30m`, `12h`, `2d`, `1w`).
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+    /// Only tickets not waiting on an open blocker ("what can be done next?").
+    #[arg(long, conflicts_with = "blocked")]
+    pub ready: bool,
+    /// Only tickets waiting on an open blocker.
     #[arg(long)]
-    pub list: Option<String>,
-    /// Only tickets carrying this label.
+    pub blocked: bool,
+    /// Comma-separated fields per row (default: all compact fields). Available:
+    /// id, title, list, labels, assignees, priority, comments, checklist,
+    /// criteria, blocked_by, updated, last_by, created, body.
+    #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
+    pub fields: Vec<String>,
+    /// Full ticket objects (body, comments, activity) instead of compact rows.
+    #[arg(long, conflicts_with = "fields")]
+    pub full: bool,
+    /// Cap the number of rows.
     #[arg(long)]
-    pub label: Option<String>,
+    pub limit: Option<usize>,
 }
 
 /// `wipe comment ...`
@@ -446,10 +660,16 @@ pub enum CommentCmd {
     Add {
         /// Ticket ID.
         ticket: String,
-        /// Comment body (Markdown allowed).
-        #[arg(long, short)]
-        body: String,
-        /// Override the author identity (defaults to git config / $WIPE_AUTHOR).
+        /// Comment body (or pass it with --body / --body-file).
+        #[arg(value_name = "BODY")]
+        body_pos: Option<String>,
+        /// Comment body (Markdown allowed). `-` reads it from stdin.
+        #[arg(long, short, allow_hyphen_values = true, conflicts_with = "body_pos")]
+        body: Option<String>,
+        /// Read the body from a file (`-` = stdin).
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["body", "body_pos"])]
+        body_file: Option<PathBuf>,
+        /// Author this one comment as a different identity.
         #[arg(long)]
         author: Option<String>,
     },
@@ -471,9 +691,12 @@ pub enum CommentCmd {
         ticket: String,
         /// Comment ID (e.g. c-1).
         comment: String,
-        /// New body (Markdown allowed).
-        #[arg(long, short)]
-        body: String,
+        /// New body (Markdown allowed). `-` reads it from stdin.
+        #[arg(long, short, allow_hyphen_values = true)]
+        body: Option<String>,
+        /// Read the new body from a file (`-` = stdin).
+        #[arg(long, value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
     },
     /// Reattribute a comment to another identity, recording an audit entry (for
     /// correcting a comment written under the wrong/stomped identity).
@@ -575,19 +798,21 @@ pub enum LabelCmd {
         /// Label name.
         name: String,
     },
-    /// Apply a label to a ticket.
+    /// Apply one or more labels to a ticket.
     Assign {
         /// Ticket ID.
         ticket: String,
-        /// Label name.
-        name: String,
+        /// Label names.
+        #[arg(required = true)]
+        names: Vec<String>,
     },
-    /// Remove a label from a ticket.
+    /// Remove one or more labels from a ticket.
     Remove {
         /// Ticket ID.
         ticket: String,
-        /// Label name.
-        name: String,
+        /// Label names.
+        #[arg(required = true)]
+        names: Vec<String>,
     },
 }
 
@@ -648,9 +873,12 @@ pub enum ForumCmd {
     Edit {
         /// Post ID.
         id: String,
-        /// New body (Markdown allowed).
-        #[arg(long, short)]
+        /// New body (Markdown allowed). `-` reads it from stdin.
+        #[arg(long, short, allow_hyphen_values = true)]
         body: Option<String>,
+        /// Read the new body from a file (`-` = stdin).
+        #[arg(long, value_name = "PATH", conflicts_with = "body")]
+        body_file: Option<PathBuf>,
         /// Reattribute the post to this identity, recording the correction (for
         /// a post written under the wrong/stomped identity).
         #[arg(long)]
@@ -663,6 +891,19 @@ pub enum ForumCmd {
         /// Required to actually delete (subtree deletion is irreversible).
         #[arg(long)]
         yes: bool,
+    },
+    /// A compact, size-bounded Markdown digest of the pinned threads, for loading
+    /// into an agent's context at session start (e.g. from CLAUDE.md or a hook).
+    Digest(ForumDigestArgs),
+    /// Pin a thread so it appears in `wipe forum digest` (adds the `pinned` label).
+    Pin {
+        /// Thread ID (e.g. F-1).
+        id: String,
+    },
+    /// Unpin a thread.
+    Unpin {
+        /// Thread ID (e.g. F-1).
+        id: String,
     },
     /// Watch the forum and stream new posts as newline-delimited JSON events.
     ///
@@ -677,9 +918,12 @@ pub struct ForumPostArgs {
     /// Thread title (headline).
     #[arg(long, short)]
     pub title: String,
-    /// Message body (Markdown allowed).
-    #[arg(long, short)]
+    /// Message body (Markdown allowed). `-` reads it from stdin.
+    #[arg(long, short, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// Read the body from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "body")]
+    pub body_file: Option<PathBuf>,
     /// Label to apply (repeatable), from the board's label pool.
     #[arg(long = "label", value_name = "LABEL")]
     pub labels: Vec<String>,
@@ -699,9 +943,12 @@ pub struct ForumPostArgs {
 pub struct ForumReplyArgs {
     /// Parent post ID (e.g. F-1 or F-1.2).
     pub id: String,
-    /// Reply body (Markdown allowed).
-    #[arg(long, short)]
-    pub body: String,
+    /// Reply body (Markdown allowed). `-` reads it from stdin.
+    #[arg(long, short, allow_hyphen_values = true)]
+    pub body: Option<String>,
+    /// Read the body from a file (`-` = stdin).
+    #[arg(long, value_name = "PATH", conflicts_with = "body")]
+    pub body_file: Option<PathBuf>,
     /// Label to apply (repeatable).
     #[arg(long = "label", value_name = "LABEL")]
     pub labels: Vec<String>,
@@ -736,12 +983,23 @@ pub struct ForumSearchArgs {
     /// Match only thread titles (root posts).
     #[arg(long)]
     pub titles: bool,
-    /// Cap the number of results.
-    #[arg(long)]
-    pub limit: Option<usize>,
+    /// Cap the number of results (`0` = no cap).
+    #[arg(long, default_value = "50")]
+    pub limit: usize,
     /// Make the pattern case-sensitive (default: case-insensitive).
     #[arg(long = "case-sensitive")]
     pub case_sensitive: bool,
+}
+
+/// `wipe forum digest`
+#[derive(Debug, Args)]
+pub struct ForumDigestArgs {
+    /// Digest threads carrying this label instead of `pinned`.
+    #[arg(long, default_value = "pinned")]
+    pub label: String,
+    /// Upper bound on the digest size in bytes (each thread is truncated to fit).
+    #[arg(long, default_value = "4000")]
+    pub max_bytes: usize,
 }
 
 /// `wipe forum watch`
@@ -773,6 +1031,24 @@ pub struct ServeArgs {
     /// Port to listen on (overrides settings.json).
     #[arg(long)]
     pub port: Option<u16>,
+    /// Where the UI is reachable: `lan` (all local networks, the default),
+    /// `local` (this machine only), `tailscale` (this machine + your tailnet), or
+    /// `proxy` (behind a reverse proxy). Overrides `daemon.expose`.
+    #[arg(long, value_name = "MODE", conflicts_with_all = ["local", "tailscale"])]
+    pub expose: Option<String>,
+    /// Shorthand for `--expose local`: only this machine can connect.
+    #[arg(long, conflicts_with = "tailscale")]
+    pub local: bool,
+    /// Shorthand for `--expose tailscale`: reachable over your tailnet only.
+    #[arg(long)]
+    pub tailscale: bool,
+    /// Bind this exact address instead (e.g. `192.168.1.20` or `::`). Remote
+    /// clients still need the access token.
+    #[arg(long, value_name = "ADDR")]
+    pub host: Option<String>,
+    /// Don't print the QR code for opening the board on a phone.
+    #[arg(long)]
+    pub no_qr: bool,
     /// Open the UI in a browser once started.
     #[arg(long)]
     pub open: bool,
@@ -786,7 +1062,8 @@ pub struct ServeArgs {
 pub enum ConfigCmd {
     /// Show all settings.
     Show,
-    /// Get a setting by key (daemon.port, daemon.expose, board.name).
+    /// Get a setting by key (daemon.port, daemon.expose, board.name,
+    /// board.autocommit, board.review_list, board.done_list, board.rework_list).
     Get {
         /// Setting key.
         key: String,

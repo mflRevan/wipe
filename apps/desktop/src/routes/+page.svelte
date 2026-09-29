@@ -33,6 +33,7 @@
   import Board from '$lib/components/Board.svelte';
   import Forum from '$lib/components/Forum.svelte';
   import ProjectSwitcher from '$lib/components/ProjectSwitcher.svelte';
+  import Lightbox from '$lib/components/Lightbox.svelte';
   import TicketModal from '$lib/components/TicketModal.svelte';
   import NewTicketDialog from '$lib/components/NewTicketDialog.svelte';
   import GitGraph from '$lib/components/GitGraph.svelte';
@@ -200,12 +201,15 @@
 <NewTicketDialog bind:open={newTicketOpen} listId={newTicketList} listName={newTicketName} />
 <GitGraph bind:open={historyOpen} />
 <BoardSettings bind:open={settingsOpen} />
+<Lightbox />
 
 <style>
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    /* Mobile browsers: size to the visible viewport, not behind the URL bar. */
+    height: 100dvh;
     background: var(--wp-canvas);
   }
   .topbar {
@@ -448,6 +452,50 @@
   .dim {
     color: var(--wp-text-subtle);
     font-size: 12px;
+  }
+  /* Phones: two header rows - brand, project and actions on top, the
+     Board/Forum switch full-width below - and tighter page padding. */
+  @media (max-width: 700px) {
+    .topbar {
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      padding: 8px 12px;
+    }
+    .sep,
+    .status {
+      display: none;
+    }
+    .topbar :global(> *:nth-child(3)) {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .viewtabs {
+      order: 10;
+      width: 100%;
+    }
+    .viewtabs button {
+      flex: 1;
+      justify-content: center;
+      height: 34px;
+      font-size: 13px;
+    }
+    .right {
+      gap: 6px;
+    }
+    .ib {
+      width: 36px;
+      height: 36px;
+    }
+    .main {
+      padding: 10px 0 0;
+    }
+    .banner.err,
+    .banner.rewind {
+      margin: 0 12px;
+    }
+    .banner.rewind {
+      flex-wrap: wrap;
+    }
   }
   .offactions {
     display: flex;

@@ -36,9 +36,44 @@ pub struct AppState {
     /// localhost. `None` for localhost-only serves (no auth needed).
     pub token: Option<String>,
     /// Whether the daemon is reachable beyond localhost. When true, client-supplied
-    /// `actor`/`author` is ignored (a shared token can't verify per-user identity),
-    /// so writes are attributed to the board's own resolved identity instead.
+    /// `actor`/`author` from *remote* clients is ignored (a shared token can't verify
+    /// per-user identity), so their writes are attributed to the board's own
+    /// resolved identity instead.
     pub exposed: bool,
+    /// Whether requests from this machine (loopback) skip the token and may name
+    /// their identity. False behind a reverse proxy, where every request arrives
+    /// via loopback.
+    pub trust_loopback: bool,
+}
+
+tokio::task_local! {
+    /// Per request: may this client's supplied identity be believed? Set by the
+    /// auth middleware (local, or the daemon isn't exposed at all).
+    pub static TRUSTED: bool;
+}
+
+/// Decode a `%XX`/`+`-encoded query value (enough for the `project` path).
+pub fn percent_decode(v: &str) -> String {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => match (hex(b[i + 1]), hex(b[i + 2])) {
+                (Some(hi), Some(lo)) => {
+                    out.push(hi << 4 | lo);
+                    i += 3;
+                    continue;
+                }
+                _ => out.push(b'%'),
+            },
+            b'+' => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// An error that renders as a JSON `{ok:false,error}` body.
@@ -89,7 +124,8 @@ fn notify(state: &AppState) {
 /// client-supplied identity would let a remote caller impersonate anyone. In that
 /// mode we fall back to the board's own resolved identity.
 fn resolve_actor(state: &AppState, store: &Store, provided: Option<String>) -> String {
-    let provided = if state.exposed { None } else { provided };
+    let trusted = TRUSTED.try_with(|t| *t).unwrap_or(!state.exposed);
+    let provided = if trusted { provided } else { None };
     ops::resolve_identity(Some(store), provided.as_deref())
 }
 
@@ -869,6 +905,68 @@ fn guess_mime(name: &str) -> &'static str {
     }
 }
 
+/// Refuse unless the request comes from this machine (or the daemon isn't
+/// exposed). Reading a *path* makes the daemon open a file on its own disk; a
+/// remote client - even one holding the token - must not be able to point it
+/// at arbitrary host files.
+fn require_local(state: &AppState) -> Result<(), ApiError> {
+    if TRUSTED.try_with(|t| *t).unwrap_or(!state.exposed) {
+        Ok(())
+    } else {
+        Err(ApiError(anyhow::anyhow!(
+            "local file paths can only be used from the machine running `wipe serve` - upload the file instead"
+        )))
+    }
+}
+
+/// Query for `GET /api/local-file`.
+#[derive(Debug, Deserialize)]
+pub struct LocalFileQuery {
+    path: String,
+}
+
+/// `GET /api/local-file?path=` - stream a local file for an in-place preview of a
+/// pasted path before it is attached. This-machine only; previewable media types
+/// (image/video/audio/pdf/text) only; capped at 50 MB.
+pub async fn local_file(
+    State(state): State<AppState>,
+    Query(q): Query<LocalFileQuery>,
+) -> Result<Response, ApiError> {
+    require_local(&state)?;
+    let path = std::path::PathBuf::from(q.path.trim());
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let mime = guess_mime(&name);
+    let previewable = [
+        "image/",
+        "video/",
+        "audio/",
+        "text/",
+        "application/pdf",
+        "application/json",
+    ]
+    .iter()
+    .any(|p| mime.starts_with(p));
+    if !previewable || !path.is_file() {
+        return Err(ApiError(anyhow::anyhow!(
+            "no preview for {}",
+            path.display()
+        )));
+    }
+    if std::fs::metadata(&path)
+        .map(|m| m.len())
+        .unwrap_or(u64::MAX)
+        > 50 * 1024 * 1024
+    {
+        return Err(ApiError(anyhow::anyhow!("too large to preview")));
+    }
+    let bytes = std::fs::read(&path)?;
+    Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+}
+
 /// `POST /api/tickets/{id}/attachments/path` - attach a file that already lives on
 /// the local filesystem (e.g. a path pasted into the editor). The daemon (which
 /// runs locally) reads it and applies the same content-hash dedupe + in-repo
@@ -878,6 +976,7 @@ pub async fn attach_path(
     Path(id): Path<String>,
     Json(b): Json<AttachPathBody>,
 ) -> ApiResult {
+    require_local(&state)?;
     let store = store_for(&state, b.project)?;
     let path = std::path::PathBuf::from(b.path.trim());
     if !path.is_file() {

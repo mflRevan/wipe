@@ -175,6 +175,30 @@ pub fn reattribute_post(
     Ok(old)
 }
 
+/// Add (`on`) or remove a label on a thread's root post - e.g. `pinned`. Returns
+/// whether anything changed. Not stamped as an edit: labels are metadata.
+pub fn set_root_label(
+    store: &Store,
+    thread_id: &str,
+    label: &str,
+    on: bool,
+    _now: DateTime<Utc>,
+) -> Result<bool> {
+    let mut thread = store.load_thread(&thread_of(thread_id))?;
+    let labels = &mut thread.root.labels;
+    let has = labels.iter().any(|l| l == label);
+    if has == on {
+        return Ok(false);
+    }
+    if on {
+        labels.push(label.to_string());
+    } else {
+        labels.retain(|l| l != label);
+    }
+    store.save_thread(&thread)?;
+    Ok(true)
+}
+
 /// Delete a post and its entire subtree. Deleting a thread's root removes the
 /// whole thread file.
 pub fn delete_post(store: &Store, id: &str, now: DateTime<Utc>) -> Result<()> {

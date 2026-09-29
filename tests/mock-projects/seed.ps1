@@ -19,6 +19,8 @@ New-Item -ItemType Directory -Force $Dir | Out-Null
 Push-Location $Dir
 try {
     git init -q; git config user.email "demo@wipe.dev"; git config user.name "Demo"
+    # wipe never falls back to the git user: name the author of the seeded content.
+    $env:WIPE_AUTHOR = "Demo <demo@wipe.dev>"
     & $wipe init . --name "Payments Service" | Out-Null
 
     & $wipe label create backend --color "#3b82f6" | Out-Null

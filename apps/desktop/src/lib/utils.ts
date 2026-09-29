@@ -200,3 +200,45 @@ export function filesFromClipboard(dt: DataTransfer | null): File[] {
     }
   return files;
 }
+
+/**
+ * Svelte action: grow a textarea to fit its content, so wrapped or multi-line
+ * text is always fully visible while editing (never scrolled to the last line).
+ * Accounts for borders under `box-sizing: border-box`, and re-fits when the
+ * value changes (pass it as the parameter), when the element's width changes
+ * (modal open animation, phone rotation), and once web fonts finish loading.
+ */
+export function autosize(node: HTMLTextAreaElement, _value?: unknown) {
+  const fit = () => {
+    const cs = getComputedStyle(node);
+    const border =
+      cs.boxSizing === 'border-box'
+        ? parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+        : 0;
+    const extra = cs.boxSizing === 'border-box' ? 0 : -(parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom));
+    node.style.height = 'auto';
+    node.style.height = `${node.scrollHeight + border + extra}px`;
+  };
+  let lastWidth = 0;
+  const ro =
+    typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          if (node.clientWidth !== lastWidth) {
+            lastWidth = node.clientWidth;
+            fit();
+          }
+        })
+      : null;
+  ro?.observe(node);
+  node.addEventListener('input', fit);
+  fit();
+  requestAnimationFrame(fit);
+  if (typeof document !== 'undefined' && document.fonts) void document.fonts.ready.then(fit);
+  return {
+    update: () => fit(),
+    destroy: () => {
+      ro?.disconnect();
+      node.removeEventListener('input', fit);
+    }
+  };
+}

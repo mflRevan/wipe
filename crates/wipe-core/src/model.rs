@@ -162,6 +162,11 @@ pub struct Ticket {
     /// Long-form body (Markdown allowed inside the JSON string).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
+    /// The creator's original title and body, frozen the first time *someone
+    /// else* rewrites either. Lets an agent turn a human's raw note into a proper
+    /// ticket without losing the human's own words. Never changed afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<OriginalNote>,
     /// Priority (references a name in `definitions.json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
@@ -219,6 +224,7 @@ impl Ticket {
             id: id.into(),
             title: title.into(),
             body: String::new(),
+            original: None,
             priority: None,
             labels: Vec::new(),
             assignees: Vec::new(),
@@ -282,6 +288,22 @@ impl Ticket {
         id
     }
 
+    /// Who created the ticket (the actor of its `created` activity), if recorded.
+    pub fn creator(&self) -> Option<&str> {
+        self.activity
+            .iter()
+            .find(|a| a.kind == "created")
+            .map(|a| a.actor.as_str())
+    }
+
+    /// Ticket ids this ticket is blocked by (its `blocked-by` relations).
+    pub fn blocked_by(&self) -> impl Iterator<Item = &str> {
+        self.relations
+            .iter()
+            .filter(|r| r.kind == RelationKind::BlockedBy)
+            .map(|r| r.target.as_str())
+    }
+
     /// Append an activity event. `detail` may be empty when `kind` is self-explanatory.
     pub fn log_activity(
         &mut self,
@@ -297,6 +319,23 @@ impl Ticket {
             detail: detail.into(),
         });
     }
+}
+
+/// A ticket's original wording, preserved when another identity first rewrites
+/// its title or body (see [`Ticket::original`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OriginalNote {
+    /// The title as the creator wrote it.
+    pub title: String,
+    /// The body as the creator wrote it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    /// Who wrote it (the ticket's creator).
+    pub author: String,
+    /// When it was preserved (the moment of the first rewrite).
+    pub preserved: DateTime<Utc>,
+    /// Who rewrote it first.
+    pub rewritten_by: String,
 }
 
 /// A relation from one ticket to another.
@@ -664,6 +703,18 @@ pub struct Settings {
     /// faithful, per-change record without a manual commit step.
     #[serde(default)]
     pub autocommit: bool,
+    /// The list `wipe ticket submit` moves work into for review. Unset means
+    /// "detect": a list whose id or name contains "review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_list: Option<String>,
+    /// The list `wipe ticket approve` / `close` moves accepted work into. Unset
+    /// means "detect": the `done` list, else the last list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_list: Option<String>,
+    /// The list `wipe ticket reject` sends work back to. Unset means "detect":
+    /// `todo`, else the first list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework_list: Option<String>,
 }
 
 fn default_max_attachment_mb() -> u64 {
@@ -678,6 +729,9 @@ impl Default for Settings {
             max_attachment_mb: default_max_attachment_mb(),
             default_author: None,
             autocommit: false,
+            review_list: None,
+            done_list: None,
+            rework_list: None,
         }
     }
 }
@@ -697,9 +751,9 @@ pub struct DaemonSettings {
     /// Idle timeout (seconds) used when auto-serving / `--idle` is active.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
-    /// Bearer token required to reach the API/WS when the daemon is *exposed*
-    /// (Tailscale/proxy). Generated on first exposed serve and reused thereafter so
-    /// the shareable URL stays stable. `None` on localhost-only boards.
+    /// Legacy (pre-0.4): the bearer token an exposed daemon required, saved here on
+    /// first exposed serve. Still honored when present, but new tokens live in the
+    /// per-machine config dir (`serve-token`) so no secret enters git history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -732,16 +786,51 @@ pub struct Subscriptions {
 }
 
 /// How the local daemon is reachable.
+///
+/// Every mode except [`Exposure::Local`] requires the board's access token from
+/// remote clients (it is printed in the URL `wipe serve` shows); requests from
+/// the machine itself stay token-free except behind a proxy, where every request
+/// arrives from loopback and so cannot be trusted by address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Exposure {
-    /// Localhost only.
+    /// Every local network interface (`0.0.0.0`) - reachable from phones and
+    /// other machines on the LAN. The default. (`none`, the pre-0.4 default,
+    /// predates LAN serving and reads as this.)
     #[default]
-    None,
-    /// Advertised over a Tailscale network.
+    #[serde(alias = "none")]
+    Lan,
+    /// Loopback only (`127.0.0.1`); no token needed.
+    Local,
+    /// Loopback plus this machine's Tailscale address, so tailnet peers can reach
+    /// it and nothing else on the LAN can.
     Tailscale,
-    /// Behind a user-provided reverse proxy.
+    /// Behind a user-provided reverse proxy (binds all interfaces; the token is
+    /// required from every client, loopback included).
     Proxy,
+}
+
+impl Exposure {
+    /// The config/CLI slug for this mode.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Exposure::Lan => "lan",
+            Exposure::Local => "local",
+            Exposure::Tailscale => "tailscale",
+            Exposure::Proxy => "proxy",
+        }
+    }
+
+    /// Parse a config/CLI slug. `localhost` is accepted for `local`.
+    pub fn parse(s: &str) -> Option<Exposure> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "lan" | "network" => Some(Exposure::Lan),
+            "local" | "localhost" | "loopback" => Some(Exposure::Local),
+            "tailscale" => Some(Exposure::Tailscale),
+            "proxy" => Some(Exposure::Proxy),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

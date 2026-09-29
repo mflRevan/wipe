@@ -11,6 +11,8 @@ SERVE=0; [ "${2:-}" = "--serve" ] && SERVE=1
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
 
 git init -q; git config user.email "demo@wipe.dev"; git config user.name "Demo"
+# wipe never falls back to the git user: name the author of the seeded content.
+export WIPE_AUTHOR="Demo <demo@wipe.dev>"
 "$WIPE" init . --name "Payments Service" >/dev/null
 "$WIPE" label create backend --color "#3b82f6" >/dev/null
 "$WIPE" label create urgent  --color "#ef4444" >/dev/null

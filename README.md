@@ -132,10 +132,19 @@ wipe init . --yes      # non-interactive, standard board
 wipe init . --yes --starter empty   # a blank board, no lists/labels
 ```
 
+Choose who your CLI writes are attributed to. There is no default identity:
+every new terminal or agent session picks one (writes are refused until then):
+
+```sh
+wipe identity use ada@example.com --human --name "Ada"   # you, in this terminal
+export WIPE_AGENT=claude-dev                             # an agent / script, per process
+```
+
 Create a ticket:
 
 ```sh
-wipe ticket create --title "Write onboarding docs" --list todo
+wipe ticket create "Write onboarding docs" --list todo
+wipe ticket create "Fix crash" --list todo --body-file report.md   # multi-line text via a file (or --body - for stdin)
 ```
 
 Move it as work progresses:
@@ -147,13 +156,28 @@ wipe ticket move T-1 --to in-progress
 Leave a comment for whoever (or whatever) picks it up next:
 
 ```sh
-wipe comment add T-1 --body "Blocked on the API design ticket."
+wipe comment add T-1 "Blocked on the API design ticket."
 ```
 
-Check the board at a glance (add `--json` for machine-readable output):
+Hand work in for review, and accept or send it back:
+
+```sh
+wipe ticket submit T-1 -m "Docs written" --tested "links" --untested "screenshots"
+wipe ticket approve T-1        # or: wipe ticket reject T-1 -m "why"
+```
+
+Check the board at a glance (add `--json` for a compact machine-readable view):
 
 ```sh
 wipe status
+wipe ticket list --ready       # open work not blocked by other tickets
+wipe inbox --unread            # what others changed on your tickets
+```
+
+Record board changes as their own commit (or `wipe config set board.autocommit true`):
+
+```sh
+wipe commit
 ```
 
 Launch the local desktop UI:
@@ -161,6 +185,12 @@ Launch the local desktop UI:
 ```sh
 wipe serve
 ```
+
+By default the UI is reachable from your local network, so you can manage the
+board from a phone: `wipe serve` prints a token-protected URL (and a QR code) for
+each network, while this machine needs no token. `wipe serve --local` restricts
+it to this machine, `wipe serve --tailscale` to your tailnet, and `--host <ip>`
+binds one address (persist with `wipe config set daemon.expose lan|local|tailscale|proxy`).
 
 `wipe serve` is a global convenience, not tied to one board: run it inside a
 project and it opens that board; run it anywhere and it starts a viewer over every
@@ -224,10 +254,14 @@ concurrently.
 ## For agents
 
 Agents are expected to interact with the board exclusively through the
-`wipe` CLI - never by hand-editing files under `.wipe/`. Every command
-accepts a `--json` flag for structured, machine-parseable output, and the
-CLI's built-in help (`wipe help`) is written to be sufficient documentation
-on its own.
+`wipe` CLI - never by reading or hand-editing files under `.wipe/` (their
+format is internal). Every command accepts `--json` for one-line,
+machine-parseable output; reads are compact by default, writes return short
+receipts (`--echo` for the full object), long text goes in via `--body-file` or
+stdin, and the CLI's built-in help (`wipe help`) is written to be sufficient
+documentation on its own. A good session start is `wipe inbox --unread --json`
+then `wipe ticket list --exclude-list done --json`. See
+[docs/OUTPUT-AUDIT.md](docs/OUTPUT-AUDIT.md) for how much each command prints.
 
 `wipe` ships an agent **skill** (`SKILL.md`) that teaches coding agents how to
 drive the board. Install it into a skills directory that your tools

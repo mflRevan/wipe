@@ -3,11 +3,11 @@ resolver = "2"
 members = ["crates/wipe-core", "crates/wipe-cli", "crates/wipe-daemon"]
 
 [workspace.package]
-version = "0.3.14"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 authors = ["Aiman <aiman@shabib.net>"]
-rust-version = "1.80"
+rust-version = "1.89"
 repository = "https://github.com/mflRevan/wipe"
 homepage = "https://wipeboard.dev"
 keywords = ["cli", "kanban", "agents", "git", "collaboration"]
@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -24,8 +24,8 @@ tempfile = "3"
 
 # Internal crates. `version` is required so they can be published to crates.io
 # (path is used for local builds, version for the published dependency).
-wipe-core = { path = "crates/wipe-core", version = "0.3.14" }
-wipe-daemon = { path = "crates/wipe-daemon", version = "0.3.14" }
+wipe-core = { path = "crates/wipe-core", version = "0.4.0" }
+wipe-daemon = { path = "crates/wipe-daemon", version = "0.4.0" }
 
 [profile.release]
 lto = "thin"

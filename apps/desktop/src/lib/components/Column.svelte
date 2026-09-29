@@ -43,6 +43,9 @@
   } = $props();
 
   const marker = SHADOW_ITEM_MARKER_PROPERTY_NAME;
+  // Touch-first device (phone/tablet): delay drag pickup so swipes scroll.
+  const coarse =
+    typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
   // svelte-dnd-action places the drop placeholder (an item carrying the shadow
   // marker) into whichever zone the card is currently over - so exactly one
@@ -146,6 +149,9 @@
       items: tickets,
       flipDurationMs: flipMs,
       dragDisabled,
+      // On touch screens a card only picks up after a short press, so a swipe
+      // scrolls the list/board instead of dragging the card.
+      delayTouchStart: coarse ? 220 : false,
       // Disable the library's built-in target styling: it highlights EVERY valid
       // zone. We glow just the hovered column ourselves via `isTarget` below.
       dropTargetStyle: {},
@@ -196,6 +202,12 @@
 </section>
 
 <style>
+  @media (max-width: 700px) {
+    .column {
+      width: 84vw !important;
+      max-width: 420px;
+    }
+  }
   .column {
     display: flex;
     flex-direction: column;

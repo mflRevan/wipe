@@ -31,6 +31,18 @@ directories = "5"
 # Lightweight HTTPS (rustls + bundled roots) for the once-a-day update check.
 ureq = { version = "2.10", default-features = false, features = ["tls"] }
 
+[target.'cfg(unix)'.dependencies]
+# getsid(): key `wipe identity use` bindings to the terminal session.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Process snapshot: key `wipe identity use` bindings to the launching shell.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"

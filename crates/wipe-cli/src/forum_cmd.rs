@@ -16,6 +16,7 @@ use wipe_core::Store;
 use crate::args::*;
 use crate::commands::guess_mime;
 use crate::identity;
+use crate::input;
 use crate::output::{dim, id_style, Out};
 
 fn store() -> Result<Store> {
@@ -74,11 +75,12 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
     let s = store()?;
     match cmd {
         ForumCmd::Post(a) => {
+            let body = input::text(a.body, a.body_file.as_deref(), "the post body")?;
             let attachments = stage_attachments(&s, &a.attach)?;
-            let author = identity::resolve(a.author);
+            let author = identity::resolve(a.author)?;
             let spec = NewThread {
                 title: a.title,
-                body: a.body.unwrap_or_default(),
+                body: body.unwrap_or_default(),
                 labels: a.labels,
                 refs: a.refs,
                 attachments,
@@ -91,11 +93,12 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
         }
 
         ForumCmd::Reply(a) => {
+            let body = input::required(a.body, a.body_file.as_deref(), "the reply body", "--body")?;
             let attachments = stage_attachments(&s, &a.attach)?;
-            let author = identity::resolve(a.author);
+            let author = identity::resolve(a.author)?;
             let parent = a.id.clone();
             let spec = NewReply {
-                body: a.body,
+                body,
                 labels: a.labels,
                 refs: a.refs,
                 attachments,
@@ -138,11 +141,11 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             let mut roots: Vec<&PostView> = all
                 .iter()
                 .filter(|p| p.depth == 0)
-                .filter(|r| label.as_ref().map_or(true, |l| r.labels.contains(l)))
+                .filter(|r| label.as_ref().is_none_or(|l| r.labels.contains(l)))
                 .filter(|r| {
-                    author.as_ref().map_or(true, |a| {
-                        r.author.to_lowercase().contains(&a.to_lowercase())
-                    })
+                    author
+                        .as_ref()
+                        .is_none_or(|a| r.author.to_lowercase().contains(&a.to_lowercase()))
                 })
                 .collect();
             if let Some(n) = limit {
@@ -198,7 +201,7 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
                 scope: a.scope,
                 max_depth: a.depth,
                 titles_only: a.titles,
-                limit: a.limit,
+                limit: (a.limit > 0).then_some(a.limit),
             };
             let hits = forum::search(&s, &q)?;
             if out.json {
@@ -230,9 +233,17 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             }
         }
 
-        ForumCmd::Edit { id, body, author } => {
+        ForumCmd::Edit {
+            id,
+            body,
+            body_file,
+            author,
+        } => {
+            let body = input::text(body, body_file.as_deref(), "the new body")?;
             if body.is_none() && author.is_none() {
-                bail!("nothing to change - pass --body <TEXT> and/or --author <ID>");
+                bail!(
+                    "nothing to change - pass --body <TEXT> (or --body-file) and/or --author <ID>"
+                );
             }
             let now = Utc::now();
             if let Some(body) = &body {
@@ -260,9 +271,126 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             );
         }
 
+        ForumCmd::Digest(a) => {
+            let text = digest(&s, &a.label, a.max_bytes)?;
+            if out.json {
+                out.json_value(&json!({ "label": a.label, "bytes": text.len(), "digest": text }));
+            } else {
+                print!("{text}");
+            }
+        }
+
+        ForumCmd::Pin { id } | ForumCmd::Unpin { id } if id.contains('.') => {
+            bail!(
+                "only whole threads can be pinned - use the thread id (e.g. {})",
+                id.split('.').next().unwrap_or(&id)
+            );
+        }
+        ForumCmd::Pin { id } => {
+            // The label must exist in the board's pool for the UI to color it.
+            if !s
+                .load_definitions()?
+                .labels
+                .iter()
+                .any(|l| l.name == PIN_LABEL)
+            {
+                wipe_core::ops::create_label(
+                    &s,
+                    PIN_LABEL,
+                    None,
+                    Some("in `wipe forum digest`".into()),
+                )?;
+            }
+            let changed = forum::set_root_label(&s, &id, PIN_LABEL, true, Utc::now())?;
+            out.ok(
+                if changed {
+                    format!("pinned {id}")
+                } else {
+                    format!("{id} was already pinned")
+                },
+                json!({ "ok": true, "id": id, "pinned": true, "changed": changed }),
+            );
+        }
+        ForumCmd::Unpin { id } => {
+            let changed = forum::set_root_label(&s, &id, PIN_LABEL, false, Utc::now())?;
+            out.ok(
+                if changed {
+                    format!("unpinned {id}")
+                } else {
+                    format!("{id} was not pinned")
+                },
+                json!({ "ok": true, "id": id, "pinned": false, "changed": changed }),
+            );
+        }
+
         ForumCmd::Watch(a) => watch(&s, a)?,
     }
     Ok(())
+}
+
+/// The label `wipe forum pin` applies and `wipe forum digest` collects.
+const PIN_LABEL: &str = "pinned";
+
+/// Build the Markdown digest of threads labeled `label`: per thread a heading,
+/// the root post, and one line per reply - oldest thread first, each thread's
+/// share of `max_bytes` capped so one long thread cannot crowd out the rest.
+fn digest(s: &Store, label: &str, max_bytes: usize) -> Result<String> {
+    let threads: Vec<_> = s
+        .load_all_threads()?
+        .into_iter()
+        .filter(|t| t.root.labels.iter().any(|l| l == label))
+        .collect();
+    let mut out = format!("# Project notes (wipe forum, label `{label}`)\n\n");
+    if threads.is_empty() {
+        out.push_str(&format!(
+            "_No threads labeled `{label}` yet - pin one with `wipe forum pin F-<n>`._\n"
+        ));
+        return Ok(out);
+    }
+    let footer = "\n_Full threads: `wipe forum show <id>`._\n";
+    let budget = max_bytes.saturating_sub(out.len() + footer.len());
+    let share = (budget / threads.len()).max(200);
+    for t in &threads {
+        let mut sec = format!("## {} - {}\n\n{}\n", t.id, t.title, t.root.body.trim());
+        let mut replies = Vec::new();
+        t.root.walk(0, &mut |p, depth| {
+            if depth > 0 {
+                replies.push(format!("- {} ({}): {}", p.id, p.author, snippet(&p.body)));
+            }
+        });
+        if !replies.is_empty() {
+            sec.push('\n');
+            sec.push_str(&replies.join("\n"));
+            sec.push('\n');
+        }
+        sec.push('\n');
+        out.push_str(&clip(&sec, share, &t.id));
+    }
+    out.push_str(footer);
+    // Hard cap: the per-thread floor can overshoot when there are many threads.
+    if out.len() > max_bytes {
+        let cut = clip(&out, max_bytes.saturating_sub(60), "");
+        out = format!("{cut}\n_Digest truncated at {max_bytes} bytes - raise --max-bytes._\n");
+    }
+    Ok(out)
+}
+
+/// Clip `text` to at most `max` bytes on a char boundary, ending with a pointer
+/// to the full thread when anything was cut.
+fn clip(text: &str, max: usize, id: &str) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let more = if id.is_empty() {
+        String::new()
+    } else {
+        format!(" (cut - `wipe forum show {id}`)")
+    };
+    format!("{}…{more}\n\n", text[..end].trim_end())
 }
 
 /// Clone a post, keeping replies only down to `max_depth` levels below it (same
@@ -296,7 +424,7 @@ fn render(post: &Post, level: usize, max_depth: Option<usize>) {
     for line in post.body.lines() {
         println!("{pad}  {line}");
     }
-    if max_depth.map_or(true, |m| level < m) {
+    if max_depth.is_none_or(|m| level < m) {
         for r in &post.replies {
             render(r, level + 1, max_depth);
         }

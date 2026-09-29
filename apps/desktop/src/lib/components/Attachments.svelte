@@ -5,6 +5,7 @@
   import { currentProject } from '$lib/stores/board';
   import { formatBytes, mediaKind } from '$lib/utils';
   import type { Attachment } from '$lib/types';
+  import { openLightbox } from '$lib/stores/lightbox';
 
   let {
     ticketId,
@@ -81,9 +82,13 @@
       </div>
 
       {#if kind === 'image'}
-        <a href={url(a)} target="_blank" rel="noreferrer">
+        <button
+          class="mediabtn"
+          title="Inspect"
+          onclick={() => openLightbox({ src: url(a), name: a.name, kind })}
+        >
           <img class="media" src={url(a)} alt={a.name} loading="lazy" />
-        </a>
+        </button>
       {:else if kind === 'audio'}
         <!-- svelte-ignore a11y_media_has_caption -->
         <audio controls src={url(a)}></audio>
@@ -93,7 +98,9 @@
       {:else if kind === 'text' || kind === 'pdf'}
         <div class="filecard">
           <FileText size={18} />
-          <span class="fc-name">{a.name}</span>
+          <button class="fc-name linkish" onclick={() => openLightbox({ src: url(a), name: a.name, kind })}
+            >{a.name}</button
+          >
           <a class="dl" href={url(a)} download={a.name}>Download</a>
         </div>
       {:else}
@@ -193,6 +200,20 @@
   }
   audio {
     width: 100%;
+  }
+  .mediabtn {
+    display: block;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: zoom-in;
+  }
+  .linkish {
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: zoom-in;
+    text-align: left;
   }
   .filecard {
     display: flex;

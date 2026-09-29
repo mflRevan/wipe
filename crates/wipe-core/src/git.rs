@@ -79,6 +79,98 @@ pub fn file_at_commit(root: &Path, rev: &str, relpath: &str) -> Result<Option<St
     }
 }
 
+/// Commits whose message mentions `ticket_id` (e.g. `T-81`, as in "fix login
+/// (T-81)"), most recent first, capped at `limit`. wipe's own bookkeeping commits
+/// (`chore(wipe): ...`) are skipped - they touch the board, not the code. The id
+/// must stand alone: `T-8` does not match a message that only mentions `T-81`.
+pub fn commits_mentioning(root: &Path, ticket_id: &str, limit: usize) -> Result<Vec<CommitInfo>> {
+    // Subject and body both come back so the exact-token check below sees the whole
+    // message; the body is the 7th field.
+    let format = format!("--format=%H{FS}%h{FS}%an{FS}%ae{FS}%aI{FS}%s{FS}%b{RS}");
+    let grep = format!("--grep={ticket_id}");
+    // Over-fetch: git's --grep is a substring match, so `T-8` also finds `T-81`;
+    // the exact word-boundary filter runs below.
+    let fetch = (limit.max(1) * 4).to_string();
+    let out = run(
+        root,
+        &[
+            "--no-pager",
+            "log",
+            &format,
+            "--no-color",
+            "--fixed-strings",
+            "-i",
+            &grep,
+            "-n",
+            &fetch,
+        ],
+    )?;
+    let mut hits = Vec::new();
+    for rec in out.split(RS) {
+        let f: Vec<&str> = rec.trim_start_matches('\n').split(FS).collect();
+        if f.len() < 7 {
+            continue;
+        }
+        let subject = f[5].to_string();
+        if subject.starts_with("chore(wipe)") {
+            continue;
+        }
+        if !mentions_id(&format!("{subject}\n{}", f[6]), ticket_id) {
+            continue;
+        }
+        hits.push(CommitInfo {
+            hash: f[0].to_string(),
+            short: f[1].to_string(),
+            author_name: f[2].to_string(),
+            author_email: f[3].to_string(),
+            date: f[4].to_string(),
+            subject,
+        });
+        if hits.len() >= limit {
+            break;
+        }
+    }
+    Ok(hits)
+}
+
+/// Whether `text` mentions `id` as a standalone token (case-insensitive): the
+/// characters around it must not continue the id (`T-8` vs `T-81` / `XT-8`).
+pub fn mentions_id(text: &str, id: &str) -> bool {
+    let hay = text.to_ascii_uppercase();
+    let needle = id.to_ascii_uppercase();
+    let bytes = hay.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = hay[from..].find(&needle) {
+        let start = from + pos;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let after_ok = end >= bytes.len() || !bytes[end].is_ascii_digit();
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
+/// How many paths under `pathspec` differ from `HEAD` (modified, staged, or
+/// untracked) - e.g. uncommitted board files.
+pub fn changed_count(root: &Path, pathspec: &str) -> Result<usize> {
+    Ok(run(
+        root,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            pathspec,
+        ],
+    )?
+    .lines()
+    .filter(|l| !l.trim().is_empty())
+    .count())
+}
+
 /// The most recent commit that touched `relpath`, if any (for attribution).
 pub fn last_change(root: &Path, relpath: &str) -> Result<Option<CommitInfo>> {
     Ok(log(root, Some(relpath), Some(1))?.into_iter().next())
@@ -396,6 +488,41 @@ mod tests {
 
         // A path that never existed yields None, not an error.
         assert_eq!(file_at_commit(root, head, "missing.txt").unwrap(), None);
+    }
+
+    #[test]
+    fn mentions_id_requires_a_standalone_token() {
+        assert!(mentions_id("fix login (T-8)", "T-8"));
+        assert!(mentions_id("t-8: lowercase works", "T-8"));
+        assert!(mentions_id("T-8", "T-8"));
+        assert!(!mentions_id("fix login (T-81)", "T-8"));
+        assert!(!mentions_id("XT-8 is another id", "T-8"));
+        assert!(mentions_id("see T-81 and T-8.", "T-8"));
+    }
+
+    #[test]
+    fn commits_mentioning_finds_subject_and_body_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "Tester"]);
+        let commit = |file: &str, msg: &str| {
+            std::fs::write(root.join(file), msg).unwrap();
+            git(root, &["add", "."]);
+            git(root, &["commit", "-q", "-m", msg]);
+        };
+        commit("a", "fix login (T-8)");
+        commit("b", "unrelated work on T-81");
+        commit("c", "refactor\n\nfollow-up for t-8");
+        commit("d", "chore(wipe): update T-8");
+
+        let hits = commits_mentioning(root, "T-8", 10).unwrap();
+        let subjects: Vec<&str> = hits.iter().map(|c| c.subject.as_str()).collect();
+        // Newest first; T-81 and the wipe bookkeeping commit are excluded.
+        assert_eq!(subjects, vec!["refactor", "fix login (T-8)"]);
+        assert_eq!(commits_mentioning(root, "T-8", 1).unwrap().len(), 1);
+        assert!(commits_mentioning(root, "T-99", 10).unwrap().is_empty());
     }
 
     #[test]
