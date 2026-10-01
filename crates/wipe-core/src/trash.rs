@@ -33,7 +33,7 @@ fn entry_path(store: &Store, ticket_id: &str) -> PathBuf {
     store.trash_dir().join(format!("{ticket_id}.json"))
 }
 
-fn write_entry(store: &Store, entry: &TrashEntry) -> Result<()> {
+pub(crate) fn write_entry(store: &Store, entry: &TrashEntry) -> Result<()> {
     let dir = store.trash_dir();
     std::fs::create_dir_all(&dir).map_err(|e| Error::msg(e.to_string()))?;
     let path = entry_path(store, &entry.ticket.id);
@@ -50,13 +50,12 @@ pub(crate) fn read_entries(store: &Store) -> Result<Vec<TrashEntry>> {
     read_all(store)
 }
 
-/// Rewrite `entry` under its (possibly new) ticket id, removing the file it was
-/// stored under as `old_id`. Used when ticket ids are translated.
-pub(crate) fn rekey_entry(store: &Store, old_id: &str, entry: &TrashEntry) -> Result<()> {
-    if old_id != entry.ticket.id {
-        let _ = std::fs::remove_file(entry_path(store, old_id));
+/// Remove the trash file stored under `ticket_id`, if any.
+pub(crate) fn remove_entry_file(store: &Store, ticket_id: &str) -> Result<()> {
+    match std::fs::remove_file(entry_path(store, ticket_id)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::msg(e.to_string())),
+        _ => Ok(()),
     }
-    write_entry(store, entry)
 }
 
 /// The id of the trashed ticket a typed reference names (`T-01c`, `t1c`, a

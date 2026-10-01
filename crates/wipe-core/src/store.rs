@@ -345,6 +345,17 @@ impl Store {
         Ok(())
     }
 
+    /// Remove a ticket file if it exists (a missing file is not an error).
+    pub(crate) fn remove_ticket_file(&self, id: &str) -> Result<()> {
+        if !valid_ticket_id(id) {
+            return Err(Error::msg(format!("invalid ticket id `{id}`")));
+        }
+        match fs::remove_file(self.ticket_path(id)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
+
     /// Return all ticket IDs currently on disk, sorted numerically by counter.
     pub fn ticket_ids(&self) -> Result<Vec<String>> {
         let dir = self.tickets_dir();
@@ -505,11 +516,24 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.flush()?;
-    tmp.persist(path).map_err(|e| Error::Io(e.error))?;
-    Ok(())
+    // Replacing a file fails on Windows while another process (an editor, the
+    // search indexer, a virus scanner, a sync client) has it open without
+    // delete sharing. That is transient, so retry for a moment before failing.
+    let mut attempt = 0;
+    loop {
+        match tmp.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(e) if attempt < 20 && e.error.kind() == std::io::ErrorKind::PermissionDenied => {
+                attempt += 1;
+                tmp = e.file;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(Error::Io(e.error)),
+        }
+    }
 }
 
-fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
     let mut s = serde_json::to_string_pretty(value)?;
     s.push('\n');
     write_bytes_atomic(path, s.as_bytes())

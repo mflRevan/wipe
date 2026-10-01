@@ -63,6 +63,7 @@ fn main() -> ExitCode {
 
     // Legacy decimal boards: offer the hex-id translation once; then accept any
     // spelling of a ticket id (`t2a`, `T-02A`, a pre-translation `T-42`).
+    ids::resume_interrupted();
     ids::offer_translation(cli.json, &cli.command);
     ids::canonicalize(&mut cli.command);
 

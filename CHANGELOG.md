@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.2 - 2026-10-01
+
+Hotfix for the ticket-id translation added in 0.4.1. If you translated a board
+with 0.4.1, run any `wipe` command in it (or open it in the board UI) once
+after upgrading - a half-converted board is repaired automatically.
+
+### Fixed
+
+- **`wipe board translate-ids` (and the New ids button) could leave a board
+  half-converted.** On Windows, replacing `board.json` fails while another
+  process (an editor, the search indexer, a virus scanner, a sync client) has
+  it open; 0.4.1 had already renamed every ticket file by then, so the board
+  kept its old decimal cards pointing at files that no longer existed, and
+  re-running failed with "unexpected ticket id `T-01A` on a decimal board".
+  The translation is now transactional: the complete result is computed first
+  and saved as one journal, then applied with `board.json` written last.
+  Applying is idempotent, so an interrupted translation finishes on the next
+  `wipe` command, the next board load in the UI, or a re-run - never redone
+  (which would re-map ids that are already translated).
+- **Boards left half-converted by 0.4.1 are repaired** the same way: tickets
+  already carrying a `legacy_id` are kept as they are, tickets 0.4.1 deleted but
+  never wrote back are restored from its staging snapshot
+  (`.wipe/.cache/translate-*`), and the cards, forum, subscriptions and trash
+  are translated to match.
+- Translating a board with 256 or more tickets could lose a trash entry: old
+  `T-100` and the new hex `T-100` (ticket 256) shared a file name.
+- Writes on Windows retry for a moment when the target file is briefly held
+  open by another process, instead of failing immediately.
+
 ## 0.4.1 - 2026-10-01
 
 ### Ticket ids

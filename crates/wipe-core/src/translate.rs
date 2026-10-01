@@ -7,18 +7,44 @@
 //! and activity. Each ticket keeps its old ID as `legacy_id`, so `T-23` typed
 //! later (or found in a commit message) still resolves.
 //!
-//! Crash safety: the translated tickets are written to a staging directory under
-//! the gitignored cache before any original file is removed, so an interrupted
-//! run never loses a ticket.
+//! Crash safety: the complete result (every file's new content, plus which old
+//! files go away) is computed first and written as one journal in the
+//! gitignored cache - the commit point. Applying the journal only writes
+//! precomputed values and removes files no new one reuses, so it is idempotent:
+//! if it is interrupted (a crash, a file held open by another process), the next
+//! run - or any CLI command - replays it. `board.json` is written last, so a
+//! board only reads as translated once everything else is in place. Boards left
+//! half-converted by 0.4.1 (tickets renamed, `board.json` still decimal) are
+//! finished the same way.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::model::{IdFormat, Ticket};
+use crate::model::{Board, IdFormat, Subscriptions, Thread, Ticket};
+use crate::trash::TrashEntry;
 use crate::Store;
+
+const JOURNAL: &str = "translate-journal.json";
+
+/// Everything a translation writes, computed before anything is touched.
+#[derive(Serialize, Deserialize)]
+struct Journal {
+    /// `(old, new)` ids in counter order.
+    pairs: Vec<(String, String)>,
+    tickets: Vec<Ticket>,
+    /// Ticket files to remove: old names that no translated ticket reuses.
+    remove_tickets: Vec<String>,
+    threads: Vec<Thread>,
+    subs: Option<Subscriptions>,
+    trash: Vec<TrashEntry>,
+    remove_trash: Vec<String>,
+    board: Board,
+}
 
 /// Rewrite every whole-word `T-<digits>` in `text` that names a translated ticket.
 fn rewrite_refs(text: &str, map: &BTreeMap<String, String>, re: &Regex) -> String {
@@ -56,56 +82,126 @@ fn rewrite_ticket(t: &mut Ticket, map: &BTreeMap<String, String>, re: &Regex) {
     }
 }
 
-/// Translate a legacy decimal board to hex ticket IDs. Returns the
-/// `(old, new)` pairs in counter order; empty when the board is already hex.
-/// Callers must hold the board's write lock.
+fn decimal_counter(id: &str) -> Result<u64> {
+    id.strip_prefix("T-")
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| Error::msg(format!("unexpected ticket id `{id}` on a decimal board")))
+}
+
+/// Whether an interrupted translation is waiting to be finished: a journal,
+/// or a decimal board with a 0.4.1 staging directory (a run that renamed the
+/// tickets but never got to write `board.json`). Cheap: two directory lookups.
+pub fn interrupted(store: &Store) -> bool {
+    store.cache_dir().join(JOURNAL).is_file()
+        || (!stage_dirs(store).is_empty()
+            && store.load_board().is_ok_and(|b| b.ids == IdFormat::Decimal))
+}
+
+/// Translate a legacy decimal board to hex ticket IDs, or finish a translation
+/// that was interrupted. Returns the `(old, new)` pairs in counter order; empty
+/// when the board is already hex. Callers must hold the board's write lock.
 pub fn translate_ids(store: &Store, now: DateTime<Utc>) -> Result<Vec<(String, String)>> {
+    let journal_path = store.cache_dir().join(JOURNAL);
+    if journal_path.is_file() {
+        let j: Journal = serde_json::from_slice(&std::fs::read(&journal_path)?)?;
+        apply(store, &j).map_err(unfinished)?;
+        return Ok(j.pairs);
+    }
+    let Some(j) = plan(store, now)? else {
+        cleanup(store);
+        return Ok(Vec::new());
+    };
+    std::fs::create_dir_all(store.cache_dir())?;
+    crate::store::write_json_atomic(&journal_path, &j)?;
+    apply(store, &j).map_err(unfinished)?;
+    Ok(j.pairs)
+}
+
+fn unfinished(e: Error) -> Error {
+    Error::msg(format!(
+        "ticket-id translation interrupted: {e}. Nothing is lost - it is saved and          finishes on the next wipe command (or `wipe board translate-ids`). If this          repeats, close whatever has the board's files open (an editor, a sync client)"
+    ))
+}
+
+/// Compute the translation without writing anything (`None` if already hex).
+fn plan(store: &Store, now: DateTime<Utc>) -> Result<Option<Journal>> {
     let mut board = store.load_board()?;
     if board.ids == IdFormat::Hex {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    let tickets = store.load_all_tickets()?;
-    let mut trash = crate::trash::read_entries(store)?;
+    let on_disk = store.ticket_ids()?;
+
+    // Tickets that already carry a legacy_id were translated by an interrupted
+    // 0.4.1 run: keep them as they are. Its staging snapshot (complete, taken
+    // under the lock) supplies any it deleted but never wrote back.
+    let mut done: BTreeMap<String, Ticket> = BTreeMap::new();
+    let mut todo: Vec<Ticket> = Vec::new();
+    for t in store.load_all_tickets()? {
+        if t.legacy_id.is_some() {
+            done.insert(t.id.clone(), t);
+        } else {
+            todo.push(t);
+        }
+    }
+    for t in staged_tickets(store) {
+        if t.legacy_id.is_some() && !done.contains_key(&t.id) {
+            done.insert(t.id.clone(), t);
+        }
+    }
+    let already: BTreeSet<String> = done.values().filter_map(|t| t.legacy_id.clone()).collect();
+    // A leftover old file of a ticket that was already translated is stale.
+    todo.retain(|t| !already.contains(&t.id));
+
+    let trash_on_disk = crate::trash::read_entries(store)?;
+    let trash_ids: Vec<String> = trash_on_disk.iter().map(|e| e.ticket.id.clone()).collect();
+    let (trash_done, trash_todo): (Vec<TrashEntry>, Vec<TrashEntry>) = trash_on_disk
+        .into_iter()
+        .partition(|e| e.ticket.legacy_id.is_some());
 
     // old -> new for every ticket on the board and in the trash.
     let mut map: BTreeMap<String, String> = BTreeMap::new();
-    for id in tickets
+    for t in done.values().chain(trash_done.iter().map(|e| &e.ticket)) {
+        if let Some(old) = &t.legacy_id {
+            map.insert(old.clone(), t.id.clone());
+        }
+    }
+    for id in todo
         .iter()
         .map(|t| &t.id)
-        .chain(trash.iter().map(|e| &e.ticket.id))
+        .chain(trash_todo.iter().map(|e| &e.ticket.id))
     {
-        let n: u64 = id
-            .strip_prefix("T-")
-            .and_then(|n| n.parse().ok())
-            .ok_or_else(|| Error::msg(format!("unexpected ticket id `{id}` on a decimal board")))?;
-        map.insert(id.clone(), crate::id::hex_ticket_id(n));
+        map.insert(id.clone(), crate::id::hex_ticket_id(decimal_counter(id)?));
+    }
+    let mut seen = BTreeSet::new();
+    if let Some(dup) = map.values().find(|new| !seen.insert(*new)) {
+        return Err(Error::msg(format!(
+            "cannot translate: two tickets would both become `{dup}`"
+        )));
     }
     let re = Regex::new(r"\bT-\d+\b").expect("static regex");
 
-    // 1. Stage every translated ticket before touching the originals.
-    let stage = store
-        .cache_dir()
-        .join(format!("translate-{}", now.timestamp()));
-    std::fs::create_dir_all(&stage)?;
-    let mut translated = Vec::with_capacity(tickets.len());
-    for mut t in tickets {
+    let mut tickets: Vec<Ticket> = done.into_values().collect();
+    for mut t in todo {
         rewrite_ticket(&mut t, &map, &re);
-        let mut json = serde_json::to_string_pretty(&t)?;
-        json.push('\n');
-        std::fs::write(stage.join(format!("{}.json", t.id)), json)?;
-        translated.push(t);
+        tickets.push(t);
     }
+    let keep: BTreeSet<&str> = tickets.iter().map(|t| t.id.as_str()).collect();
+    let remove_tickets = on_disk
+        .into_iter()
+        .filter(|id| !keep.contains(id.as_str()))
+        .collect();
 
-    // 2. Swap: remove the old files, then save the translated ones (old and new
-    //    names can coincide from 256 tickets on: decimal `T-100` vs hex `T-100`).
-    for old in map.keys() {
-        let _ = store.delete_ticket(old);
+    let mut trash = trash_done;
+    for mut e in trash_todo {
+        rewrite_ticket(&mut e.ticket, &map, &re);
+        trash.push(e);
     }
-    for t in &translated {
-        store.save_ticket(t)?;
-    }
+    let keep: BTreeSet<&str> = trash.iter().map(|e| e.ticket.id.as_str()).collect();
+    let remove_trash = trash_ids
+        .into_iter()
+        .filter(|id| !keep.contains(id.as_str()))
+        .collect();
 
-    // 3. The board: cards and the format flag.
     for l in &mut board.lists {
         for c in &mut l.cards {
             if let Some(new) = map.get(c) {
@@ -115,9 +211,7 @@ pub fn translate_ids(store: &Store, now: DateTime<Utc>) -> Result<Vec<(String, S
     }
     board.ids = IdFormat::Hex;
     board.updated = now;
-    store.save_board(&board)?;
 
-    // 4. Everything else that names tickets.
     let mut subs = store.load_subscriptions()?;
     let mut subs_changed = false;
     for refs in subs.subs.values_mut() {
@@ -128,11 +222,10 @@ pub fn translate_ids(store: &Store, now: DateTime<Utc>) -> Result<Vec<(String, S
             }
         }
     }
-    if subs_changed {
-        store.save_subscriptions(&subs)?;
-    }
+
+    let mut threads = Vec::new();
     for mut thread in store.load_all_threads()? {
-        let before = serde_json::to_string(&thread)?;
+        let before = thread.clone();
         thread.title = rewrite_refs(&thread.title, &map, &re);
         let mut stack = vec![&mut thread.root];
         while let Some(p) = stack.pop() {
@@ -144,20 +237,84 @@ pub fn translate_ids(store: &Store, now: DateTime<Utc>) -> Result<Vec<(String, S
             }
             stack.extend(p.replies.iter_mut());
         }
-        if serde_json::to_string(&thread)? != before {
-            store.save_thread(&thread)?;
+        if thread != before {
+            threads.push(thread);
         }
     }
-    for e in &mut trash {
-        let old = e.ticket.id.clone();
-        rewrite_ticket(&mut e.ticket, &map, &re);
-        crate::trash::rekey_entry(store, &old, e)?;
-    }
 
-    let _ = std::fs::remove_dir_all(&stage);
     let mut pairs: Vec<(String, String)> = map.into_iter().collect();
-    pairs.sort_by_key(|(old, _)| old[2..].parse::<u64>().unwrap_or(u64::MAX));
-    Ok(pairs)
+    pairs.sort_by_key(|(old, _)| decimal_counter(old).unwrap_or(u64::MAX));
+    Ok(Some(Journal {
+        pairs,
+        tickets,
+        remove_tickets,
+        threads,
+        subs: subs_changed.then_some(subs),
+        trash,
+        remove_trash,
+        board,
+    }))
+}
+
+/// Write the journal's values: new files first, then the removal of old names
+/// no new file reuses (decimal `T-100` and hex `T-100` coincide), `board.json`
+/// last. Safe to repeat after any interruption.
+fn apply(store: &Store, j: &Journal) -> Result<()> {
+    for t in &j.tickets {
+        store.save_ticket(t)?;
+    }
+    for id in &j.remove_tickets {
+        store.remove_ticket_file(id)?;
+    }
+    for t in &j.threads {
+        store.save_thread(t)?;
+    }
+    if let Some(subs) = &j.subs {
+        store.save_subscriptions(subs)?;
+    }
+    for e in &j.trash {
+        crate::trash::write_entry(store, e)?;
+    }
+    for id in &j.remove_trash {
+        crate::trash::remove_entry_file(store, id)?;
+    }
+    store.save_board(&j.board)?;
+    std::fs::remove_file(store.cache_dir().join(JOURNAL))?;
+    cleanup(store);
+    Ok(())
+}
+
+/// Tickets in 0.4.1's staging directories (`.cache/translate-<ts>/`).
+fn staged_tickets(store: &Store) -> Vec<Ticket> {
+    stage_dirs(store)
+        .into_iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+        .filter_map(|f| std::fs::read(f.path()).ok())
+        .filter_map(|b| serde_json::from_slice::<Ticket>(&b).ok())
+        .collect()
+}
+
+fn stage_dirs(store: &Store) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(store.cache_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("translate-"))
+        })
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+fn cleanup(store: &Store) {
+    for d in stage_dirs(store) {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }
 
 #[cfg(test)]
@@ -284,5 +441,148 @@ mod tests {
         assert!(s.resolve_ticket_id("T-13").is_err());
         let ids = s.ticket_ids().unwrap();
         assert_eq!(&ids[8..], ["T-9", "T-10", "T-11", "T-12"]);
+    }
+
+    /// A small legacy board with cross-references in a ticket, the forum and
+    /// subscriptions.
+    fn legacy_board_with_refs() -> (tempfile::TempDir, Store) {
+        let (d, s) = legacy_board(12);
+        let mut t = s.load_ticket("T-3").unwrap();
+        t.body = "see T-10".into();
+        s.save_ticket(&t).unwrap();
+        crate::inbox::subscribe(&s, "ada", "T-11").unwrap();
+        crate::forum::create_thread(
+            &s,
+            crate::forum::NewThread {
+                title: "about T-12".into(),
+                body: "T-12".into(),
+                refs: vec!["T-12".into()],
+                ..Default::default()
+            },
+            "ada",
+            Utc::now(),
+        )
+        .unwrap();
+        (d, s)
+    }
+
+    fn assert_fully_translated(s: &Store) {
+        let b = s.load_board().unwrap();
+        assert_eq!(b.ids, IdFormat::Hex);
+        assert_eq!(b.lists[1].cards[9], "T-00A");
+        assert_eq!(s.ticket_ids().unwrap().len(), 12);
+        for id in s.ticket_ids().unwrap() {
+            assert_eq!(id.len(), 5, "stale file {id}");
+        }
+        for c in b.lists.iter().flat_map(|l| &l.cards) {
+            s.load_ticket(c).unwrap();
+        }
+        assert_eq!(s.load_ticket("T-003").unwrap().body, "see T-00A");
+        assert_eq!(
+            s.load_ticket("T-00C").unwrap().legacy_id.as_deref(),
+            Some("T-12")
+        );
+        assert_eq!(
+            crate::inbox::subscriptions_of(s, "ada").unwrap(),
+            vec!["T-00B"]
+        );
+        assert_eq!(s.load_thread("F-1").unwrap().root.refs[0], "T-00C");
+        assert!(!interrupted(s));
+        assert!(stage_dirs(s).is_empty());
+        assert!(!s.cache_dir().join(JOURNAL).exists());
+    }
+
+    /// Replays what 0.4.1 left behind when `board.json` could not be written:
+    /// a staging dir, every ticket renamed, everything else still decimal.
+    #[test]
+    fn finishes_a_board_half_converted_by_0_4_1() {
+        let (_d, s) = legacy_board_with_refs();
+        let j = plan(&s, Utc::now()).unwrap().unwrap();
+        let stage = s.cache_dir().join("translate-1790875456");
+        std::fs::create_dir_all(&stage).unwrap();
+        for t in &j.tickets {
+            std::fs::write(
+                stage.join(format!("{}.json", t.id)),
+                serde_json::to_string(t).unwrap(),
+            )
+            .unwrap();
+        }
+        for id in &j.remove_tickets {
+            s.remove_ticket_file(id).unwrap();
+        }
+        for t in &j.tickets {
+            s.save_ticket(t).unwrap();
+        }
+        assert_eq!(s.load_board().unwrap().ids, IdFormat::Decimal);
+        assert!(interrupted(&s));
+
+        // Before 0.4.2 this failed: "unexpected ticket id `T-001` on a decimal board".
+        let pairs = translate_ids(&s, Utc::now()).unwrap();
+        assert_eq!(pairs.len(), 12);
+        assert_eq!(pairs[11], ("T-12".into(), "T-00C".into()));
+        assert_fully_translated(&s);
+    }
+
+    /// 0.4.1 killed mid-swap: some old files deleted, few new ones written;
+    /// the staging snapshot fills the gap.
+    #[test]
+    fn recovers_tickets_only_present_in_the_0_4_1_staging_dir() {
+        let (_d, s) = legacy_board_with_refs();
+        let j = plan(&s, Utc::now()).unwrap().unwrap();
+        let stage = s.cache_dir().join("translate-1");
+        std::fs::create_dir_all(&stage).unwrap();
+        for t in &j.tickets {
+            std::fs::write(
+                stage.join(format!("{}.json", t.id)),
+                serde_json::to_string(t).unwrap(),
+            )
+            .unwrap();
+        }
+        for id in &j.remove_tickets[..8] {
+            s.remove_ticket_file(id).unwrap();
+        }
+        s.save_ticket(&j.tickets[0]).unwrap();
+
+        translate_ids(&s, Utc::now()).unwrap();
+        assert_fully_translated(&s);
+    }
+
+    /// A run interrupted while applying its journal is replayed, not redone
+    /// (redoing would re-map refs that are already translated).
+    #[test]
+    fn replays_an_interrupted_journal() {
+        let (_d, s) = legacy_board_with_refs();
+        let j = plan(&s, Utc::now()).unwrap().unwrap();
+        crate::store::write_json_atomic(&s.cache_dir().join(JOURNAL), &j).unwrap();
+        for t in &j.tickets[..5] {
+            s.save_ticket(t).unwrap();
+        }
+        for id in &j.remove_tickets[..3] {
+            s.remove_ticket_file(id).unwrap();
+        }
+        assert!(interrupted(&s));
+        assert_eq!(translate_ids(&s, Utc::now()).unwrap().len(), 12);
+        assert_fully_translated(&s);
+    }
+
+    /// Old `T-100` and new `T-100` (= 256) in the trash must not clobber each other.
+    #[test]
+    fn trash_entries_with_colliding_names_both_survive() {
+        let (_d, s) = legacy_board(260);
+        crate::trash::trash_ticket(&s, "T-100", 7, Utc::now()).unwrap();
+        crate::trash::trash_ticket(&s, "T-256", 7, Utc::now()).unwrap();
+        translate_ids(&s, Utc::now()).unwrap();
+        let mut ids: Vec<String> = crate::trash::list_trash(&s, 7, Utc::now())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.ticket.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["T-064", "T-100"]);
+        assert_eq!(
+            s.load_board().unwrap().lists[1].cards.len(),
+            258,
+            "trashed tickets stay off the board"
+        );
     }
 }

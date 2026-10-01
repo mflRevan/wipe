@@ -390,6 +390,17 @@ pub async fn board(
     let entry = match cached {
         Some(c) => c,
         None => {
+            // Finish an interrupted id translation before showing the board.
+            if wipe_core::translate::interrupted(&store) {
+                let root = key.clone();
+                let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let s = Store::open(root)?;
+                    let _lock = s.lock()?;
+                    wipe_core::translate::translate_ids(&s, Utc::now())?;
+                    Ok(())
+                })
+                .await;
+            }
             let (board, view) = ops::board_view(&store)?;
             let body = serde_json::to_vec(&board_json(&board, &view))?;
             let etag = {

@@ -93,6 +93,26 @@ pub fn canonicalize(cmd: &mut Command) {
     }
 }
 
+/// Finish an id translation that was interrupted (a crash, or a file held open
+/// by another process), so no command ever sees a half-converted board.
+pub fn resume_interrupted() {
+    let Ok(s) = Store::discover(".") else {
+        return;
+    };
+    if !wipe_core::translate::interrupted(&s) {
+        return;
+    }
+    match translate(&s) {
+        Ok(n) => crate::output::hint(format!(
+            "finished an interrupted ticket-id translation ({n} ids now in the hex format)"
+        )),
+        Err(e) => eprintln!(
+            "wipe: an interrupted ticket-id translation could not be finished yet: {e:#}
+             (it is retried on the next command, or run `wipe board translate-ids --yes`)"
+        ),
+    }
+}
+
 /// On the first CLI run against a legacy decimal board (per machine and board),
 /// offer to translate it to hex ids. Interactive terminals get a y/N question;
 /// agents and scripts (non-TTY or `--json`) get a one-line stderr notice instead,
