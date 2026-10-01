@@ -308,7 +308,7 @@ pub fn identity(out: &Out, cmd: IdentityCmd) -> Result<()> {
 }
 
 /// Scan roots to search for boards: explicit paths, else configured roots, else home.
-fn configured_scan_roots() -> Vec<std::path::PathBuf> {
+pub(crate) fn configured_scan_roots() -> Vec<std::path::PathBuf> {
     let g = GlobalConfig::load();
     match g.scan_roots {
         Some(roots) if !roots.is_empty() => {
@@ -516,6 +516,51 @@ pub fn board(out: &Out, cmd: BoardCmd) -> Result<()> {
                 to_value(&b),
             );
         }
+        BoardCmd::TranslateIds { yes } => {
+            let board = s.load_board()?;
+            if board.ids == wipe_core::model::IdFormat::Hex {
+                out.ok(
+                    "this board already uses hex ticket ids",
+                    json!({ "ok": true, "translated": 0 }),
+                );
+                return Ok(());
+            }
+            let n = s.ticket_ids()?.len();
+            if !yes {
+                let interactive =
+                    !out.json && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+                if !interactive {
+                    bail!("translating {n} ticket ids rewrites the board - pass --yes to confirm");
+                }
+                let ok = inquire::Confirm::new(&format!(
+                    "Translate {n} ticket ids to the hex format (T-23 -> T-017)?"
+                ))
+                .with_default(false)
+                .with_help_message("commit/merge open branches first; old ids keep working")
+                .prompt()
+                .unwrap_or(false);
+                if !ok {
+                    bail!("cancelled - nothing changed");
+                }
+            }
+            // `main` already holds the board's write lock for this command.
+            let pairs = wipe_core::translate::translate_ids(&s, Utc::now())?;
+            let sample: Vec<String> = pairs
+                .iter()
+                .take(3)
+                .map(|(o, n)| format!("{o} -> {n}"))
+                .collect();
+            out.write(
+                format!(
+                    "translated {} ticket ids ({}{}); old ids still resolve",
+                    pairs.len(),
+                    sample.join(", "),
+                    if pairs.len() > 3 { ", ..." } else { "" }
+                ),
+                json!({ "ok": true, "translated": pairs.len() }),
+                || json!({ "ok": true, "translated": pairs.len(), "mapping": pairs }),
+            );
+        }
         BoardCmd::Rename { name } => {
             let mut b = s.load_board()?;
             b.name = name.clone();
@@ -701,7 +746,21 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             let commits = if a.no_commits || a.comments_only || !wipe_core::git::is_repo(s.root()) {
                 Vec::new()
             } else {
-                wipe_core::git::commits_mentioning(s.root(), &t.id, 10).unwrap_or_default()
+                // Commits from before an id translation name the old id.
+                let mut c =
+                    wipe_core::git::commits_mentioning(s.root(), &t.id, 10).unwrap_or_default();
+                if let Some(legacy) = &t.legacy_id {
+                    for x in
+                        wipe_core::git::commits_mentioning(s.root(), legacy, 10).unwrap_or_default()
+                    {
+                        if !c.iter().any(|y| y.hash == x.hash) {
+                            c.push(x);
+                        }
+                    }
+                    c.sort_by(|a, b| b.date.cmp(&a.date));
+                    c.truncate(10);
+                }
+                c
             };
             if out.json {
                 if a.comments_only {
@@ -2298,20 +2357,24 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Discover every board on disk so the UI lists them all - crucial when serving
-    // globally (no board here), where the registry alone might be empty on a fresh
-    // machine. Also include the current directory as a scan root.
+    // Discover every board on disk (home and every local drive) so the UI lists
+    // them all, whichever board `serve` was started in. Serving globally (no
+    // board here) waits for the scan so the list isn't empty on a fresh machine;
+    // inside a board the UI opens right away and the scan finishes in the
+    // background (newly found boards show up on the next project-list refresh).
     registry::prune();
+    let mut roots = configured_scan_roots();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
     if board.is_none() {
         out.line("scanning for boards…");
-        let mut roots = configured_scan_roots();
-        if let Ok(cwd) = std::env::current_dir() {
-            roots.push(cwd);
-        }
         let found = registry::scan(&roots, 7);
         if !found.is_empty() {
             out.line(format!("  found {} board(s)", found.len()));
         }
+    } else {
+        std::thread::spawn(move || registry::scan(&roots, 7));
     }
 
     // Idle-shutdown: --idle overrides (0 = never); otherwise honor autoserve.
@@ -2331,6 +2394,8 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
         host,
         qr: !args.no_qr && std::io::stdout().is_terminal(),
         open: args.open,
+        stop: None,
+        on_ready: None,
         idle_timeout: idle,
     };
     match &board {
@@ -2353,7 +2418,7 @@ pub fn serve(out: &Out, args: ServeArgs) -> Result<()> {
 /// Probe `127.0.0.1:port` for an already-running wipe daemon. Returns its URL if
 /// `/api/health` responds and identifies as `wipe-daemon`; `None` otherwise
 /// (nothing listening, or some other service holds the port).
-fn detect_running(port: u16) -> Option<String> {
+pub(crate) fn detect_running(port: u16) -> Option<String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;

@@ -31,7 +31,7 @@ pub use api::AppState;
 pub use registry::{list as list_projects, ProjectEntry};
 
 /// Configuration for a `wipe serve` invocation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServeConfig {
     /// Project root to open by default (the directory containing `.wipe`). `None`
     /// when serving purely as a global viewer from outside any board - the UI then
@@ -50,7 +50,14 @@ pub struct ServeConfig {
     /// If set, the daemon shuts itself down after this long with no connected UI
     /// clients - so auto-served daemons leave no overhead once the tab is closed.
     pub idle_timeout: Option<std::time::Duration>,
+    /// Stop serving when this flips to `true` (used by the tray app's Quit).
+    pub stop: Option<tokio::sync::watch::Receiver<bool>>,
+    /// Called once the sockets are bound, with the URLs being served (the tray
+    /// uses it for its menu). The first entry is this machine's URL.
+    pub on_ready: Option<std::sync::Arc<dyn Fn(Vec<ShownUrl>) + Send + Sync>>,
 }
+
+pub use net::ShownUrl;
 
 /// Build the application router for a given state.
 fn router(state: AppState) -> Router {
@@ -62,6 +69,7 @@ fn router(state: AppState) -> Router {
         .route("/api/board", get(api::board))
         .route("/api/history", get(api::history))
         .route("/api/board/at", get(api::board_at))
+        .route("/api/board/translate-ids", post(api::translate_ids))
         .route("/api/definitions", get(api::definitions))
         .route("/api/graph", get(api::graph))
         .route("/api/labels", post(api::create_label))
@@ -133,6 +141,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/forum/{id}/reply", post(api::forum_reply))
         .route("/ws", get(api::ws_handler))
+        .route("/connect", get(api::connect_page))
         .fallback(assets::static_handler)
         // Exposed daemons only answer cross-origin calls from this machine's own
         // front-ends (the desktop app, a local dev server) and gate the API/WS on a
@@ -144,6 +153,7 @@ fn router(state: AppState) -> Router {
                 }))
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any)
+                .expose_headers([axum::http::header::ETAG])
         } else {
             CorsLayer::permissive()
         })
@@ -185,7 +195,7 @@ fn from_loopback(req: &Request) -> bool {
             ext.get::<axum::extract::connect_info::MockConnectInfo<SocketAddr>>()
                 .map(|m| m.0)
         })
-        .is_some_and(|a| a.ip().is_loopback())
+        .is_some_and(|a| a.ip().to_canonical().is_loopback())
 }
 
 /// Auth gate: when a token is configured (exposed mode), every `/api` request
@@ -333,6 +343,7 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
     } else {
         None
     };
+    let connect_urls: std::sync::Arc<std::sync::OnceLock<Vec<ShownUrl>>> = Default::default();
     let state = AppState {
         current: cfg.root.clone(),
         tx: tx.clone(),
@@ -340,6 +351,8 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         token: token.clone(),
         exposed,
         trust_loopback: !proxy,
+        board_cache: Default::default(),
+        connect_urls: connect_urls.clone(),
     };
 
     // Watch the launch project's `.wipe` for live updates; keep the watcher alive
@@ -364,10 +377,23 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
         bound.push(l.local_addr()?);
         listeners.push(l);
     }
+    // `localhost` resolves to ::1 first on Windows and most Linux setups; with only
+    // an IPv4 socket every request from the UI waited ~200 ms for that attempt to
+    // fail before falling back. Listen on the IPv6 twin too (best-effort: skipped
+    // where IPv6 is off, or where the IPv4 socket is already dual-stack).
+    for addr in net::ipv6_twins(&bound) {
+        if let Ok(l) = tokio::net::TcpListener::bind(addr).await {
+            listeners.push(l);
+        }
+    }
 
     // Remote URLs carry the token so the first open authenticates; the UI keeps it
     // and sends it on every later API/WS call.
     let urls = net::urls(&bound, token.as_deref(), proxy);
+    let _ = connect_urls.set(urls.clone());
+    if let Some(cb) = &cfg.on_ready {
+        cb(urls.clone());
+    }
     match cfg.idle_timeout {
         Some(d) => println!(
             "wipe UI serving  (Ctrl-C to stop; auto-stops after {}s idle)",
@@ -402,6 +428,10 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
             "  anyone holding a token URL can read and edit this board - share it only with \
              trusted devices. this machine only: `wipe serve --local`."
         );
+        println!(
+            "  QR codes + links for your phone: http://localhost:{}/connect (open it on this machine)",
+            bound[0].port()
+        );
     }
     if cfg.open {
         open_browser(&urls[0].url);
@@ -424,7 +454,7 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
                 .await
         }));
     }
-    shutdown_signal(clients, idle).await;
+    shutdown_signal(clients, idle, cfg.stop.clone()).await;
     let _ = stop_tx.send(true);
     for s in servers {
         s.await??;
@@ -437,9 +467,16 @@ pub async fn serve(cfg: ServeConfig) -> anyhow::Result<()> {
 async fn shutdown_signal(
     clients: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     idle: Option<Duration>,
+    stop: Option<tokio::sync::watch::Receiver<bool>>,
 ) {
     tokio::select! {
         _ = async { let _ = tokio::signal::ctrl_c().await; } => {}
+        _ = async {
+            match stop {
+                Some(mut rx) => { let _ = rx.wait_for(|s| *s).await; }
+                None => std::future::pending::<()>().await,
+            }
+        } => {}
         _ = idle_watcher(clients, idle) => {
             println!("wipe: idle with no viewers; shutting down.");
         }
@@ -500,6 +537,8 @@ mod tests {
             token: None,
             exposed: false,
             trust_loopback: true,
+            board_cache: Default::default(),
+            connect_urls: Default::default(),
         }
     }
 
@@ -513,6 +552,8 @@ mod tests {
             token: Some(token.to_string()),
             exposed: true,
             trust_loopback: true,
+            board_cache: Default::default(),
+            connect_urls: Default::default(),
         }
     }
 
@@ -573,6 +614,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(q.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn board_polls_get_304_until_the_board_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path(), "Etag", chrono::Utc::now()).unwrap();
+        let app = router(test_state(store.root().to_path_buf()));
+        let get = |etag: Option<String>| {
+            let app = app.clone();
+            async move {
+                let mut r = Request::builder().uri("/api/board");
+                if let Some(e) = etag {
+                    r = r.header("if-none-match", e);
+                }
+                app.oneshot(r.body(Body::empty()).unwrap()).await.unwrap()
+            }
+        };
+        let first = get(None).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first.headers()["etag"].to_str().unwrap().to_string();
+        assert_eq!(
+            get(Some(etag.clone())).await.status(),
+            StatusCode::NOT_MODIFIED
+        );
+
+        wipe_core::ops::create_ticket(
+            &store,
+            wipe_core::ops::NewTicket {
+                title: "new".into(),
+                ..Default::default()
+            },
+            "t",
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let after = get(Some(etag.clone())).await;
+        assert_eq!(
+            after.status(),
+            StatusCode::OK,
+            "a change must invalidate the etag"
+        );
+        assert_ne!(after.headers()["etag"].to_str().unwrap(), etag);
+        let bytes = axum::body::to_bytes(after.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["lists"][0]["tickets"][0]["id"], "T-001");
+        assert_eq!(v["ids"], "hex");
     }
 
     #[test]

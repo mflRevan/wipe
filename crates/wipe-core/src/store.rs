@@ -264,16 +264,64 @@ impl Store {
 
     // --- tickets -----------------------------------------------------------
 
-    /// Load a single ticket by ID.
+    /// Load a single ticket by ID. Accepts any form [`Store::resolve_ticket_id`]
+    /// understands (`T-005`, `t5`, a pre-translation `T-23`, ...).
     pub fn load_ticket(&self, id: &str) -> Result<Ticket> {
-        if !valid_ticket_id(id) {
-            return Err(Error::TicketNotFound(id.to_string()));
+        let path = if valid_ticket_id(id) {
+            self.ticket_path(id)
+        } else {
+            std::path::PathBuf::new()
+        };
+        if path.is_file() {
+            return read_json(&path);
         }
-        let path = self.ticket_path(id);
-        if !path.exists() {
-            return Err(Error::TicketNotFound(id.to_string()));
+        let canonical = self.resolve_ticket_id(id)?;
+        read_json(&self.ticket_path(&canonical))
+    }
+
+    /// Turn a ticket reference as typed (`T-2AF`, `t2af`, `T 5`, `T-005`, or a
+    /// pre-translation decimal id such as `T-23`) into the ticket's canonical ID.
+    ///
+    /// On a hex board, a short all-decimal reference (fewer than three digits,
+    /// e.g. `T-82`) is first matched against tickets' `legacy_id` - that is how
+    /// such an id was written before translation - and otherwise read as hex
+    /// (`T5` -> `T-005`). Errors with [`Error::TicketNotFound`] when nothing
+    /// matches.
+    pub fn resolve_ticket_id(&self, raw: &str) -> Result<String> {
+        let missing = || Error::TicketNotFound(raw.trim().to_string());
+        let digits = crate::id::ticket_ref_digits(raw).ok_or_else(missing)?;
+        let board = self.load_board()?;
+        let exists = |id: &str| valid_ticket_id(id) && self.ticket_path(id).is_file();
+        match board.ids {
+            crate::model::IdFormat::Decimal => {
+                let n: u64 = digits.parse().map_err(|_| missing())?;
+                let id = crate::id::ticket_id(n);
+                exists(&id).then_some(id).ok_or_else(missing)
+            }
+            crate::model::IdFormat::Hex => {
+                let legacy_first = digits.len() < 3 && digits.bytes().all(|b| b.is_ascii_digit());
+                let by_legacy = || -> Option<String> {
+                    let n: u64 = digits.parse().ok()?;
+                    let legacy = crate::id::ticket_id(n);
+                    self.load_all_tickets()
+                        .ok()?
+                        .into_iter()
+                        .find(|t| t.legacy_id.as_deref() == Some(legacy.as_str()))
+                        .map(|t| t.id)
+                };
+                let by_hex = || -> Option<String> {
+                    let n = u64::from_str_radix(&digits, 16).ok()?;
+                    let id = crate::id::hex_ticket_id(n);
+                    exists(&id).then_some(id)
+                };
+                let found = if legacy_first {
+                    by_legacy().or_else(by_hex)
+                } else {
+                    by_hex().or_else(by_legacy)
+                };
+                found.ok_or_else(missing)
+            }
         }
-        read_json(&path)
     }
 
     /// Write a ticket file.
@@ -313,7 +361,11 @@ impl Store {
                 }
             }
         }
-        ids.sort_by_key(|id| ticket_counter(id).unwrap_or(u64::MAX));
+        let hex = self
+            .load_board()
+            .map(|b| b.ids == crate::model::IdFormat::Hex)
+            .unwrap_or(false);
+        ids.sort_by_key(|id| ticket_counter(id, hex).unwrap_or(u64::MAX));
         Ok(ids)
     }
 
@@ -409,12 +461,14 @@ pub struct BoardLock {
     _file: fs::File,
 }
 
-/// A ticket ID must be `T-` followed by digits only. Rejecting anything else
-/// (path separators, `..`, dots) guarantees a caller-supplied ID can never be
-/// turned into a path that escapes the tickets directory - e.g. a crafted
-/// `../board` must never let `delete_ticket` remove `.wipe/board.json`.
+/// A ticket ID must be `T-` followed by decimal or upper-case hex digits only.
+/// Rejecting anything else (path separators, `..`, dots) guarantees a
+/// caller-supplied ID can never be turned into a path that escapes the tickets
+/// directory - e.g. a crafted `../board` must never let `delete_ticket` remove
+/// `.wipe/board.json`.
 fn valid_ticket_id(id: &str) -> bool {
-    matches!(id.strip_prefix("T-"), Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    matches!(id.strip_prefix("T-"), Some(n) if !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)))
 }
 
 /// A thread ID must be `F-` followed by digits only. Rejecting anything else
@@ -431,9 +485,14 @@ fn thread_counter(id: &str) -> Option<u64> {
         .and_then(|n| n.parse().ok())
 }
 
-/// Parse the numeric counter out of a `T-<n>` ticket ID.
-fn ticket_counter(id: &str) -> Option<u64> {
-    id.strip_prefix("T-").and_then(|n| n.parse().ok())
+/// Parse the numeric counter out of a `T-<n>` ticket ID (hex on hex boards).
+fn ticket_counter(id: &str, hex: bool) -> Option<u64> {
+    let n = id.strip_prefix("T-")?;
+    if hex {
+        u64::from_str_radix(n, 16).ok()
+    } else {
+        n.parse().ok()
+    }
 }
 
 // --- low-level IO ----------------------------------------------------------

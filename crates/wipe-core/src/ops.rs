@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::{Error, Result};
 use crate::git;
-use crate::id::{slug, ticket_id};
+use crate::id::slug;
 use crate::model::{
     next_label_color, Attachment, AttachmentSource, Board, ChecklistItem, Identity, IdentityKind,
     LabelDef, List, OriginalNote, Relation, RelationKind, Ticket,
@@ -57,7 +57,7 @@ pub fn create_ticket(
             .ok_or_else(|| Error::msg("board has no lists"))?,
     };
 
-    let id = ticket_id(board.next_ticket);
+    let id = board.ticket_id(board.next_ticket);
     board.next_ticket += 1;
 
     let mut ticket = Ticket::new(id.clone(), spec.title, now);
@@ -90,14 +90,16 @@ pub fn duplicate_ticket(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<Ticket> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
     let src = store.load_ticket(ticket_id)?;
     let mut board = store.load_board()?;
 
-    let new_id = crate::id::ticket_id(board.next_ticket);
+    let new_id = board.ticket_id(board.next_ticket);
     board.next_ticket += 1;
 
     let mut copy = src.clone();
     copy.id = new_id.clone();
+    copy.legacy_id = None;
     copy.title = format!("{} (copy)", src.title);
     copy.comments.clear();
     copy.activity.clear();
@@ -140,6 +142,7 @@ pub fn move_ticket(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
     // Ensure the ticket exists.
     let _ = store.load_ticket(ticket_id)?;
     let mut board = store.load_board()?;
@@ -180,6 +183,7 @@ pub fn move_ticket(
 
 /// Delete a ticket file and remove its card from the board.
 pub fn delete_ticket(store: &Store, ticket_id: &str, _now: DateTime<Utc>) -> Result<()> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
     store.delete_ticket(ticket_id)?; // errors if missing
     let mut board = store.load_board()?;
     for list in &mut board.lists {
@@ -238,10 +242,10 @@ pub fn commit_board(
 ) -> Result<Option<String>> {
     let ticket_path;
     let (pathspecs, default_msg): (Vec<&str>, String) = match scope {
-        Some(id) if id.starts_with("T-") => {
-            // Verify the ticket exists so a typo fails loudly instead of silently
-            // committing nothing.
-            store.load_ticket(id)?;
+        Some(raw) if crate::id::ticket_ref_digits(raw).is_some() => {
+            // Resolve (and so verify) the ticket, so a typo fails loudly instead
+            // of silently committing nothing.
+            let id = store.resolve_ticket_id(raw)?;
             ticket_path = format!(".wipe/tickets/{id}.json");
             (
                 vec![ticket_path.as_str()],
@@ -702,6 +706,8 @@ pub fn add_blocker(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<bool> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
+    let blocker = &store.resolve_ticket_id(blocker)?;
     if ticket_id == blocker {
         return Err(Error::msg(format!("{ticket_id} cannot block itself")));
     }
@@ -714,7 +720,7 @@ pub fn add_blocker(
     let mut stack = vec![blocker.to_string()];
     let mut seen = std::collections::HashSet::new();
     while let Some(cur) = stack.pop() {
-        if cur == ticket_id {
+        if &cur == ticket_id {
             return Err(Error::msg(format!(
                 "{blocker} already waits on {ticket_id} (directly or through other tickets) - \
                  blocking {ticket_id} by it would create a dependency cycle"
@@ -744,6 +750,10 @@ pub fn remove_blocker(
     actor: &str,
     now: DateTime<Utc>,
 ) -> Result<bool> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
+    // A blocker that no longer exists can still be unlinked by its stored id.
+    let resolved = store.resolve_ticket_id(blocker).ok();
+    let blocker = resolved.as_deref().unwrap_or(blocker);
     let mut t = store.load_ticket(ticket_id)?;
     let before = t.relations.len();
     t.relations
@@ -1093,10 +1103,10 @@ mod tests {
             now(),
         )
         .unwrap();
-        assert_eq!(t1.id, "T-1");
-        assert_eq!(t2.id, "T-2");
+        assert_eq!(t1.id, "T-001");
+        assert_eq!(t2.id, "T-002");
         let board = s.load_board().unwrap();
-        assert_eq!(board.lists[0].cards, vec!["T-1", "T-2"]);
+        assert_eq!(board.lists[0].cards, vec!["T-001", "T-002"]);
         assert_eq!(board.next_ticket, 3);
     }
 
@@ -1198,7 +1208,7 @@ mod tests {
         move_ticket(&s, "T-1", "done", None, "tester", now()).unwrap();
         let board = s.load_board().unwrap();
         assert!(board.list("backlog").unwrap().cards.is_empty());
-        assert_eq!(board.list("done").unwrap().cards, vec!["T-1"]);
+        assert_eq!(board.list("done").unwrap().cards, vec!["T-001"]);
     }
 
     #[test]
@@ -1461,7 +1471,7 @@ mod tests {
         // Open blockers ignore ones that reached the done list.
         let board = s.load_board().unwrap();
         let t3 = s.load_ticket("T-3").unwrap();
-        assert_eq!(open_blockers(&t3, &board, "done"), vec!["T-2"]);
+        assert_eq!(open_blockers(&t3, &board, "done"), vec!["T-002"]);
         move_ticket(&s, "T-2", "done", None, "tester", now()).unwrap();
         let board = s.load_board().unwrap();
         assert!(open_blockers(&t3, &board, "done").is_empty());

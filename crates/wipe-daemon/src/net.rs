@@ -102,6 +102,24 @@ pub fn bind_plan(
     })
 }
 
+/// IPv6 counterparts of bound IPv4 loopback / wildcard sockets (`127.0.0.1` ->
+/// `[::1]`, `0.0.0.0` -> `[::]`), on the same port.
+pub fn ipv6_twins(bound: &[SocketAddr]) -> Vec<SocketAddr> {
+    bound
+        .iter()
+        .filter_map(|a| match a.ip() {
+            IpAddr::V4(v4) if v4.is_loopback() => {
+                Some(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, a.port())))
+            }
+            IpAddr::V4(v4) if v4.is_unspecified() => Some(SocketAddr::from((
+                std::net::Ipv6Addr::UNSPECIFIED,
+                a.port(),
+            ))),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether any bound address is reachable from other machines.
 pub fn is_remote(addrs: &[SocketAddr]) -> bool {
     addrs.iter().any(|a| !a.ip().is_loopback())

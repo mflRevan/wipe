@@ -34,7 +34,7 @@ fn multiline_bodies_survive_via_file_and_stdin() {
         "--body-file",
         "b.md",
     ]);
-    assert_eq!(p.json(&["ticket", "show", "T-1"])["body"], body);
+    assert_eq!(p.json(&["ticket", "show", "T-001"])["body"], body);
 
     // --body - reads stdin.
     let out = p.with_stdin(
@@ -55,18 +55,18 @@ fn multiline_bodies_survive_via_file_and_stdin() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert_eq!(p.json(&["ticket", "show", "T-2"])["body"], body);
+    assert_eq!(p.json(&["ticket", "show", "T-002"])["body"], body);
 
     // Comments: positional, file, and stdin forms all work and agree.
-    p.json(&["comment", "add", "T-1", "positional comment"]);
+    p.json(&["comment", "add", "T-001", "positional comment"]);
     std::fs::write(p.path().join("c.md"), "multi\nline\ncomment").unwrap();
-    p.json(&["comment", "add", "T-1", "--body-file", "c.md"]);
+    p.json(&["comment", "add", "T-001", "--body-file", "c.md"]);
     let out = p.with_stdin(
-        &["comment", "add", "T-1", "-b", "-", "--json"],
+        &["comment", "add", "T-001", "-b", "-", "--json"],
         "from\nstdin",
     );
     assert!(out.status.success());
-    let comments = p.json(&["comment", "list", "T-1"])["comments"].clone();
+    let comments = p.json(&["comment", "list", "T-001"])["comments"].clone();
     let bodies: Vec<&str> = comments
         .as_array()
         .unwrap()
@@ -87,7 +87,7 @@ fn multiline_bodies_survive_via_file_and_stdin() {
     assert_eq!(t["post"]["replies"][0]["body"], body);
 
     // A missing body source fails with guidance, not an empty comment.
-    let e = p.json_err(&["comment", "add", "T-1"]);
+    let e = p.json_err(&["comment", "add", "T-001"]);
     assert!(e["error"].as_str().unwrap().contains("--body-file"), "{e}");
     let e = p.json_err(&[
         "ticket",
@@ -113,9 +113,9 @@ fn positional_title_and_multi_label_forms() {
         .unwrap();
     assert!(!out.status.success());
 
-    let r = p.json(&["label", "assign", "T-1", "app", "bug", "ios"]);
+    let r = p.json(&["label", "assign", "T-001", "app", "bug", "ios"]);
     assert_eq!(r["labels"], serde_json::json!(["app", "bug", "ios"]));
-    let r = p.json(&["label", "remove", "T-1", "bug", "ios"]);
+    let r = p.json(&["label", "remove", "T-001", "bug", "ios"]);
     assert_eq!(r["labels"], serde_json::json!(["app"]));
 }
 
@@ -137,11 +137,11 @@ fn writes_return_short_receipts_unless_echo() {
         p.json(&[
             "comment",
             "add",
-            "T-1",
+            "T-001",
             &format!("comment {i} with some length to it"),
         ]);
     }
-    let receipt = p.run(&["comment", "add", "T-1", "one more", "--json"]);
+    let receipt = p.run(&["comment", "add", "T-001", "one more", "--json"]);
     let v: Value = serde_json::from_str(&receipt).unwrap();
     assert_eq!(v["ok"], true);
     assert_eq!(v["comment"], "c-6");
@@ -150,19 +150,19 @@ fn writes_return_short_receipts_unless_echo() {
     assert_eq!(receipt.trim().lines().count(), 1);
 
     // --echo returns the whole ticket.
-    let full = p.json(&["--echo", "comment", "add", "T-1", "echoed"]);
+    let full = p.json(&["--echo", "comment", "add", "T-001", "echoed"]);
     assert_eq!(full["comments"].as_array().unwrap().len(), 7);
     assert!(full["activity"].is_array());
 
     // Edits, moves, labels also answer with receipts.
-    let v = p.json(&["ticket", "move", "T-1", "--to", "done"]);
+    let v = p.json(&["ticket", "move", "T-001", "--to", "done"]);
     assert_eq!(
         v,
-        serde_json::json!({ "ok": true, "id": "T-1", "list": "done" })
+        serde_json::json!({ "ok": true, "id": "T-001", "list": "done" })
     );
 
     // --pretty opts back into indented JSON.
-    let pretty = p.run(&["ticket", "show", "T-1", "--json", "--pretty"]);
+    let pretty = p.run(&["ticket", "show", "T-001", "--json", "--pretty"]);
     assert!(pretty.lines().count() > 10);
 }
 
@@ -177,7 +177,7 @@ fn status_is_compact_and_collapses_done() {
         p.json(&["ticket", "create", &format!("Done {i}"), "--list", "done"]);
     }
     for _ in 0..3 {
-        p.json(&["comment", "add", "T-1", &long]);
+        p.json(&["comment", "add", "T-001", &long]);
     }
 
     let raw = p.run(&["status", "--json"]);
@@ -191,7 +191,7 @@ fn status_is_compact_and_collapses_done() {
     let todo = lists.iter().find(|l| l["id"] == "todo").unwrap();
     assert_eq!(todo["count"], 1);
     let row = &todo["tickets"][0];
-    assert_eq!(row["id"], "T-1");
+    assert_eq!(row["id"], "T-001");
     assert_eq!(row["comments"], 3);
     assert_eq!(row["labels"], serde_json::json!(["app"]));
     assert!(row.get("body").is_none() && row.get("list").is_none());
@@ -247,19 +247,19 @@ fn ticket_list_filters_and_fields() {
 
     assert_eq!(
         lines_of(&p.json(&["ticket", "list", "--exclude-list", "done"])),
-        ["T-4", "T-1", "T-2"]
+        ["T-004", "T-001", "T-002"]
     );
     assert_eq!(
         lines_of(&p.json(&["ticket", "list", "--label", "app", "--label", "bug"])),
-        ["T-2"]
+        ["T-002"]
     );
     assert_eq!(
         lines_of(&p.json(&["ticket", "list", "--assignee", "me"])),
-        ["T-4"]
+        ["T-004"]
     );
     assert_eq!(
         lines_of(&p.json(&["ticket", "list", "--list", "todo", "--list", "done"])),
-        ["T-1", "T-2", "T-3"]
+        ["T-001", "T-002", "T-003"]
     );
     assert_eq!(
         p.json(&["ticket", "list", "--limit", "2"])
@@ -282,7 +282,7 @@ fn ticket_list_filters_and_fields() {
         .is_empty());
 
     let rows = p.json(&["ticket", "list", "--fields", "id,title"]);
-    assert_eq!(rows[0], serde_json::json!({ "id": "T-4", "title": "d" }));
+    assert_eq!(rows[0], serde_json::json!({ "id": "T-004", "title": "d" }));
     let e = p.json_err(&["ticket", "list", "--fields", "id,nope"]);
     assert!(e["error"].as_str().unwrap().contains("available"), "{e}");
     let e = p.json_err(&["ticket", "list", "--list", "nosuch"]);
@@ -320,7 +320,7 @@ fn one_call_edit_and_original_note() {
         &[
             "ticket",
             "edit",
-            "T-1",
+            "T-001",
             "-t",
             "Shopping",
             "--body-file",
@@ -332,7 +332,7 @@ fn one_call_edit_and_original_note() {
             "--assignee",
             "claude",
             "--blocked-by",
-            "T-2",
+            "T-002",
             "--to",
             "todo",
             "-m",
@@ -358,13 +358,13 @@ fn one_call_edit_and_original_note() {
     }
     assert_eq!(r["list"], "todo");
 
-    let t = p.json(&["ticket", "show", "T-1"]);
+    let t = p.json(&["ticket", "show", "T-001"]);
     assert_eq!(t["title"], "Shopping");
     assert_eq!(t["original"]["title"], "raw note");
     assert_eq!(t["original"]["body"], "buy milk\nand eggs");
     assert_eq!(t["original"]["author"], "bilal");
     assert_eq!(t["original"]["rewritten_by"], "claude");
-    assert_eq!(t["relations"][0]["target"], "T-2");
+    assert_eq!(t["relations"][0]["target"], "T-002");
 
     // --remove-label / --unassign / --unblock undo those, still in one call.
     p.json_as(
@@ -372,33 +372,38 @@ fn one_call_edit_and_original_note() {
         &[
             "ticket",
             "edit",
-            "T-1",
+            "T-001",
             "--remove-label",
             "errand",
             "--unassign",
             "claude",
             "--unblock",
-            "T-2",
+            "T-002",
         ],
     );
-    let t = p.json(&["ticket", "show", "T-1"]);
+    let t = p.json(&["ticket", "show", "T-001"]);
     assert_eq!(t["labels"], serde_json::json!(["home"]));
     assert!(t.get("assignees").is_none() && t.get("relations").is_none());
 
     // Nothing to change is an error that names the options.
-    let e = p.json_err(&["ticket", "edit", "T-1"]);
+    let e = p.json_err(&["ticket", "edit", "T-001"]);
     assert!(e["error"].as_str().unwrap().contains("--to <list>"), "{e}");
     // A bad list is rejected before anything is written.
-    let before = p.json(&["ticket", "show", "T-1"]);
-    let e = p.json_err(&["ticket", "edit", "T-1", "-t", "Renamed", "--to", "nowhere"]);
+    let before = p.json(&["ticket", "show", "T-001"]);
+    let e = p.json_err(&[
+        "ticket", "edit", "T-001", "-t", "Renamed", "--to", "nowhere",
+    ]);
     assert!(e["error"].as_str().unwrap().contains("nowhere"));
-    assert_eq!(p.json(&["ticket", "show", "T-1"])["title"], before["title"]);
+    assert_eq!(
+        p.json(&["ticket", "show", "T-001"])["title"],
+        before["title"]
+    );
 
     // show --comments-only / --no-activity trim the payload.
-    let c = p.json(&["ticket", "show", "T-1", "--comments-only"]);
+    let c = p.json(&["ticket", "show", "T-001", "--comments-only"]);
     assert!(c.get("body").is_none() && c["comments"].is_array());
     assert!(p
-        .json(&["ticket", "show", "T-1", "--no-activity"])
+        .json(&["ticket", "show", "T-001", "--no-activity"])
         .get("activity")
         .is_none());
 }
@@ -409,24 +414,24 @@ fn ticket_show_lists_commits_that_mention_it() {
     p.git_init();
     p.json(&["ticket", "create", "Login", "--list", "todo"]);
     for (f, msg) in [
-        ("a", "fix login redirect (T-1)"),
-        ("b", "unrelated T-11 work"),
-        ("c", "polish\n\nrefs T-1"),
+        ("a", "fix login redirect (T-001)"),
+        ("b", "unrelated T-0011 work"),
+        ("c", "polish\n\nrefs T-001"),
     ] {
         std::fs::write(p.path().join(f), f).unwrap();
         p.git(&["add", f]);
         p.git(&["commit", "-q", "-m", msg]);
     }
-    let t = p.json(&["ticket", "show", "T-1"]);
+    let t = p.json(&["ticket", "show", "T-001"]);
     let subjects: Vec<&str> = t["commits"]
         .as_array()
         .unwrap()
         .iter()
         .map(|c| c["subject"].as_str().unwrap())
         .collect();
-    assert_eq!(subjects, vec!["polish", "fix login redirect (T-1)"]);
+    assert_eq!(subjects, vec!["polish", "fix login redirect (T-001)"]);
     assert!(p
-        .json(&["ticket", "show", "T-1", "--no-commits"])
+        .json(&["ticket", "show", "T-001", "--no-commits"])
         .get("commits")
         .is_none());
 }
@@ -439,7 +444,7 @@ fn review_loop_submit_reject_approve() {
     p.json_as("bilal", &["ticket", "create", "Feature", "--list", "todo"]);
 
     // No review list yet: a helpful refusal.
-    let e = p.json_err(&["ticket", "submit", "T-1", "-m", "done"]);
+    let e = p.json_err(&["ticket", "submit", "T-001", "-m", "done"]);
     assert!(
         e["error"]
             .as_str()
@@ -454,7 +459,7 @@ fn review_loop_submit_reject_approve() {
         &[
             "ticket",
             "submit",
-            "T-1",
+            "T-001",
             "-m",
             "implemented",
             "--tested",
@@ -467,7 +472,7 @@ fn review_loop_submit_reject_approve() {
         (r["list"].as_str(), r["comment"].as_str()),
         (Some("review"), Some("c-1"))
     );
-    let c = &p.json(&["comment", "list", "T-1"])["comments"][0]["body"];
+    let c = &p.json(&["comment", "list", "T-001"])["comments"][0]["body"];
     let c = c.as_str().unwrap();
     assert!(
         c.contains("implemented") && c.contains("**Tested**") && c.contains("- iOS"),
@@ -483,11 +488,11 @@ fn review_loop_submit_reject_approve() {
         .any(|e| e["kind"] == "comment"));
 
     // Reject needs a reason; it goes back to the rework list with it.
-    let e = p.json_err(&["ticket", "reject", "T-1"]);
+    let e = p.json_err(&["ticket", "reject", "T-001"]);
     assert!(e["error"].as_str().unwrap().contains("reason"), "{e}");
     let r = p.json_as(
         "bilal",
-        &["ticket", "reject", "T-1", "-m", "crashes on launch"],
+        &["ticket", "reject", "T-001", "-m", "crashes on launch"],
     );
     assert_eq!(r["list"], "todo");
     // ...and the submitter hears about it.
@@ -499,15 +504,15 @@ fn review_loop_submit_reject_approve() {
         .any(|e| e["detail"].as_str().unwrap_or("").contains("crashes")));
 
     // Approval respects acceptance criteria.
-    p.json(&["criteria", "add", "T-1", "--text", "no crash"]);
-    p.json_as("claude", &["ticket", "submit", "T-1", "-m", "fixed"]);
-    let e = p.json_err(&["ticket", "approve", "T-1"]);
+    p.json(&["criteria", "add", "T-001", "--text", "no crash"]);
+    p.json_as("claude", &["ticket", "submit", "T-001", "-m", "fixed"]);
+    let e = p.json_err(&["ticket", "approve", "T-001"]);
     assert!(
         e["error"].as_str().unwrap().contains("ac-1: no crash"),
         "{e}"
     );
-    p.json(&["criteria", "check", "T-1", "ac-1"]);
-    let r = p.json_as("bilal", &["ticket", "approve", "T-1", "-m", "ship it"]);
+    p.json(&["criteria", "check", "T-001", "ac-1"]);
+    let r = p.json_as("bilal", &["ticket", "approve", "T-001", "-m", "ship it"]);
     assert_eq!(r["list"], "done");
 
     // Configured workflow lists win over detection.
@@ -531,25 +536,25 @@ fn blockers_and_ready_listing() {
         "--list",
         "todo",
         "--blocked-by",
-        "T-1",
+        "T-001",
     ]);
     p.json(&["ticket", "create", "Release notes", "--list", "todo"]);
-    p.json(&["ticket", "block", "T-3", "--by", "T-2"]);
+    p.json(&["ticket", "block", "T-003", "--by", "T-002"]);
 
-    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-1"]);
+    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-001"]);
     assert_eq!(
         lines_of(&p.json(&["ticket", "list", "--blocked"])),
-        ["T-2", "T-3"]
+        ["T-002", "T-003"]
     );
-    let e = p.json_err(&["ticket", "block", "T-1", "--by", "T-3"]);
+    let e = p.json_err(&["ticket", "block", "T-001", "--by", "T-003"]);
     assert!(e["error"].as_str().unwrap().contains("cycle"), "{e}");
 
     // Finishing a blocker frees what waits on it.
-    p.json(&["ticket", "close", "T-1"]);
-    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-2"]);
+    p.json(&["ticket", "close", "T-001"]);
+    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-002"]);
     let row = p.json(&["ticket", "list", "--list", "todo"]);
-    assert_eq!(row[1]["blocked_by"], serde_json::json!(["T-2"]));
-    let r = p.json(&["ticket", "unblock", "T-3", "--by", "T-2"]);
+    assert_eq!(row[1]["blocked_by"], serde_json::json!(["T-002"]));
+    let r = p.json(&["ticket", "unblock", "T-003", "--by", "T-002"]);
     assert_eq!(r["blocked_by"], serde_json::json!([]));
 }
 
@@ -600,7 +605,7 @@ fn forum_pin_and_bounded_digest() {
 fn inbox_all_shows_everything_others_changed() {
     let p = Project::with_board("Inbox");
     p.json_as("bilal", &["ticket", "create", "Theirs", "--list", "todo"]);
-    p.json_as("bilal", &["comment", "add", "T-1", "hello"]);
+    p.json_as("bilal", &["comment", "add", "T-001", "hello"]);
     // Not assigned/authored/subscribed: the default inbox is empty...
     assert_eq!(p.json_as("claude", &["inbox"])["count"], 0);
     // ...the board-wide view is not, and says why each event is there.
@@ -745,4 +750,66 @@ fn serve_exposure_config_values() {
     }
     let e = p.json_err(&["config", "set", "daemon.expose", "none"]);
     assert!(e["error"].as_str().unwrap().contains("local"), "{e}");
+}
+
+// --- ticket id format ----------------------------------------------------------
+
+#[test]
+fn hex_ids_any_spelling_and_legacy_translation() {
+    // New boards: fixed-width hex ids, accepted in any common spelling.
+    let p = Project::with_board("Hex");
+    for i in 0..11 {
+        p.json(&["ticket", "create", &format!("t{i}"), "--list", "todo"]);
+    }
+    for typed in ["T-00B", "t00b", "T-B", "tb", "T b"] {
+        assert_eq!(p.json(&["ticket", "show", typed])["id"], "T-00B", "{typed}");
+    }
+    // Receipts print the canonical id whatever was typed.
+    assert_eq!(
+        p.json(&["ticket", "move", "t3", "--to", "done"])["id"],
+        "T-003"
+    );
+
+    // A board from before 0.4.1 (no `ids` field) keeps decimal ids...
+    let old = Project::with_board("Legacy");
+    let bj = old.path().join(".wipe/board.json");
+    let mut b: Value = serde_json::from_str(&std::fs::read_to_string(&bj).unwrap()).unwrap();
+    b.as_object_mut().unwrap().remove("ids");
+    std::fs::write(&bj, serde_json::to_string_pretty(&b).unwrap()).unwrap();
+    for i in 0..12 {
+        old.json(&["ticket", "create", &format!("old {i}"), "--list", "todo"]);
+    }
+    assert_eq!(old.json(&["ticket", "show", "T-12"])["id"], "T-12");
+
+    // ...and is offered the translation once (a stderr notice for agents, never a
+    // blocking prompt), then never again.
+    std::fs::remove_file(old.path().join(".wipe/.cache/ids-translation-offered")).ok();
+    let first = old.cmd(&["status", "--json"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&first.stderr).contains("translate-ids"));
+    let second = old.cmd(&["status", "--json"]).output().unwrap();
+    assert!(!String::from_utf8_lossy(&second.stderr).contains("translate-ids"));
+
+    // Off a terminal the translation needs --yes.
+    let e = old.json_err(&["board", "translate-ids"]);
+    assert!(e["error"].as_str().unwrap().contains("--yes"), "{e}");
+    old.json(&["comment", "add", "T-3", "blocked by T-12, see T-10"]);
+    let r = old.json(&["board", "translate-ids", "--yes"]);
+    assert_eq!(r["translated"], 12);
+
+    // Old ids still resolve; text references were rewritten.
+    let t = old.json(&["ticket", "show", "T-12"]);
+    assert_eq!(
+        (t["id"].as_str(), t["legacy_id"].as_str()),
+        (Some("T-00C"), Some("T-12"))
+    );
+    let c = old.json(&["comment", "list", "T-3"]);
+    assert_eq!(c["comments"][0]["body"], "blocked by T-00C, see T-00A");
+    assert_eq!(
+        old.json(&["ticket", "create", "next", "--list", "todo"])["id"],
+        "T-00D"
+    );
+    assert_eq!(
+        old.json(&["board", "translate-ids", "--yes"])["translated"],
+        0
+    );
 }

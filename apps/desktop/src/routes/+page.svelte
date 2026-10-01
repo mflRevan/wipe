@@ -7,7 +7,8 @@
     RotateCcw,
     WifiOff,
     LayoutGrid,
-    MessagesSquare
+    MessagesSquare,
+    Hash
   } from 'lucide-svelte';
   import {
     board,
@@ -28,7 +29,12 @@
     setForumView,
     stopLiveUpdates
   } from '$lib/stores/board';
-  import { getApiBase } from '$lib/api';
+  import { api, getApiBase } from '$lib/api';
+  import SearchBar from '$lib/components/SearchBar.svelte';
+  import QuickJump from '$lib/components/QuickJump.svelte';
+  import NotifyMenu from '$lib/components/NotifyMenu.svelte';
+  import Toasts from '$lib/components/Toasts.svelte';
+  import { openRequest } from '$lib/stores/notify';
   import { formatDate } from '$lib/utils';
   import Board from '$lib/components/Board.svelte';
   import Forum from '$lib/components/Forum.svelte';
@@ -93,6 +99,54 @@
     newTicketOpen = true;
   }
 
+  // A clicked notification/toast: open the ticket, or switch to the forum
+  // (which opens the thread itself).
+  $effect(() => {
+    const r = $openRequest;
+    if (!r) return;
+    if (r.ticket) {
+      view = 'board';
+      modalTicketId = r.ticket;
+      openRequest.set(null);
+    } else if (r.thread) {
+      view = 'forum';
+    }
+  });
+
+  // Legacy decimal boards (T-23) can be converted to hex ids (T-017) once.
+  let translating = $state(false);
+  async function translateIds() {
+    if (
+      !confirm(
+        'Convert this board to the new ticket ids?' +
+          ' T-23 becomes T-017 (fixed-width hex): ticket files are renamed and every reference is rewritten.' +
+          ' Old ids keep working as aliases in search, the CLI and commit links.' +
+          ' Commit or merge other branches first, and have collaborators pull right after.'
+      )
+    )
+      return;
+    translating = true;
+    try {
+      await api.translateIds($currentProject ?? undefined);
+      await loadBoard();
+    } catch (e) {
+      boardError.set(e instanceof Error ? e.message : String(e));
+    } finally {
+      translating = false;
+    }
+  }
+
+  // In the forum, Ctrl/Cmd+F jumps to the forum's own search box.
+  function onKey(e: KeyboardEvent) {
+    if (view !== 'forum' || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return;
+    const box = document.querySelector<HTMLInputElement>('.forum input[type="text"], .forum input[type="search"], .forum input');
+    if (box) {
+      e.preventDefault();
+      box.focus();
+      box.select();
+    }
+  }
+
   async function refresh() {
     // If we were offline (the "Retry connection" path), a plain reload would show
     // a board that then never updates: bootstrap() is what starts the 0.5s poll and
@@ -108,6 +162,8 @@
     await loadBoard();
   }
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 <div class="app">
   <header class="topbar">
@@ -128,6 +184,17 @@
     </div>
 
     <div class="right">
+      {#if $board && $board.ids !== 'hex' && !$rewinding}
+        <button
+          class="ib wide"
+          disabled={translating}
+          title="This board uses the old ticket ids (T-23). Convert to the new fixed-width hex ids (T-017)."
+          onclick={translateIds}
+        >
+          <Hash size={14} />
+          <span>{translating ? 'Converting…' : 'New ids'}</span>
+        </button>
+      {/if}
       {#if $health}
         <span class="status ok" title="daemon v{$health.version}">
           <span class="dot"></span>
@@ -137,6 +204,7 @@
         <span class="status off"><span class="dot"></span><span class="stxt">offline</span></span>
       {/if}
 
+      <NotifyMenu />
       <button class="ib" aria-label="History" title="History" onclick={() => (historyOpen = true)}>
         <History size={16} />
       </button>
@@ -186,6 +254,8 @@
         <div class="banner err">{$boardError}</div>
       {/if}
 
+      <SearchBar enabled={view === 'board' && !!$health} />
+
       <div class="boardwrap">
         {#if $board}
           <Board onopen={openTicket} onadd={addToList} />
@@ -197,6 +267,8 @@
   </main>
 </div>
 
+<Toasts />
+<QuickJump enabled={view === 'board' && !!$health && !$rewinding} onopen={openTicket} />
 <TicketModal bind:ticketId={modalTicketId} />
 <NewTicketDialog bind:open={newTicketOpen} listId={newTicketList} listName={newTicketName} />
 <GitGraph bind:open={historyOpen} />
@@ -311,6 +383,15 @@
   .ib:hover {
     background: var(--wp-elevated);
     color: var(--wp-text);
+  }
+  .ib.wide {
+    width: auto;
+    gap: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border-color: color-mix(in srgb, var(--wp-accent) 55%, var(--wp-border));
+    color: var(--wp-accent);
   }
   :global(.spin) {
     animation: spin 0.9s linear infinite;

@@ -44,6 +44,8 @@ export interface Attachment {
 export interface Ticket {
   version: number;
   id: string;
+  /** The decimal id from before the board's translation to hex ids. */
+  legacy_id?: string;
   title: string;
   body?: string;
   priority?: string;
@@ -66,6 +68,8 @@ export interface List {
 
 export interface Board {
   board: string;
+  /** Ticket id format: `hex` (`T-02A`) or a legacy decimal board (`T-42`). */
+  ids?: 'hex' | 'decimal';
   commit?: string;
   lists: List[];
 }

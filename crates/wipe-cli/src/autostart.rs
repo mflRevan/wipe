@@ -1,7 +1,9 @@
 //! Best-effort OS login autostart for the always-on wipe UI daemon.
 //!
-//! Enabling writes a small per-user login entry that runs `wipe serve --idle 0`
-//! (never auto-stops) at sign-in; disabling removes it. This is intentionally
+//! Enabling writes a small per-user login entry that starts wipe at sign-in -
+//! as the tray app (`wipe tray`) on Windows and macOS, so it is visible and
+//! controllable from the notification area / menu bar, and as `wipe serve
+//! --idle 0` (never auto-stops) under systemd on Linux; disabling removes it. This is intentionally
 //! lightweight and reversible - it never installs a system service or touches
 //! anything outside the current user's own startup configuration. `enable`/
 //! `disable` return a short human note describing what happened.
@@ -91,7 +93,7 @@ mod imp {
         // VBScript string-escaping: "" inside a quoted string is a literal quote.
         let exe = wipe_exe().replace('"', "\"\"");
         let body = format!(
-            "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" serve --idle 0\", 0, False\r\n"
+            "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" tray --foreground\", 0, False\r\n"
         );
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         remove_legacy();
@@ -140,7 +142,7 @@ mod imp {
 <dict>
   <key>Label</key><string>dev.wipe.autoserve</string>
   <key>ProgramArguments</key>
-  <array><string>{}</string><string>serve</string><string>--idle</string><string>0</string></array>
+  <array><string>{}</string><string>tray</string><string>--foreground</string></array>
   <key>RunAtLoad</key><true/>
 </dict>
 </plist>

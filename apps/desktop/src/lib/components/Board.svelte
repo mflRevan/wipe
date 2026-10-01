@@ -21,7 +21,11 @@
   const reduced = browser && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const flipMs = reduced ? 0 : 150;
 
-  let cols = $state<List[]>([]);
+  // The board's lists, as RAW state replaced immutably: deep proxies over every
+  // ticket's comments and activity made each drag step and board refresh walk
+  // the whole board. (Search hides non-matching cards in place - see Column - so
+  // the drag library always works on the full lists.)
+  let cols = $state.raw<List[]>([]);
 
   // --- trash-on-drag (pointer tracked, not a drop zone) --------------------
   // The dragged card element (captured from svelte-dnd-action) and the trash bin
@@ -56,13 +60,13 @@
       overTrash = false;
     };
   });
-  // Deliberately a plain (untracked) local: the sync effect below must NOT re-run
-  // the instant a drag ends, or it would rebuild `cols` from the not-yet-updated
-  // store and snap the just-dropped card back to its origin. The effect still
-  // re-runs when `$board` itself changes (the ~0.5s poll confirms the move).
+  // Deliberately a plain (untracked) local: the sync effects below must NOT re-run
+  // the instant a drag ends, or they would rebuild from the not-yet-updated store
+  // and snap the just-dropped card back to its origin. They still re-run when
+  // `$board` itself changes (the poll confirms the move).
   let dragging = false;
   // A SEPARATE reactive flag purely for drag-affordance styling (bigger drop
-  // zones + the target-list glow). It's intentionally not read by the sync effect,
+  // zones + the target-list glow). It's intentionally not read by the sync effects,
   // so toggling it on drop can't trigger the snap-back that `dragging` guards.
   let dragActive = $state(false);
 
@@ -89,18 +93,17 @@
   $effect(() => {
     const b = $board;
     if (!b || dragging) return;
-    cols = b.lists.map((l) => ({ ...l, tickets: [...l.tickets] }));
+    cols = b.lists;
   });
 
-  function colById(id: string): List | undefined {
-    return cols.find((c) => c.list === id);
+  function setCol(listId: string, items: Ticket[]) {
+    cols = cols.map((l) => (l.list === listId ? { ...l, tickets: items } : l));
   }
 
   function handleConsider(listId: string, items: Ticket[]) {
     dragging = true;
     dragActive = true;
-    const col = colById(listId);
-    if (col) col.tickets = items;
+    setCol(listId, items);
   }
 
   function handleFinalize(
@@ -108,21 +111,22 @@
     items: Ticket[],
     info: { id: string; trigger: string }
   ) {
-    const col = colById(listId);
-    if (col) col.tickets = items;
     const droppedOnTrash = overTrash;
     dragging = false;
     dragActive = false;
     draggedEl = null;
-    // Dropping over the bin deletes the card - this wins even if the release also
-    // happened over a column zone. The optimistic delete + poll reconcile `cols`.
+    // Dropped on the bin: the card leaves every list right now, so it never
+    // reappears at its origin while the delete round-trips. This wins even if
+    // the release also happened over a column zone.
     if (droppedOnTrash) {
+      cols = cols.map((l) => ({ ...l, tickets: l.tickets.filter((t) => t.id !== info.id) }));
       void deleteTicket(info.id);
       return;
     }
+    setCol(listId, items);
     // Persist only from the destination zone (covers same-list reorders too).
     // `cols` already reflects the drop; because `dragging` is untracked the sync
-    // effect won't revert it, and the ~0.5s poll confirms the move server-side.
+    // effect won't revert it, and the poll confirms the move server-side.
     if (info.trigger === 'droppedIntoZone') {
       const pos = items.findIndex((t) => t.id === info.id);
       if (pos !== -1) void moveTicket(info.id, listId, pos);
@@ -138,6 +142,7 @@
       tickets={col.tickets}
       {flipMs}
       {dragActive}
+      {overTrash}
       dragDisabled={$rewinding}
       canMoveLeft={i > 0}
       canMoveRight={i < cols.length - 1}

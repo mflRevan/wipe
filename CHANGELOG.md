@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.4.1 - 2026-10-01
+
+### Ticket ids
+
+- **New boards use fixed-width hex ticket ids:** `T-001` ... `T-0FF`, `T-2AF`
+  (three or more upper-case hex digits; `board.json` records `"ids": "hex"`).
+  Short, uniform, and quick to type.
+- **Any spelling resolves everywhere** (CLI, API, quick-jump): `T-02A`, `t2a`,
+  `T-2A`, `T 2a`. CLI output always shows the canonical id.
+- **Legacy boards keep working** with decimal ids (`T-23`). `wipe board
+  translate-ids` (or the **New ids** button in the board UI, shown only on such
+  boards) converts one: ticket files are renamed, and cards, relations,
+  subscriptions, trash entries, forum refs and `T-<n>` mentions in titles,
+  bodies, comments, checklists and activity are rewritten. Each ticket keeps its
+  old id as `legacy_id`, so `T-23` (in old notes or commit messages) still
+  resolves, and `ticket show` also lists commits that mention the old id. The
+  first CLI run on a legacy board offers the translation once: an interactive
+  y/N question, or a one-line stderr notice for agents and scripts (never a
+  blocking prompt). The staged translation is crash-safe.
+
+### Board UI
+
+- **Ticket quick-jump:** with nothing focused, type `T` and the ticket's digits
+  (`T2A`; the dash is optional). The query shows large in the middle of the
+  screen, the matching card glows and scrolls into view, Enter opens it, Escape
+  or any click dismisses. Ticket ids are now shown on every card.
+- **Board search (Ctrl/Cmd+F)** replaces the browser's find-in-page: it searches a
+  cached index of every ticket's id (and pre-translation id), title, description,
+  labels, priority, assignees and authors (ids and display names), comments,
+  checklist and acceptance items, and attachment names; all terms must match,
+  "quoted phrases" stay together, accents are ignored. Non-matching cards hide
+  live, per-list counts show `3/108`, hits in titles and labels are highlighted,
+  and cards that matched elsewhere say so. The search survives opening tickets;
+  Escape or the close button (marked `esc`) ends it. In the forum view, Ctrl/Cmd+F
+  focuses the forum's own search.
+- **Notifications:** watch the whole board, a list (list menu), a ticket (bell in
+  the ticket header), a forum thread, or the whole forum (the bell menu in the
+  top bar). Changes by others - new cards, moves (into or out of a watched
+  list), comments, assignments, labels, edits, completed checklists or
+  criteria, forum replies - arrive as native system notifications while the
+  tab is in the background (click to open the ticket or thread) and as in-app
+  toasts while you're looking; bursts collapse into one summary. Your own edits
+  never notify you. Watches are kept per board in the browser. System
+  notifications need https or localhost; on a LAN address (e.g. a phone) the
+  in-app alerts are used.
+- **Faster, smoother board on large boards** (measured on a 127-ticket board
+  with 1.1 MB of tickets, dragging a card across a 108-card list):
+  - the board poll uses ETags: the daemon caches the payload by file
+    fingerprint and answers unchanged polls with `304` (0 bytes, ~1 ms) instead
+    of re-reading every ticket and sending ~730 KB every half second, and the
+    UI no longer `JSON.stringify`s the whole board twice per poll to detect
+    changes;
+  - the daemon also listens on `::1` / `::`, so `http://localhost` no longer
+    waits ~200 ms per request for a failed IPv6 attempt before falling back to
+    IPv4 (most noticeable on Windows);
+  - unchanged tickets keep their identity across refreshes, the board keeps its
+    lists as raw (non-proxied) state, and reorder animations run only for cards
+    in view.
+  Result: the drag that froze 0.4.0 for 389 ms now has no long tasks (worst
+  frame 49 ms), and search filtering settles within a frame or two.
+
+### Tray app
+
+- **`wipe tray`** (Windows, macOS) runs the board server as a real desktop app:
+  an icon in the notification area / menu bar whose menu opens the board, opens
+  a phone page with QR codes for every network address, copies the phone link,
+  toggles start-at-login, and quits cleanly. Left-click opens the board. Only
+  one runs per user (a second `wipe tray` just opens the board). Started from a
+  terminal it moves to the background. Login autostart now launches the tray on
+  Windows and macOS instead of a hidden `wipe serve`; Linux keeps the systemd
+  user unit.
+- The daemon serves `/connect` (this machine only): the board's network URLs
+  with the access token as links and QR codes; `wipe serve` points at it.
+
+### Fixed
+
+- `wipe serve` / `wipe scan` find boards on every local drive, not just under
+  your home folder: the default scan roots are now home plus each fixed drive
+  (`D:\`, `E:\`, ...; mounted volumes under `/Volumes`, `/mnt`, `/media` on
+  macOS/Linux). Network and removable drives are left out; OS trees at drive
+  roots (`Windows`, `Program Files`, `$Recycle.Bin`, ...) and `AppData` are
+  skipped, and a root inside another (home inside `C:\`) is walked once.
+  `wipe serve` now also scans when started inside a board (in the background,
+  so startup stays instant), and the UI's project switcher refreshes its list
+  each time it opens. Configured `scan.roots` still replace the defaults.
+- `wipe trash restore|purge` built the trash file path straight from the typed
+  id, so `wipe trash purge ../../board` could delete `.wipe/board.json`; trash
+  ids are now matched against the trash entries themselves (any id spelling).
+- UI: dropping a card on the trash bin no longer flies it back to its list for a
+  moment before it disappears. The drop-return animation is skipped while the
+  pointer is over the bin, and the card leaves the board immediately (the delete
+  itself was already correct).
+
 ## 0.4.0 - 2026-09-29
 
 Driven by twelve days of field feedback from an agent (Claude) and a human

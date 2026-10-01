@@ -38,8 +38,12 @@ pub struct Board {
     pub description: String,
     /// Ordered lists (columns) of the board.
     pub lists: Vec<List>,
-    /// Next ticket counter; `T-<next_ticket>` is the next ID to allocate.
+    /// Next ticket counter; the next ID is formatted from it per [`Board::ids`].
     pub next_ticket: u64,
+    /// How ticket IDs are written. Absent on boards created before 0.4.1, which
+    /// keep decimal IDs (`T-23`) until translated with `wipe board translate-ids`.
+    #[serde(default, skip_serializing_if = "IdFormat::is_decimal")]
+    pub ids: IdFormat,
     /// Next forum-thread counter; `F-<next_thread>` is the next thread ID.
     #[serde(default = "one")]
     pub next_thread: u64,
@@ -47,6 +51,25 @@ pub struct Board {
     pub created: DateTime<Utc>,
     /// When the board was last modified.
     pub updated: DateTime<Utc>,
+}
+
+/// How a board writes ticket IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdFormat {
+    /// Legacy `T-23` (boards created before 0.4.1; the absent-field default).
+    #[default]
+    Decimal,
+    /// `T-017`, `T-2AF`: zero-padded upper-case hex, at least three digits -
+    /// short, fixed-width, and easy to type as a quick-search (`T2AF`).
+    Hex,
+}
+
+impl IdFormat {
+    /// Whether this is the legacy decimal format (used to omit the field).
+    pub fn is_decimal(&self) -> bool {
+        matches!(self, IdFormat::Decimal)
+    }
 }
 
 /// What to pre-populate a new board with (chosen during `wipe init`).
@@ -72,6 +95,7 @@ impl Board {
             description: String::new(),
             lists: default_lists(),
             next_ticket: 1,
+            ids: IdFormat::Hex,
             next_thread: 1,
             created: now,
             updated: now,
@@ -83,6 +107,14 @@ impl Board {
         let mut b = Board::new(name, now);
         b.lists.clear();
         b
+    }
+
+    /// Format the ticket ID for counter `n` in this board's ID format.
+    pub fn ticket_id(&self, n: u64) -> String {
+        match self.ids {
+            IdFormat::Hex => crate::id::hex_ticket_id(n),
+            IdFormat::Decimal => crate::id::ticket_id(n),
+        }
     }
 
     /// Find a list by ID.
@@ -155,8 +187,12 @@ fn default_lists() -> Vec<List> {
 pub struct Ticket {
     /// On-disk format version.
     pub version: u32,
-    /// Ticket ID, e.g. `T-23`.
+    /// Ticket ID, e.g. `T-017` (or `T-23` on a legacy decimal board).
     pub id: String,
+    /// The ticket's decimal ID before the board was translated to hex IDs (e.g.
+    /// `T-23` for what is now `T-017`), so old references still resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_id: Option<String>,
     /// Short title.
     pub title: String,
     /// Long-form body (Markdown allowed inside the JSON string).
@@ -222,6 +258,7 @@ impl Ticket {
         Ticket {
             version: FORMAT_VERSION,
             id: id.into(),
+            legacy_id: None,
             title: title.into(),
             body: String::new(),
             original: None,

@@ -8,10 +8,12 @@ mod commands;
 mod first_run;
 mod forum_cmd;
 mod identity;
+mod ids;
 mod input;
 mod onboard;
 mod output;
 mod skills;
+mod tray;
 mod update_check;
 mod view;
 
@@ -23,7 +25,7 @@ use args::{Cli, Command};
 use output::{emit_error, Out};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
 
     // Honor `-C/--cwd` by switching directories before anything touches the board.
     if let Some(dir) = &cli.cwd {
@@ -58,6 +60,11 @@ fn main() -> ExitCode {
             eprintln!("wipe: guided setup did not complete: {e:#}");
         }
     }
+
+    // Legacy decimal boards: offer the hex-id translation once; then accept any
+    // spelling of a ticket id (`t2a`, `T-02A`, a pre-translation `T-42`).
+    ids::offer_translation(cli.json, &cli.command);
+    ids::canonicalize(&mut cli.command);
 
     let write = is_write(&cli.command);
     // Every write needs a chosen identity - there is no default to fall back to.
@@ -195,6 +202,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Media(c) => commands::media(out, c),
         Command::Forum(c) => forum_cmd::run(out, c),
         Command::Serve(a) => commands::serve(out, a),
+        Command::Tray(a) => tray::run(a),
         Command::Config { global, cmd } => commands::config(out, global, cmd),
         Command::Subscribe(a) => commands::subscribe(out, a, false),
         Command::Unsubscribe(a) => commands::subscribe(out, a, true),

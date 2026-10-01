@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, subscribeChanges } from '$lib/api';
 import { applyServerDefaults } from '$lib/stores/theme';
+import { notifyBoardChanges, notifyForum, useWatchesOf } from '$lib/stores/notify';
 import type {
   Board,
   Definitions,
@@ -45,7 +46,11 @@ function lsSet(key: string, value: string | null): void {
 // synchronously with the initial `null`, which would otherwise clear the value we
 // need to restore.
 const savedProject = lsGet(PROJECT_KEY);
-currentProject.subscribe((v) => lsSet(PROJECT_KEY, v));
+currentProject.subscribe((v) => {
+  lsSet(PROJECT_KEY, v);
+  // Watches (what to notify about) are per board.
+  if (typeof localStorage !== 'undefined') useWatchesOf(v);
+});
 
 export const definitions = writable<Definitions>({
   version: 0,
@@ -208,6 +213,29 @@ let lastMutationSeq = 0;
  *  historical snapshot or nothing is loaded), so we only diff-for-flash within one
  *  project's live timeline. */
 let boardProject: string | null = null;
+/** ETag of the live board snapshot currently applied, per project. Only set when a
+ *  response is actually applied, so a dropped (stale) poll can never make later
+ *  polls report "unchanged" for content we never showed. */
+const appliedEtag = new Map<string, string>();
+
+/** Reuse the previous object for every ticket whose `updated` stamp is unchanged
+ *  (every edit, comment, check, move or attachment bumps it), so Svelte sees the
+ *  same references and skips re-rendering untouched cards. */
+function shareUnchanged(prev: Board | null, next: Board): Board {
+  if (!prev) return next;
+  const old = new Map<string, Ticket>();
+  for (const l of prev.lists) for (const t of l.tickets) old.set(t.id, t);
+  return {
+    ...next,
+    lists: next.lists.map((l) => ({
+      ...l,
+      tickets: l.tickets.map((t) => {
+        const o = old.get(t.id);
+        return o && o.updated === t.updated && o.title === t.title ? o : t;
+      })
+    }))
+  };
+}
 
 /** Fetch the live board for the current project.
  *
@@ -221,7 +249,10 @@ export async function loadBoard(opts: { silent?: boolean } = {}): Promise<void> 
   const seq = ++boardIssued;
   if (!silent) loading.set(true);
   try {
-    const next = await api.board(proj);
+    // A board is only "unchanged" relative to a live snapshot of this project.
+    const live = boardProject === (proj ?? null) && !!get(board);
+    const etag = live ? (appliedEtag.get(proj ?? '') ?? null) : null;
+    const res = await api.boardIfChanged(proj, etag);
     // Drop responses that lost the race (a newer one already applied), that belong
     // to a project we've since left, or that would clobber a history snapshot.
     if (seq <= boardApplied) return;
@@ -231,12 +262,18 @@ export async function loadBoard(opts: { silent?: boolean } = {}): Promise<void> 
     // the mutation on the server and would visibly revert it (see lastMutationSeq).
     if (seq <= lastMutationSeq) return;
     boardApplied = seq;
-    const prev = get(board);
-    if (!prev || JSON.stringify(prev) !== JSON.stringify(next)) {
+    if (res) {
+      const prev = get(board);
+      const next = shareUnchanged(prev && boardProject === proj ? prev : null, res.board);
       // Only flash diffs against a live snapshot of the SAME project - never when
       // switching boards or returning from history (which would light up every card).
-      if (prev && boardProject === proj) markChanges(prev, next);
+      if (prev && boardProject === proj) {
+        markChanges(prev, next);
+        notifyBoardChanges(prev, next, selfActed);
+      }
       board.set(next);
+      if (res.etag) appliedEtag.set(proj ?? '', res.etag);
+      else appliedEtag.delete(proj ?? '');
     }
     boardProject = proj ?? null;
     boardError.set(null);
@@ -317,6 +354,8 @@ export function applyTicket(next: Ticket): void {
   // Any board GET already in flight predates this local change; fence them out so
   // they can't overwrite what we're about to splice in.
   lastMutationSeq = boardIssued;
+  // The local copy now differs from the last applied server snapshot.
+  appliedEtag.delete(get(currentProject) ?? '');
   board.update((b) => {
     if (!b) return b;
     let changed = false;
@@ -356,6 +395,7 @@ export async function deleteTicket(id: string): Promise<void> {
   try {
     await api.deleteTicket(id, project());
     // Reflect the removal immediately so the card leaves without waiting for a poll.
+    appliedEtag.delete(get(currentProject) ?? '');
     board.update((b) => {
       if (!b) return b;
       return { ...b, lists: b.lists.map((l) => ({ ...l, tickets: l.tickets.filter((t) => t.id !== id) })) };
@@ -602,6 +642,7 @@ async function refreshForumIndicator(): Promise<void> {
     // Drop a response that resolved after a project switch, or it would poison the
     // new project's baseline with the old project's post count (false unread dot).
     if (project() !== proj) return;
+    notifyForum(proj ?? null, threads);
     const total = threads.reduce((n, t) => n + (t.posts ?? 0), 0);
     if (lastForumPosts >= 0 && total > lastForumPosts && !onForumView) forumUnread.set(true);
     lastForumPosts = total;

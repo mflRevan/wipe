@@ -1,10 +1,21 @@
 <script lang="ts">
   import { dndzone, SHADOW_ITEM_MARKER_PROPERTY_NAME, type DndEvent } from 'svelte-dnd-action';
   import { flip } from 'svelte/animate';
-  import { Plus, MoreHorizontal, ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-svelte';
+  import {
+    Plus,
+    MoreHorizontal,
+    ChevronLeft,
+    ChevronRight,
+    Pencil,
+    Trash2,
+    Bell,
+    BellRing
+  } from 'lucide-svelte';
+  import { watches, toggleWatch } from '$lib/stores/notify';
   import Card from './Card.svelte';
   import Popover from './ui/Popover.svelte';
   import type { Ticket } from '$lib/types';
+  import { searchMatches } from '$lib/stores/search';
 
   let {
     listId,
@@ -13,6 +24,7 @@
     flipMs,
     dragDisabled,
     dragActive = false,
+    overTrash = false,
     canMoveLeft = false,
     canMoveRight = false,
     onopen,
@@ -30,6 +42,7 @@
     flipMs: number;
     dragDisabled: boolean;
     dragActive?: boolean;
+    overTrash?: boolean;
     canMoveLeft?: boolean;
     canMoveRight?: boolean;
     onopen: (t: Ticket) => void;
@@ -52,6 +65,32 @@
   // column holds it at a time. That's the list a release would land in; glow only
   // that one. (dropTargetStyle can't be used for this: it styles ALL valid zones.)
   let isTarget = $derived(dragActive && tickets.some((t) => marker in t));
+  // Search hides non-matching cards in place (a class toggle) instead of
+  // unmounting them: removing items from an animated list makes Svelte measure
+  // and re-position each departing card, which thrashed layout on long lists.
+  let shown = $derived(
+    $searchMatches ? tickets.filter((t) => $searchMatches.has(t.id)).length : tickets.length
+  );
+
+  // Reorder animation, but only for cards the user can actually see: a long
+  // list shifting by one slot would otherwise start (and measure) an animation
+  // for every card in it on each hover step of a drag.
+  let viewport: { at: number; rect: DOMRect } | null = null;
+  function visibleFlip(
+    node: Element,
+    rects: { from: DOMRect; to: DOMRect },
+    params: { duration: number }
+  ) {
+    const zone = node.parentElement;
+    if (zone) {
+      const now = performance.now();
+      if (!viewport || now - viewport.at > 16) viewport = { at: now, rect: zone.getBoundingClientRect() };
+      const r = viewport.rect;
+      const near = (b: DOMRect) => b.bottom >= r.top - 80 && b.top <= r.bottom + 80;
+      if (!near(rects.from) && !near(rects.to)) return { duration: 0 };
+    }
+    return flip(node, rects, params);
+  }
 
   let renaming = $state(false);
   let renameDraft = $state('');
@@ -83,7 +122,12 @@
       />
     {:else}
       <span class="col-name">{name}</span>
-      <span class="count">{tickets.length}</span>
+      {#if $watches.lists.includes(listId)}<span class="watching" title="You get notified about changes in this list"
+          ><BellRing size={12} /></span
+        >{/if}
+      <span class="count" class:filtered={!!$searchMatches}
+        >{#if $searchMatches}{shown}/{tickets.length}{:else}{tickets.length}{/if}</span
+      >
     {/if}
     {#if !dragDisabled}
       <button class="add" aria-label="Add card" onclick={() => onadd(listId, name)}>
@@ -119,6 +163,16 @@
               onmove?.(listId, 1);
             }}><ChevronRight size={14} /> Move right</button
           >
+          <button
+            class="mi"
+            onclick={() => {
+              close();
+              toggleWatch('lists', listId);
+            }}
+            >{#if $watches.lists.includes(listId)}<BellRing size={14} /> Stop watching list{:else}<Bell
+                size={14}
+              /> Watch list (notify me){/if}</button
+          >
           <div class="mdiv"></div>
           <button
             class="mi danger"
@@ -152,6 +206,10 @@
       // On touch screens a card only picks up after a short press, so a swipe
       // scrolls the list/board instead of dragging the card.
       delayTouchStart: coarse ? 220 : false,
+      // A release over the trash is outside every zone, so the library would
+      // first animate the card back to its origin and only then let it vanish.
+      // Over the bin, skip that return trip: the card is being deleted.
+      dropAnimationDisabled: overTrash,
       // Disable the library's built-in target styling: it highlights EVERY valid
       // zone. We glow just the hovered column ourselves via `isTarget` below.
       dropTargetStyle: {},
@@ -177,7 +235,11 @@
       onfinalize(listId, e.detail.items, e.detail.info)}
   >
     {#each tickets as ticket (ticket.id)}
-      <div class="item" animate:flip={{ duration: flipMs }}>
+      <div
+        class="item"
+        class:hidden={$searchMatches && !(marker in ticket) && !$searchMatches.has(ticket.id)}
+        animate:visibleFlip={{ duration: flipMs }}
+      >
         {#if marker in ticket}
           <!-- The drop slot: render the dragged card hidden so the gap is EXACTLY
                its size, with a dashed outline showing where it will land. -->
@@ -257,6 +319,14 @@
     font-size: 11px;
     font-family: var(--wp-font-mono);
     color: var(--wp-text-subtle);
+  }
+  .watching {
+    display: inline-flex;
+    color: var(--wp-accent);
+  }
+  .count.filtered {
+    border-color: color-mix(in srgb, var(--wp-accent) 55%, transparent);
+    color: var(--wp-accent);
   }
   .add {
     margin-left: auto;
@@ -342,6 +412,9 @@
   }
   .item {
     position: relative;
+  }
+  .item.hidden {
+    display: none;
   }
   /* Drop slot: exactly the size of the card being dragged (its hidden card sets the
      height), shown as a dashed accent outline so you see precisely where it lands. */

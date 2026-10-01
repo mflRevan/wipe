@@ -7,6 +7,7 @@
   import Avatar from './Avatar.svelte';
   import CardMenu from './CardMenu.svelte';
   import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
+  import { searchQuery, searchMatches, jumpTarget, terms, highlight } from '$lib/stores/search';
   import { mediaUrl } from '$lib/api';
   import { labelColorFor, priorityColor, mediaKind } from '$lib/utils';
   import type { Attachment, Ticket } from '$lib/types';
@@ -24,6 +25,10 @@
   let acDone = $derived(ticket.acceptance?.filter((i) => i.done).length ?? 0);
   // How this card just changed (drives the live-update animation).
   let change = $derived($recentlyChanged.get(ticket.id));
+  // Search: the active terms, and where this card matched them.
+  let hl = $derived(terms($searchQuery));
+  let match = $derived($searchMatches?.get(ticket.id));
+  let jumped = $derived($jumpTarget === ticket.id);
 
   // Title typewriter: when a card first appears because an agent/human just
   // created it, reveal the title character-by-character (as if being typed) for
@@ -69,6 +74,8 @@
 
 <div
   class="card"
+  data-ticket-id={ticket.id}
+  class:jumped
   class:edited={change === 'edited'}
   class:materialize={change === 'new'}
   class:floated={change === 'moved'}
@@ -92,7 +99,10 @@
   {#if ticket.labels.length}
     <div class="chips">
       {#each ticket.labels as label (label)}
-        <Chip color={labelColorFor(label, $definitions.labels)}>{label}</Chip>
+        <Chip color={labelColorFor(label, $definitions.labels)}
+          >{#each highlight(label, hl) as seg, i (i)}{#if seg.hit}<mark>{seg.s}</mark
+              >{:else}{seg.s}{/if}{/each}</Chip
+        >
       {/each}
     </div>
   {/if}
@@ -102,12 +112,20 @@
       <span class="prio" style="--d:{dot}" title="Priority: {ticket.priority}"></span>
     {/if}
     <span class="ttext"
-      >{typing ? typed : ticket.title}{#if caret}<span class="caret" aria-hidden="true"></span
-        >{/if}</span
+      >{#if typing}{typed}{:else}{#each highlight(ticket.title, hl) as seg, i (i)}{#if seg.hit}<mark
+              >{seg.s}</mark
+            >{:else}{seg.s}{/if}{/each}{/if}{#if caret}<span class="caret" aria-hidden="true"
+        ></span>{/if}</span
     >
   </div>
+  {#if match?.elsewhere}
+    <div class="matched" title="The search matched this card's description, comments, people or files">
+      matched in details
+    </div>
+  {/if}
 
   <div class="footer">
+    <span class="tid">{ticket.id}</span>
     <div class="avatars">
       {#each ticket.assignees.slice(0, 4) as a (a)}
         <Avatar id={a} identity={identityFor(a)} size={22} />
@@ -317,6 +335,41 @@
   .avatars {
     display: flex;
     align-items: center;
+    margin-right: auto;
+  }
+  .tid {
+    font-family: var(--wp-font-mono);
+    font-size: 11px;
+    color: var(--wp-text-subtle);
+    letter-spacing: 0.02em;
+  }
+  .card :global(mark) {
+    background: color-mix(in srgb, var(--wp-accent) 35%, transparent);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .matched {
+    align-self: flex-start;
+    font-size: 11px;
+    color: var(--wp-accent);
+  }
+  /* Quick-jump target: a steady accent ring that pulses once on arrival. */
+  .card.jumped {
+    border-color: var(--wp-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wp-accent) 40%, transparent);
+    animation: card-jump 0.9s var(--wp-ease);
+  }
+  @keyframes card-jump {
+    0% {
+      box-shadow: 0 0 0 10px color-mix(in srgb, var(--wp-accent) 0%, transparent);
+    }
+    40% {
+      box-shadow: 0 0 0 6px color-mix(in srgb, var(--wp-accent) 45%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--wp-accent) 40%, transparent);
+    }
   }
   .avatars > :global(*:not(:first-child)) {
     margin-left: -6px;

@@ -81,7 +81,7 @@ fn concurrent_creates_never_collide_or_lose_tickets() {
     let s = Store::open(p.path()).unwrap();
     let ids = s.ticket_ids().unwrap();
     assert_eq!(ids.len(), 96, "every create must land exactly once");
-    let expected: HashSet<String> = (1..=96).map(|n| format!("T-{n}")).collect();
+    let expected: HashSet<String> = (1..=96).map(|n| format!("T-{n:03X}")).collect();
     assert_eq!(
         ids.into_iter().collect::<HashSet<_>>(),
         expected,
@@ -102,12 +102,12 @@ fn concurrent_comments_on_one_ticket_are_all_kept() {
         vec![
             "comment".into(),
             "add".into(),
-            "T-1".into(),
+            "T-001".into(),
             format!("from {w}: {i}"),
         ]
     });
     assert_eq!(failed, 0);
-    let t = Store::open(p.path()).unwrap().load_ticket("T-1").unwrap();
+    let t = Store::open(p.path()).unwrap().load_ticket("T-001").unwrap();
     assert_eq!(t.comments.len(), 80, "no comment may be lost to a race");
     let ids: HashSet<&str> = t.comments.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), 80, "comment ids are unique");
@@ -127,7 +127,7 @@ fn mixed_concurrent_writers_keep_the_board_consistent() {
         ]);
     }
     let failed = hammer(&p, 8, 12, |w, i| {
-        let t = format!("T-{}", (w * 7 + i) % 16 + 1);
+        let t = format!("T-{:03X}", (w * 7 + i) % 16 + 1);
         let lists = ["backlog", "todo", "in-progress", "done"];
         match i % 4 {
             0 => vec![
@@ -258,9 +258,9 @@ fn compact_outputs_stay_bounded_on_a_large_board() {
     assert!(ids < 120 * 90, "id,title listing: {ids} bytes");
 
     // Receipts are constant-size no matter how big the ticket is.
-    let r = bytes_of(&p, &["comment", "add", "T-1", "x", "--json"]);
+    let r = bytes_of(&p, &["comment", "add", "T-001", "x", "--json"]);
     assert!(r < 150, "receipt: {r} bytes");
-    let r = bytes_of(&p, &["ticket", "edit", "T-1", "--label", "z", "--json"]);
+    let r = bytes_of(&p, &["ticket", "edit", "T-001", "--label", "z", "--json"]);
     assert!(r < 150, "receipt: {r} bytes");
 
     // The inbox is capped by default (with the true total), and detail snippets
@@ -316,29 +316,29 @@ fn output_audit() {
             vec!["ticket", "list", "--full", "--json"],
         ),
         (
-            "ticket show T-1 --json",
-            vec!["ticket", "show", "T-1", "--json"],
+            "ticket show T-001 --json",
+            vec!["ticket", "show", "T-001", "--json"],
         ),
         (
-            "ticket show T-1 --comments-only --json",
-            vec!["ticket", "show", "T-1", "--comments-only", "--json"],
+            "ticket show T-001 --comments-only --json",
+            vec!["ticket", "show", "T-001", "--comments-only", "--json"],
         ),
         (
-            "ticket show T-1 --comments 1 --no-activity --json",
+            "ticket show T-001 --comments 1 --no-activity --json",
             vec![
                 "ticket",
                 "show",
-                "T-1",
+                "T-001",
                 "--comments",
                 "1",
                 "--no-activity",
                 "--json",
             ],
         ),
-        ("ticket show T-1 (human)", vec!["ticket", "show", "T-1"]),
+        ("ticket show T-001 (human)", vec!["ticket", "show", "T-001"]),
         (
-            "comment list T-1 --json",
-            vec!["comment", "list", "T-1", "--json"],
+            "comment list T-001 --json",
+            vec!["comment", "list", "T-001", "--json"],
         ),
         (
             "inbox --all --json (default cap 50)",
@@ -356,19 +356,19 @@ fn output_audit() {
         ("forum digest", vec!["forum", "digest"]),
         (
             "comment add (receipt) --json",
-            vec!["comment", "add", "T-2", "ok", "--json"],
+            vec!["comment", "add", "T-002", "ok", "--json"],
         ),
         (
             "comment add --echo --json",
-            vec!["comment", "add", "T-2", "ok", "--echo", "--json"],
+            vec!["comment", "add", "T-002", "ok", "--echo", "--json"],
         ),
         (
             "ticket edit (receipt) --json",
-            vec!["ticket", "edit", "T-2", "--label", "x", "--json"],
+            vec!["ticket", "edit", "T-002", "--label", "x", "--json"],
         ),
         (
             "ticket move (receipt) --json",
-            vec!["ticket", "move", "T-2", "--to", "todo", "--json"],
+            vec!["ticket", "move", "T-002", "--to", "todo", "--json"],
         ),
     ];
     type Cells = Vec<(usize, usize, u128)>; // (bytes, lines, ms) per board size

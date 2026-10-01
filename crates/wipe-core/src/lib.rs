@@ -18,6 +18,7 @@ pub mod model;
 pub mod ops;
 pub mod registry;
 pub mod store;
+pub mod translate;
 pub mod trash;
 pub mod vcs;
 

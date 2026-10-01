@@ -89,6 +89,9 @@ pub enum Command {
     Forum(ForumCmd),
     /// Start the local web UI daemon.
     Serve(ServeArgs),
+    /// Run the board server as a tray / menu-bar app (Windows, macOS): open the
+    /// board, open it on a phone, start at login, quit - from the icon's menu.
+    Tray(TrayArgs),
     /// Get or set settings (project by default; `--global` for user defaults).
     Config {
         /// Operate on the machine-wide user config instead of this board.
@@ -303,6 +306,14 @@ pub enum BoardCmd {
     Rename {
         /// New board name.
         name: String,
+    },
+    /// Convert a board's legacy decimal ticket ids (`T-23`) to the fixed-width
+    /// hex format (`T-017`). Renames ticket files and rewrites every reference;
+    /// old ids keep resolving as aliases. Commit/merge open branches first.
+    TranslateIds {
+        /// Don't ask for confirmation (required when not on a terminal).
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -1055,6 +1066,17 @@ pub struct ServeArgs {
     /// Auto-stop after N seconds with no viewers (0 = never; overrides settings).
     #[arg(long, value_name = "SECS")]
     pub idle: Option<u64>,
+}
+
+/// `wipe tray`
+#[derive(Debug, Args)]
+pub struct TrayArgs {
+    /// Stay attached to this terminal instead of moving to the background.
+    #[arg(long)]
+    pub foreground: bool,
+    /// Port to serve on (default: your global default, else 6737).
+    #[arg(long)]
+    pub port: Option<u16>,
 }
 
 /// `wipe config ...`

@@ -192,6 +192,18 @@ each network, while this machine needs no token. `wipe serve --local` restricts
 it to this machine, `wipe serve --tailscale` to your tailnet, and `--host <ip>`
 binds one address (persist with `wipe config set daemon.expose lan|local|tailscale|proxy`).
 
+In the board, **Ctrl/Cmd+F** searches everything (titles, descriptions, comments,
+labels, people, attachment names) and hides non-matching cards as you type, and
+typing **`T` + a ticket number** (e.g. `T2A`) jumps straight to that card. The bell
+in the top bar turns on notifications for the whole board, a list, a ticket, or a
+forum thread: system notifications while the tab is in the background, in-app
+alerts otherwise.
+
+To keep the board one click away, run **`wipe tray`** (Windows, macOS): the server
+lives in the notification area / menu bar with *Open board*, *Open on phone* (QR
+codes), *Start at login* and *Quit*. `wipe config --global set autostart true`
+starts it at login.
+
 `wipe serve` is a global convenience, not tied to one board: run it inside a
 project and it opens that board; run it anywhere and it starts a viewer over every
 board you've opened, and each edit targets whichever board is on screen. It

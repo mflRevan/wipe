@@ -194,6 +194,25 @@ export const api = {
     return fillBoard(await req<Board>(`/api/board${qs({ project })}`));
   },
 
+  /** Conditional board fetch: `null` when the board is unchanged since `etag`
+   *  (HTTP 304 - nothing transferred or parsed), else the board and its new etag. */
+  async boardIfChanged(
+    project: string | undefined,
+    etag: string | null
+  ): Promise<{ board: Board; etag: string | null } | null> {
+    const res = await fetch(`${getApiBase()}/api/board${qs({ project })}`, {
+      headers: { ...authHeader(), ...(etag ? { 'if-none-match': etag } : {}) }
+    });
+    if (res.status === 304) return null;
+    if (!res.ok) throw new Error(await parseError(res));
+    return { board: fillBoard((await res.json()) as Board), etag: res.headers.get('etag') };
+  },
+
+  /** Convert a legacy decimal board to hex ticket ids (`T-23` -> `T-017`). */
+  translateIds(project?: string): Promise<{ ok: boolean; translated: number }> {
+    return req(`/api/board/translate-ids${qs({ project })}`, { method: 'POST' });
+  },
+
   async graph(project?: string): Promise<GraphCommit[]> {
     const r = await req<{ commits: GraphCommit[] }>(`/api/graph${qs({ project })}`);
     return (r.commits ?? []).map((c) => ({

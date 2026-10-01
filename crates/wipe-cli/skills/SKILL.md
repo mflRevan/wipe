@@ -39,9 +39,13 @@ plus `wipe forum digest` is the whole catch-up.
    break.) Same for `--comment-file`, `--message-file`, forum `--body-file`.
 5. Never read or write files under `.wipe/` - their format is internal and
    differs from the CLI's JSON. Everything you need is a command away.
-6. IDs are stable: tickets `T-<n>`, comments `c-<n>`, checklist `ck-<n>`,
-   criteria `ac-<n>`, forum posts `F-<n>` / `F-<n>.<m>`, lists are slugs
-   (`in-progress`) that survive renames.
+6. IDs are stable: tickets are fixed-width hex (`T-001`, `T-02A`, `T-2AF`),
+   comments `c-<n>`, checklist `ck-<n>`, criteria `ac-<n>`, forum posts `F-<n>` /
+   `F-<n>.<m>`, lists are slugs (`in-progress`) that survive renames. Any
+   spelling of a ticket id works as input (`T-02A`, `t2a`, `T-2A`); output always
+   uses the canonical form, so copy ids from output. Boards created before 0.4.1
+   use decimal ids (`T-23`) until someone runs `wipe board translate-ids`;
+   afterwards the old ids still resolve, and `ticket show` reports `legacy_id`.
 7. Unsure about a flag? `wipe <group> --help`.
 
 ## Identity - required before any write

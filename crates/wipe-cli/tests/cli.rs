@@ -40,7 +40,7 @@ fn full_agent_flow() {
         "--priority",
         "high",
     ]);
-    assert_eq!(t1["id"], "T-1");
+    assert_eq!(t1["id"], "T-001");
     let t2 = p.json(&[
         "ticket",
         "create",
@@ -49,30 +49,30 @@ fn full_agent_flow() {
         "--title",
         "Fix navbar",
     ]);
-    assert_eq!(t2["id"], "T-2");
+    assert_eq!(t2["id"], "T-002");
 
     // Move, comment, label.
-    p.json(&["ticket", "move", "T-1", "--to", "in-progress"]);
-    let c = p.json(&["comment", "add", "T-1", "--body", "Use OAuth"]);
+    p.json(&["ticket", "move", "T-001", "--to", "in-progress"]);
+    let c = p.json(&["comment", "add", "T-001", "--body", "Use OAuth"]);
     assert_eq!(c["comment"], "c-1");
     assert_eq!(c["author"], "Tester <t@example.com>");
-    p.json(&["label", "assign", "T-1", "needs-review"]);
+    p.json(&["label", "assign", "T-001", "needs-review"]);
 
     // Verify ticket state via JSON.
-    let show = p.json(&["ticket", "show", "T-1"]);
+    let show = p.json(&["ticket", "show", "T-001"]);
     assert_eq!(show["list"], "in-progress");
     assert_eq!(show["labels"][0], "needs-review");
     assert_eq!(show["comments"][0]["body"], "Use OAuth");
 
     // Close moves to done.
-    let closed = p.json(&["ticket", "close", "T-1"]);
+    let closed = p.json(&["ticket", "close", "T-001"]);
     assert_eq!(closed["list"], "done");
 
     // Filtered listing.
     let backlog = p.json(&["ticket", "list", "--list", "backlog"]);
     let arr = backlog.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["id"], "T-2");
+    assert_eq!(arr[0]["id"], "T-002");
 }
 
 #[test]
@@ -80,13 +80,13 @@ fn json_error_object_and_nonzero_exit_on_missing_ticket() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "Err"]);
     let out = p
-        .cmd(&["ticket", "show", "T-99", "--json"])
+        .cmd(&["ticket", "show", "T-063", "--json"])
         .output()
         .unwrap();
     assert!(!out.status.success());
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["ok"], false);
-    assert!(v["error"].as_str().unwrap().contains("T-99"));
+    assert!(v["error"].as_str().unwrap().contains("T-063"));
 }
 
 #[test]
@@ -95,12 +95,12 @@ fn delete_requires_confirmation() {
     p.run(&["init", ".", "--name", "Del"]);
     p.json(&["ticket", "create", "--list", "backlog", "--title", "Temp"]);
     // Without --yes it must refuse and exit non-zero.
-    let refused = p.cmd(&["ticket", "delete", "T-1"]).output().unwrap();
+    let refused = p.cmd(&["ticket", "delete", "T-001"]).output().unwrap();
     assert!(!refused.status.success());
     // With --yes it succeeds.
-    p.json(&["ticket", "delete", "T-1", "--yes"]);
+    p.json(&["ticket", "delete", "T-001", "--yes"]);
     let missing = p
-        .cmd(&["ticket", "show", "T-1", "--json"])
+        .cmd(&["ticket", "show", "T-001", "--json"])
         .output()
         .unwrap();
     assert!(!missing.status.success());
@@ -290,35 +290,35 @@ fn forum_delete_removes_subtree_and_requires_yes() {
 fn checklist_and_criteria_are_independent_surfaces() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Ship it"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Ship it"]); // T-001
 
     // Two independent tickable lists with their own ID namespaces.
     assert_eq!(
-        p.json(&["checklist", "add", "T-1", "-t", "write code"])["item"],
+        p.json(&["checklist", "add", "T-001", "-t", "write code"])["item"],
         "ck-1"
     );
     assert_eq!(
-        p.json(&["criteria", "add", "T-1", "-t", "tests pass"])["item"],
+        p.json(&["criteria", "add", "T-001", "-t", "tests pass"])["item"],
         "ac-1"
     );
     assert_eq!(
-        p.json(&["criteria", "add", "T-1", "-t", "docs updated"])["item"],
+        p.json(&["criteria", "add", "T-001", "-t", "docs updated"])["item"],
         "ac-2"
     );
 
     // A reviewer accepts one criterion; the checklist is untouched.
-    p.json(&["criteria", "check", "T-1", "ac-1"]);
-    let ac = p.json(&["criteria", "list", "T-1"]);
+    p.json(&["criteria", "check", "T-001", "ac-1"]);
+    let ac = p.json(&["criteria", "list", "T-001"]);
     let items = ac["acceptance"].as_array().unwrap();
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["done"], true);
     assert_eq!(items[1]["done"], false);
-    let ck = p.json(&["checklist", "list", "T-1"]);
+    let ck = p.json(&["checklist", "list", "T-001"]);
     assert_eq!(ck["checklist"][0]["done"], false);
 
     // A ck- id is not addressable through the criteria surface.
     assert!(!p
-        .cmd(&["criteria", "check", "T-1", "ck-1"])
+        .cmd(&["criteria", "check", "T-001", "ck-1"])
         .output()
         .unwrap()
         .status
@@ -329,15 +329,15 @@ fn checklist_and_criteria_are_independent_surfaces() {
 fn comments_can_be_added_and_removed() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Talk"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Talk"]); // T-001
     assert_eq!(
-        p.json(&["comment", "add", "T-1", "-b", "first"])["comment"],
+        p.json(&["comment", "add", "T-001", "-b", "first"])["comment"],
         "c-1"
     );
-    p.json(&["comment", "add", "T-1", "-b", "second"]); // c-2
+    p.json(&["comment", "add", "T-001", "-b", "second"]); // c-2
 
-    p.json(&["comment", "remove", "T-1", "c-1"]);
-    let listed = p.json(&["comment", "list", "T-1"]);
+    p.json(&["comment", "remove", "T-001", "c-1"]);
+    let listed = p.json(&["comment", "list", "T-001"]);
     let ids: Vec<String> = listed["comments"]
         .as_array()
         .unwrap()
@@ -348,12 +348,12 @@ fn comments_can_be_added_and_removed() {
 
     // A fresh comment still advances the counter (no id reuse after deletion).
     assert_eq!(
-        p.json(&["comment", "add", "T-1", "-b", "third"])["comment"],
+        p.json(&["comment", "add", "T-001", "-b", "third"])["comment"],
         "c-3"
     );
     // Removing a missing comment is an error, not a panic.
     assert!(!p
-        .cmd(&["comment", "remove", "T-1", "c-99"])
+        .cmd(&["comment", "remove", "T-001", "c-99"])
         .output()
         .unwrap()
         .status
@@ -405,24 +405,24 @@ fn subscriptions_and_inbox_flow() {
         "alice",
         &["ticket", "create", "--list", "todo", "-t", "Task"],
     );
-    assert_eq!(t["id"], "T-1");
-    p.json_as("alice", &["ticket", "assign", "T-1", "bob"]);
+    assert_eq!(t["id"], "T-001");
+    p.json_as("alice", &["ticket", "assign", "T-001", "bob"]);
     let subs = p.json_as("bob", &["subscriptions"]);
     assert!(
         subs["subscriptions"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r == "T-1"),
+            .any(|r| r == "T-001"),
         "assignee auto-subscribed to their ticket"
     );
 
     // alice comments; bob comments too.
     p.json_as(
         "alice",
-        &["comment", "add", "T-1", "--body", "please start"],
+        &["comment", "add", "T-001", "--body", "please start"],
     );
-    p.json_as("bob", &["comment", "add", "T-1", "--body", "on it"]);
+    p.json_as("bob", &["comment", "add", "T-001", "--body", "on it"]);
 
     // bob's inbox shows alice's activity but never bob's own actions.
     let ib = p.json_as("bob", &["inbox"]);
@@ -478,7 +478,7 @@ fn writes_without_an_identity_are_refused_with_guidance() {
     ] {
         assert!(err.contains(needle), "missing `{needle}` in: {err}");
     }
-    assert!(!p.path().join(".wipe/tickets/T-1.json").exists());
+    assert!(!p.path().join(".wipe/tickets/T-001.json").exists());
 
     // The legacy strict flag changes nothing: writes are always strict now.
     let mut c = p.bare(&["ticket", "create", "X", "--list", "todo", "--json"]);
@@ -560,7 +560,7 @@ fn autocommit_commits_after_mutations_when_enabled() {
         .unwrap();
     let files = String::from_utf8(files.stdout).unwrap();
     assert!(
-        files.contains("tickets/T-1.json"),
+        files.contains("tickets/T-001.json"),
         "autocommit included the new ticket file: {files}"
     );
 }
@@ -572,13 +572,13 @@ fn author_correction_verbs_reattribute_with_audit() {
     p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
 
     // Comment, then edit its body.
-    p.json(&["comment", "add", "T-1", "--body", "first"]);
-    p.json(&["comment", "edit", "T-1", "c-1", "--body", "edited body"]);
+    p.json(&["comment", "add", "T-001", "--body", "first"]);
+    p.json(&["comment", "edit", "T-001", "c-1", "--body", "edited body"]);
     // Reattribute the comment to another identity.
-    let r = p.json(&["comment", "reattribute", "T-1", "c-1", "--to", "alice"]);
+    let r = p.json(&["comment", "reattribute", "T-001", "c-1", "--to", "alice"]);
     assert_eq!(r["to"], "alice");
 
-    let show = p.json(&["ticket", "show", "T-1"]);
+    let show = p.json(&["ticket", "show", "T-001"]);
     let c = show["comments"]
         .as_array()
         .unwrap()
@@ -598,8 +598,8 @@ fn author_correction_verbs_reattribute_with_audit() {
     );
 
     // Reattribute the ticket's creation.
-    p.json(&["ticket", "edit", "T-1", "--author", "bob"]);
-    let show = p.json(&["ticket", "show", "T-1"]);
+    p.json(&["ticket", "edit", "T-001", "--author", "bob"]);
+    let show = p.json(&["ticket", "show", "T-001"]);
     let created = show["activity"]
         .as_array()
         .unwrap()
@@ -624,15 +624,15 @@ fn trash_soft_delete_restore_and_duplicate() {
     p.json(&["ticket", "create", "--list", "todo", "-t", "B"]);
 
     // Duplicate places a "(copy)" right after the original.
-    let d = p.json(&["ticket", "duplicate", "T-1"]);
-    assert_eq!(d["id"], "T-3");
+    let d = p.json(&["ticket", "duplicate", "T-001"]);
+    assert_eq!(d["id"], "T-003");
     assert!(d["title"].as_str().unwrap().contains("(copy)"));
 
     // Soft-delete goes to the (restorable) trash by default.
-    let del = p.json(&["ticket", "delete", "T-2", "--yes"]);
+    let del = p.json(&["ticket", "delete", "T-002", "--yes"]);
     assert_eq!(del["trashed"], true);
     assert!(!p
-        .cmd(&["ticket", "show", "T-2", "--json"])
+        .cmd(&["ticket", "show", "T-002", "--json"])
         .output()
         .unwrap()
         .status
@@ -642,25 +642,25 @@ fn trash_soft_delete_restore_and_duplicate() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|t| t["id"] == "T-2"));
+        .any(|t| t["id"] == "T-002"));
 
     // Restore brings it back onto the board.
-    p.json(&["trash", "restore", "T-2"]);
+    p.json(&["trash", "restore", "T-002"]);
     assert!(p
-        .cmd(&["ticket", "show", "T-2", "--json"])
+        .cmd(&["ticket", "show", "T-002", "--json"])
         .output()
         .unwrap()
         .status
         .success());
 
     // --purge deletes permanently (never enters the trash).
-    p.json(&["ticket", "delete", "T-1", "--yes", "--purge"]);
+    p.json(&["ticket", "delete", "T-001", "--yes", "--purge"]);
     let tl2 = p.json(&["trash", "list"]);
     assert!(!tl2["trash"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|t| t["id"] == "T-1"));
+        .any(|t| t["id"] == "T-001"));
 }
 
 #[test]
@@ -682,7 +682,7 @@ fn ticket_create_requires_a_list() {
     );
     // With a list it succeeds.
     let t = p.json(&["ticket", "create", "--list", "todo", "-t", "Ok"]);
-    assert_eq!(t["id"], "T-1");
+    assert_eq!(t["id"], "T-001");
 }
 
 #[test]
@@ -691,8 +691,8 @@ fn wipe_agent_env_outranks_wipe_author() {
     // test harness always sets), so multi-agent attribution is race-free.
     let p = Project::new();
     p.run(&["init", ".", "--name", "A"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "X"]); // T-1
-    let mut c = p.cmd(&["comment", "add", "T-1", "-b", "hi", "--json"]);
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "X"]); // T-001
+    let mut c = p.cmd(&["comment", "add", "T-001", "-b", "hi", "--json"]);
     c.env("WIPE_AGENT", "agent-7");
     let out = c.output().unwrap();
     assert!(
@@ -700,7 +700,7 @@ fn wipe_agent_env_outranks_wipe_author() {
         "comment add failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let listed = p.json(&["comment", "list", "T-1"]);
+    let listed = p.json(&["comment", "list", "T-001"]);
     assert_eq!(listed["comments"][0]["author"], "agent-7");
 }
 
@@ -708,7 +708,7 @@ fn wipe_agent_env_outranks_wipe_author() {
 fn ticket_delete_rejects_path_traversal() {
     let p = Project::new();
     p.run(&["init", ".", "--name", "Safe"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Real"]); // T-1
+    p.json(&["ticket", "create", "--list", "backlog", "-t", "Real"]); // T-001
     assert!(p.path().join(".wipe/board.json").is_file());
 
     // A crafted id that would escape tickets/ must fail, not delete board.json.
@@ -850,7 +850,7 @@ fn supervision_protocol_offline() {
         "--body",
         "Create calc.py defining add(a, b).",
     ]);
-    assert_eq!(filed["id"], "T-1");
+    assert_eq!(filed["id"], "T-001");
 
     // Subordinate discovers assigned work purely via --json.
     let todo = p.json(&["ticket", "list", "--list", "todo"]);

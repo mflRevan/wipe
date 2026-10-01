@@ -45,6 +45,51 @@ fn write_entry(store: &Store, entry: &TrashEntry) -> Result<()> {
     Ok(())
 }
 
+/// Every trash entry on disk (unsorted, expired ones included).
+pub(crate) fn read_entries(store: &Store) -> Result<Vec<TrashEntry>> {
+    read_all(store)
+}
+
+/// Rewrite `entry` under its (possibly new) ticket id, removing the file it was
+/// stored under as `old_id`. Used when ticket ids are translated.
+pub(crate) fn rekey_entry(store: &Store, old_id: &str, entry: &TrashEntry) -> Result<()> {
+    if old_id != entry.ticket.id {
+        let _ = std::fs::remove_file(entry_path(store, old_id));
+    }
+    write_entry(store, entry)
+}
+
+/// The id of the trashed ticket a typed reference names (`T-01c`, `t1c`, a
+/// pre-translation `T-28`), matched against the entries themselves - a typed
+/// value never becomes a path, so `../board` can't reach outside the trash.
+fn find_entry_id(store: &Store, raw: &str) -> Result<Option<String>> {
+    let Some(digits) = crate::id::ticket_ref_digits(raw) else {
+        return Ok(None);
+    };
+    let hex = store.load_board()?.ids == crate::model::IdFormat::Hex;
+    let value = |radix| u64::from_str_radix(&digits, radix).ok();
+    let entries = read_all(store)?;
+    let same = |id: &str, radix: u32| {
+        id.strip_prefix("T-")
+            .and_then(|n| u64::from_str_radix(n, radix).ok())
+            .is_some_and(|n| Some(n) == value(radix))
+    };
+    let hit = entries
+        .iter()
+        .find(|e| e.ticket.id == raw.trim())
+        .or_else(|| {
+            entries
+                .iter()
+                .find(|e| same(&e.ticket.id, if hex { 16 } else { 10 }))
+        })
+        .or_else(|| {
+            entries
+                .iter()
+                .find(|e| e.ticket.legacy_id.as_deref().is_some_and(|l| same(l, 10)))
+        });
+    Ok(hit.map(|e| e.ticket.id.clone()))
+}
+
 /// Read every trash entry currently on disk (unsorted, not yet purged).
 fn read_all(store: &Store) -> Result<Vec<TrashEntry>> {
     let dir = store.trash_dir();
@@ -76,6 +121,7 @@ pub fn trash_ticket(
     retention_days: u64,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let ticket_id = &store.resolve_ticket_id(ticket_id)?;
     let ticket = store.load_ticket(ticket_id)?; // errors if missing
     let mut board = store.load_board()?;
 
@@ -128,6 +174,10 @@ pub fn list_trash(
 /// first list if that list is gone), removing it from the trash. Errors if the
 /// ticket is not in the trash.
 pub fn restore_ticket(store: &Store, ticket_id: &str, now: DateTime<Utc>) -> Result<Ticket> {
+    let ticket_id = &find_entry_id(store, ticket_id)?.unwrap_or_else(|| ticket_id.to_string());
+    if crate::id::ticket_ref_digits(ticket_id).is_none() {
+        return Err(Error::msg(format!("`{ticket_id}` is not in the trash")));
+    }
     let path = entry_path(store, ticket_id);
     let bytes = std::fs::read(&path).map_err(|_| {
         Error::msg(format!(
@@ -164,7 +214,10 @@ pub fn restore_ticket(store: &Store, ticket_id: &str, now: DateTime<Utc>) -> Res
 /// Permanently delete a single trash entry (no restore afterwards). Returns
 /// whether an entry was present.
 pub fn purge_ticket(store: &Store, ticket_id: &str) -> Result<bool> {
-    let path = entry_path(store, ticket_id);
+    let Some(ticket_id) = find_entry_id(store, ticket_id)? else {
+        return Ok(false);
+    };
+    let path = entry_path(store, &ticket_id);
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| Error::msg(e.to_string()))?;
         Ok(true)

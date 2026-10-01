@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronsUpDown, Check, Folder } from 'lucide-svelte';
   import Popover from './ui/Popover.svelte';
-  import { projects, currentProject } from '$lib/stores/board';
+  import { projects, currentProject, loadProjects } from '$lib/stores/board';
 
   let { onselect }: { onselect: (path: string) => void } = $props();
 
@@ -35,7 +35,15 @@
 
 <Popover>
   {#snippet trigger({ toggle })}
-    <button class="ps-trigger" onclick={toggle} title="Switch project">
+    <button
+      class="ps-trigger"
+      onclick={() => {
+        // Boards found by a background scan since the page loaded show up here.
+        void loadProjects();
+        toggle();
+      }}
+      title="Switch project"
+    >
       <Folder size={14} />
       <span class="name">{current?.name ?? 'No project'}</span>
       <ChevronsUpDown size={14} class="chev" />

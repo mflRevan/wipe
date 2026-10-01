@@ -101,6 +101,12 @@ export const CLI_GROUPS: CliGroup[] = [
         description: "Rename the board.",
         example: 'wipe board rename "Platform Team"',
       },
+      {
+        command: "wipe board translate-ids",
+        description:
+          "Convert a board from before 0.4.1 to fixed-width hex ticket ids (T-23 -> T-017), rewriting every reference. Old ids keep resolving.",
+        example: "wipe board translate-ids --yes",
+      },
     ],
   },
   {
@@ -427,6 +433,12 @@ export const CLI_GROUPS: CliGroup[] = [
         description:
           "Serve the UI on all local networks by default (prints token URLs and a QR code for phones; this machine needs no token). --local for this machine only, --tailscale for your tailnet, --host <ip> for one address.",
         example: "wipe serve --open",
+      },
+      {
+        command: "wipe tray",
+        description:
+          "Run the board server as a tray / menu-bar app (Windows, macOS): open the board, open it on a phone via QR codes, start at login, quit. Login autostart uses it.",
+        example: "wipe tray",
       },
     ],
   },

@@ -19,3 +19,7 @@ tempfile.workspace = true
 sha1 = "0.10"
 directories = "5"
 regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Enumerate local fixed drives (D:, E:, ...) as board scan roots.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

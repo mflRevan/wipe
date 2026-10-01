@@ -11,6 +11,7 @@
   import Attachments from './Attachments.svelte';
   import ChecksSection from './ChecksSection.svelte';
   import StagedMedia from './StagedMedia.svelte';
+  import WatchToggle from './WatchToggle.svelte';
   import { openLightbox } from '$lib/stores/lightbox';
   import { api, mediaUrl } from '$lib/api';
   import {
@@ -309,6 +310,10 @@
         <div class="idrow">
           {#if currentList}<span class="listtag">{currentList.name}</span>{/if}
           <span class="tid">{ticket.id}</span>
+          {#if ticket.legacy_id}<span class="tid" title="Id before the switch to hex ids"
+              >(was {ticket.legacy_id})</span
+            >{/if}
+          {#if !readOnly}<WatchToggle kind="tickets" id={ticket.id} />{/if}
           {#if readOnly}<span class="ro">read-only</span>{/if}
         </div>
 

@@ -4,6 +4,8 @@
   import { MessageSquarePlus, Search, Send, X, SlidersHorizontal, MessageSquare, Check } from 'lucide-svelte';
   import ForumPost from './ForumPost.svelte';
   import Avatar from './Avatar.svelte';
+  import WatchToggle from './WatchToggle.svelte';
+  import { openRequest } from '$lib/stores/notify';
   import { api, subscribeChanges } from '$lib/api';
   import { currentProject, identities, definitions } from '$lib/stores/board';
   import { labelColor } from '$lib/utils';
@@ -122,6 +124,14 @@
       error = e instanceof Error ? e.message : String(e);
     }
   }
+
+  // A notification for a thread was clicked: open it.
+  $effect(() => {
+    const id = $openRequest?.thread;
+    if (!id) return;
+    openRequest.set(null);
+    void openThread(id);
+  });
 
   async function openThread(id: string) {
     const switching = id !== selectedId;
@@ -481,6 +491,7 @@
         <h2>{thread.title}</h2>
         <div class="th-meta">
           <span class="thread-id">{thread.id}</span>
+          <WatchToggle kind="threads" id={thread.id} label={false} />
           <span class="dot">·</span>
           <span>started by {displayName(thread.root.author)}</span>
           {#if openSummary}

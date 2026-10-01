@@ -44,6 +44,109 @@ pub struct AppState {
     /// their identity. False behind a reverse proxy, where every request arrives
     /// via loopback.
     pub trust_loopback: bool,
+    /// Per-project cache of the serialized `/api/board` payload, keyed by a cheap
+    /// fingerprint of the board's files, so the UI's frequent polls neither
+    /// re-read every ticket nor re-transfer an unchanged board.
+    pub board_cache: Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, BoardCache>>>,
+    /// The URLs this daemon serves (set once bound), for the `/connect` page.
+    pub connect_urls: Arc<std::sync::OnceLock<Vec<crate::net::ShownUrl>>>,
+}
+
+/// `GET /connect` - a page for opening the board on another device: every network
+/// URL (with the access token) as a link and a scannable QR code. Shown only to
+/// this machine - it hands out the token.
+pub async fn connect_page(State(state): State<AppState>) -> Response {
+    let local = TRUSTED.try_with(|t| *t).unwrap_or(false);
+    if !local && state.exposed {
+        return (
+            StatusCode::FORBIDDEN,
+            "open this page on the machine running wipe",
+        )
+            .into_response();
+    }
+    let urls = state.connect_urls.get().cloned().unwrap_or_default();
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let mut cards = String::new();
+    for u in urls.iter().skip(1) {
+        let svg = qrcode::QrCode::new(u.url.as_bytes())
+            .map(|c| {
+                c.render::<qrcode::render::svg::Color>()
+                    .min_dimensions(220, 220)
+                    .quiet_zone(true)
+                    .build()
+            })
+            .unwrap_or_default();
+        cards.push_str(&format!(
+            "<section><h2>{}</h2><div class=qr>{svg}</div><a href=\"{}\">{}</a></section>",
+            esc(&u.label),
+            esc(&u.url),
+            esc(&u.url)
+        ));
+    }
+    if cards.is_empty() {
+        cards = "<p class=none>This daemon only listens on this machine. Start it with <code>wipe serve</code>                  (local network) or <code>wipe serve --tailscale</code> to open the board from your phone.</p>"
+            .to_string();
+    }
+    let html = format!(
+        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">         <title>wipe - open on another device</title><style>         body{{font:15px system-ui,sans-serif;background:#1c1b1a;color:#eee;margin:0;padding:32px;}}         h1{{font-size:20px;margin:0 0 6px}}p.lead{{color:#aaa;margin:0 0 24px}}         .grid{{display:flex;flex-wrap:wrap;gap:20px}}section{{background:#262523;border:1px solid #3a3835;border-radius:12px;padding:18px;width:260px}}         h2{{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#cc785c;margin:0 0 12px}}         .qr svg{{width:220px;height:220px;background:#fff;border-radius:8px;display:block}}         a{{display:block;margin-top:12px;color:#bbb;font:12px ui-monospace,monospace;word-break:break-all}}         .none{{color:#aaa}}code{{color:#eee}}</style></head><body>         <h1>Open this board on your phone</h1>         <p class=lead>Scan a code with a device on the same network. The link carries this machine's access          token - share it only with your own devices.</p><div class=grid>{cards}</div></body></html>"
+    );
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
+}
+
+/// One cached `/api/board` response.
+#[derive(Clone)]
+pub struct BoardCache {
+    /// Fingerprint of `board.json` + every ticket file (sizes and mtimes).
+    pub signature: u128,
+    /// Strong validator handed to the client.
+    pub etag: String,
+    /// The serialized JSON body.
+    pub body: Arc<Vec<u8>>,
+}
+
+/// A fingerprint of everything `/api/board` reads: changes whenever the board or
+/// any ticket file is added, removed, or rewritten. Only stats files.
+fn board_signature(store: &Store) -> u128 {
+    use std::time::UNIX_EPOCH;
+    let mut sig: u128 = 0;
+    let mut add = |m: std::fs::Metadata, salt: u128| {
+        let t = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        sig = sig
+            .wrapping_mul(1_000_003)
+            .wrapping_add(t ^ (m.len() as u128).wrapping_mul(31).wrapping_add(salt));
+    };
+    if let Ok(m) = std::fs::metadata(store.wipe_dir().join("board.json")) {
+        add(m, 1);
+    }
+    if let Ok(entries) = std::fs::read_dir(store.wipe_dir().join("tickets")) {
+        let mut metas: Vec<(String, std::fs::Metadata)> = entries
+            .flatten()
+            .filter_map(|e| {
+                Some((
+                    e.file_name().to_string_lossy().into_owned(),
+                    e.metadata().ok()?,
+                ))
+            })
+            .collect();
+        metas.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, m) in metas {
+            let salt = name
+                .bytes()
+                .fold(7u128, |h, b| h.wrapping_mul(131).wrapping_add(b as u128));
+            add(m, salt);
+        }
+    }
+    sig
 }
 
 tokio::task_local! {
@@ -140,7 +243,20 @@ fn board_json(board: &Board, view: &[(String, Vec<Ticket>)]) -> Value {
             json!({ "list": list_id, "name": name, "tickets": tickets })
         })
         .collect();
-    json!({ "board": board.name, "lists": lists })
+    json!({ "board": board.name, "ids": board.ids, "lists": lists })
+}
+
+/// `POST /api/board/translate-ids` - convert a legacy decimal board to hex ticket
+/// ids (the UI shows this only for such boards). Runs under the board write lock
+/// taken by the mutation middleware.
+pub async fn translate_ids(
+    State(state): State<AppState>,
+    Query(q): Query<ProjectQuery>,
+) -> ApiResult {
+    let store = store_for(&state, q.project)?;
+    let pairs = wipe_core::translate::translate_ids(&store, Utc::now())?;
+    notify(&state);
+    Ok(Json(json!({ "ok": true, "translated": pairs.len() })))
 }
 
 // --- read endpoints --------------------------------------------------------
@@ -252,10 +368,64 @@ pub async fn projects(State(state): State<AppState>) -> ApiResult {
 }
 
 /// `GET /api/board`
-pub async fn board(State(state): State<AppState>, Query(q): Query<ProjectQuery>) -> ApiResult {
+///
+/// Answers `If-None-Match` with `304 Not Modified` when the board is unchanged,
+/// and serves repeat polls from a fingerprint-keyed cache - so an idle UI polling
+/// every half second costs a few file stats, not a full board read, transfer,
+/// parse and diff.
+pub async fn board(
+    State(state): State<AppState>,
+    Query(q): Query<ProjectQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
     let store = store_for(&state, q.project)?;
-    let (board, view) = ops::board_view(&store)?;
-    Ok(Json(board_json(&board, &view)))
+    let key = store.root().to_path_buf();
+    let signature = board_signature(&store);
+    let cached = state
+        .board_cache
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+        .filter(|c| c.signature == signature);
+    let entry = match cached {
+        Some(c) => c,
+        None => {
+            let (board, view) = ops::board_view(&store)?;
+            let body = serde_json::to_vec(&board_json(&board, &view))?;
+            let etag = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                body.hash(&mut h);
+                format!("\"{:016x}-{:x}\"", h.finish(), body.len())
+            };
+            let c = BoardCache {
+                signature,
+                etag,
+                body: Arc::new(body),
+            };
+            if let Ok(mut m) = state.board_cache.lock() {
+                m.insert(key, c.clone());
+            }
+            c
+        }
+    };
+    let not_modified = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == entry.etag);
+    let common = [
+        (header::ETAG, entry.etag.clone()),
+        (header::CACHE_CONTROL, "no-cache".to_string()),
+    ];
+    if not_modified {
+        return Ok((StatusCode::NOT_MODIFIED, common).into_response());
+    }
+    Ok((
+        common,
+        [(header::CONTENT_TYPE, "application/json".to_string())],
+        (*entry.body).clone(),
+    )
+        .into_response())
 }
 
 /// `GET /api/history` - commits touching `.wipe/`, most recent first.
