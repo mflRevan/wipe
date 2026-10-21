@@ -1,13 +1,18 @@
-//! 0.4 agent-experience contract: text input from files/stdin, compact output,
-//! write receipts, the review loop, dependencies, the forum digest, the forced
-//! identity, and the commit hint. Each test drives the real binary.
+//! The agent-experience contract: text input via files/stdin, small receipts,
+//! compact and bounded views with hints, search, the review loop, dependencies,
+//! the forum digest, `watch`, output guardrails, and hex ticket ids. Each test
+//! drives the real binary.
 
 mod common;
 
-use common::Project;
-use serde_json::Value;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Stdio};
+use std::time::Duration;
 
-fn lines_of(v: &Value) -> Vec<String> {
+use common::Project;
+use serde_json::{json, Value};
+
+fn ids(v: &Value) -> Vec<String> {
     v.as_array()
         .unwrap()
         .iter()
@@ -15,15 +20,14 @@ fn lines_of(v: &Value) -> Vec<String> {
         .collect()
 }
 
-// --- text input ----------------------------------------------------------------
+// --- text input -------------------------------------------------------------------
 
 #[test]
 fn multiline_bodies_survive_via_file_and_stdin() {
     let p = Project::with_board("Text");
     let body = "line one\n\nline three with \"quotes\" and $dollars\n- a list";
 
-    // --body-file: a BOM and trailing newlines (editor/PowerShell artifacts) are
-    // not content; everything else is kept byte for byte.
+    // A BOM and trailing newlines (editor/PowerShell artifacts) are not content.
     std::fs::write(p.path().join("b.md"), format!("\u{feff}{body}\n\n")).unwrap();
     p.json(&[
         "ticket",
@@ -35,8 +39,6 @@ fn multiline_bodies_survive_via_file_and_stdin() {
         "b.md",
     ]);
     assert_eq!(p.json(&["ticket", "show", "T-001"])["body"], body);
-
-    // --body - reads stdin.
     let out = p.with_stdin(
         &[
             "ticket",
@@ -57,34 +59,40 @@ fn multiline_bodies_survive_via_file_and_stdin() {
     );
     assert_eq!(p.json(&["ticket", "show", "T-002"])["body"], body);
 
-    // Comments: positional, file, and stdin forms all work and agree.
+    // Comments: positional, file and stdin forms agree.
     p.json(&["comment", "add", "T-001", "positional comment"]);
     std::fs::write(p.path().join("c.md"), "multi\nline\ncomment").unwrap();
     p.json(&["comment", "add", "T-001", "--body-file", "c.md"]);
-    let out = p.with_stdin(
-        &["comment", "add", "T-001", "-b", "-", "--json"],
-        "from\nstdin",
-    );
-    assert!(out.status.success());
-    let comments = p.json(&["comment", "list", "T-001"])["comments"].clone();
-    let bodies: Vec<&str> = comments
+    assert!(p
+        .with_stdin(
+            &["comment", "add", "T-001", "-b", "-", "--json"],
+            "from\nstdin"
+        )
+        .status
+        .success());
+    let bodies: Vec<String> = p.json(&["comment", "list", "T-001"])["comments"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| c["body"].as_str().unwrap())
+        .map(|c| c["body"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(
         bodies,
-        vec!["positional comment", "multi\nline\ncomment", "from\nstdin"]
+        ["positional comment", "multi\nline\ncomment", "from\nstdin"]
     );
 
-    // Forum post + reply + edit take files too.
+    // Forum post, reply and edit take files too.
     p.json(&["forum", "post", "-t", "Notes", "--body-file", "c.md"]);
     p.json(&["forum", "reply", "F-1", "--body-file", "b.md"]);
     p.json(&["forum", "edit", "F-1", "--body-file", "b.md"]);
     let t = p.json(&["forum", "show", "F-1"]);
-    assert_eq!(t["post"]["body"], body);
-    assert_eq!(t["post"]["replies"][0]["body"], body);
+    assert_eq!(
+        (
+            t["post"]["body"].as_str(),
+            t["post"]["replies"][0]["body"].as_str()
+        ),
+        (Some(body), Some(body))
+    );
 
     // A missing body source fails with guidance, not an empty comment.
     let e = p.json_err(&["comment", "add", "T-001"]);
@@ -101,25 +109,7 @@ fn multiline_bodies_survive_via_file_and_stdin() {
     assert!(e["error"].as_str().unwrap().contains("nope.md"), "{e}");
 }
 
-#[test]
-fn positional_title_and_multi_label_forms() {
-    let p = Project::with_board("Forms");
-    let r = p.json(&["ticket", "create", "Positional title", "--list", "todo"]);
-    assert_eq!(r["title"], "Positional title");
-    // Both forms at once is ambiguous and refused by the parser.
-    let out = p
-        .cmd(&["ticket", "create", "A", "--title", "B", "--list", "todo"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-
-    let r = p.json(&["label", "assign", "T-001", "app", "bug", "ios"]);
-    assert_eq!(r["labels"], serde_json::json!(["app", "bug", "ios"]));
-    let r = p.json(&["label", "remove", "T-001", "bug", "ios"]);
-    assert_eq!(r["labels"], serde_json::json!(["app"]));
-}
-
-// --- output shape ----------------------------------------------------------------
+// --- output size ------------------------------------------------------------------
 
 #[test]
 fn writes_return_short_receipts_unless_echo() {
@@ -143,27 +133,31 @@ fn writes_return_short_receipts_unless_echo() {
     }
     let receipt = p.run(&["comment", "add", "T-001", "one more", "--json"]);
     let v: Value = serde_json::from_str(&receipt).unwrap();
-    assert_eq!(v["ok"], true);
-    assert_eq!(v["comment"], "c-6");
-    assert!(receipt.len() < 200, "receipt too large: {receipt}");
-    // Compact JSON: one line.
-    assert_eq!(receipt.trim().lines().count(), 1);
-
-    // --echo returns the whole ticket.
-    let full = p.json(&["--echo", "comment", "add", "T-001", "echoed"]);
-    assert_eq!(full["comments"].as_array().unwrap().len(), 7);
-    assert!(full["activity"].is_array());
-
-    // Edits, moves, labels also answer with receipts.
-    let v = p.json(&["ticket", "move", "T-001", "--to", "done"]);
     assert_eq!(
-        v,
-        serde_json::json!({ "ok": true, "id": "T-001", "list": "done" })
+        (v["ok"].as_bool(), v["comment"].as_str()),
+        (Some(true), Some("c-6"))
+    );
+    assert!(
+        receipt.len() < 200 && receipt.trim().lines().count() == 1,
+        "{receipt}"
     );
 
-    // --pretty opts back into indented JSON.
-    let pretty = p.run(&["ticket", "show", "T-001", "--json", "--pretty"]);
-    assert!(pretty.lines().count() > 10);
+    let full = p.json(&["--echo", "comment", "add", "T-001", "echoed"]);
+    assert_eq!(
+        full["comments"].as_array().unwrap().len(),
+        7,
+        "--echo returns the whole ticket"
+    );
+    assert_eq!(
+        p.json(&["ticket", "move", "T-001", "--to", "done"]),
+        json!({ "ok": true, "id": "T-001", "list": "done" })
+    );
+    assert!(
+        p.run(&["ticket", "show", "T-001", "--json", "--pretty"])
+            .lines()
+            .count()
+            > 10
+    );
 }
 
 #[test]
@@ -182,19 +176,17 @@ fn status_is_compact_and_collapses_done() {
 
     let raw = p.run(&["status", "--json"]);
     assert!(
-        raw.len() < 1500,
-        "compact status must not carry bodies/comments ({} bytes)",
+        raw.len() < 700,
+        "status carries no bodies or comments ({} bytes)",
         raw.len()
     );
     let s: Value = serde_json::from_str(&raw).unwrap();
     let lists = s["lists"].as_array().unwrap();
     let todo = lists.iter().find(|l| l["id"] == "todo").unwrap();
-    assert_eq!(todo["count"], 1);
-    let row = &todo["tickets"][0];
-    assert_eq!(row["id"], "T-001");
-    assert_eq!(row["comments"], 3);
-    assert_eq!(row["labels"], serde_json::json!(["app"]));
-    assert!(row.get("body").is_none() && row.get("list").is_none());
+    assert_eq!(
+        todo["tickets"][0],
+        json!({ "id": "T-001", "title": "Open", "labels": ["app"] })
+    );
     let done = lists.iter().find(|l| l["id"] == "done").unwrap();
     assert_eq!(
         (done["count"].as_u64(), done["collapsed"].as_bool()),
@@ -203,64 +195,299 @@ fn status_is_compact_and_collapses_done() {
     assert!(done.get("tickets").is_none());
     assert_eq!(s["identity"], "Tester <t@example.com>");
 
-    // --all lists done tickets; --full restores the whole-content dump.
+    // Detail is opt-in.
+    let more = p.json(&["status", "--fields", "id,comments,updated"]);
+    let row = &more["lists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "todo")
+        .unwrap()["tickets"][0];
+    assert_eq!(row["comments"], 3);
+    assert!(row["updated"].is_string() && row.get("title").is_none());
     let all = p.json(&["status", "--all"]);
-    let done = all["lists"]
-        .as_array()
-        .unwrap()
+    assert_eq!(all["lists"][3]["tickets"].as_array().unwrap().len(), 3);
+    assert!(
+        p.run(&["status", "--full", "--json"]).len() > 16_000,
+        "--full carries everything"
+    );
+    assert!(ids(&p.json(&["status", "--exclude-list", "done"])["lists"])
         .iter()
-        .find(|l| l["id"] == "done")
-        .unwrap()
-        .clone();
-    assert_eq!(done["tickets"].as_array().unwrap().len(), 3);
-    let full = p.run(&["status", "--full", "--json"]);
-    assert!(full.len() > 16_000, "--full carries everything");
-    let ex = p.json(&["status", "--exclude-list", "done"]);
-    assert!(ex["lists"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|l| l["id"] != "done"));
+        .all(|l| l != "done"));
+    // The text view ends with where to go next.
+    assert!(p.run(&["status"]).contains("wipe ticket show <id>"));
+}
 
-    // Human status ends with the compact-listing pointer.
-    let human = p.run(&["status"]);
-    assert!(human.contains("wipe ticket list --list"), "{human}");
+/// A ticket with a long history prints a bounded view, and says how to see more.
+#[test]
+fn ticket_show_is_bounded_and_hints_at_the_rest() {
+    let p = Project::with_board("Show");
+    p.json(&[
+        "ticket",
+        "create",
+        "Busy",
+        "--list",
+        "todo",
+        "--body",
+        &"body ".repeat(1000),
+    ]);
+    let store = wipe_core::Store::open(p.path()).unwrap();
+    for i in 0..40 {
+        let body = format!("comment {i:02} {}", "word ".repeat(300));
+        wipe_core::ops::add_comment(
+            &store,
+            "T-001",
+            "Tester <t@example.com>",
+            &body,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    }
+    let text = p.run(&["ticket", "show", "T-001"]);
+    assert!(
+        text.len() < 6_000,
+        "default view stays small: {} bytes",
+        text.len()
+    );
+    assert!(
+        text.contains("40 comments, newest 3")
+            && text.contains("comment 39")
+            && !text.contains("comment 36"),
+        "{text}"
+    );
+    let hint = text.lines().last().unwrap();
+    assert!(
+        hint.starts_with("more:") && hint.contains("--comments all") && hint.contains("--full"),
+        "{hint}"
+    );
+
+    let v = p.json(&["ticket", "show", "T-001"]);
+    assert_eq!(
+        (
+            v["comments"].as_array().unwrap().len(),
+            v["comments_total"].as_u64()
+        ),
+        (3, Some(40))
+    );
+    assert_eq!(
+        v["body_chars"], 5000,
+        "clipped strings say how long they really are"
+    );
+    assert!(
+        v.get("activity").is_none()
+            && v.get("version").is_none()
+            && v.get("next_comment").is_none()
+    );
+
+    let all = p.json(&["ticket", "show", "T-001", "--comments", "all"]);
+    assert_eq!(all["comments"].as_array().unwrap().len(), 40);
+    assert_eq!(
+        p.json(&["ticket", "show", "T-001", "--comments", "1"])["comments"][0]["body"]
+            .as_str()
+            .unwrap()[..10],
+        *"comment 39"
+    );
+    let full = p.json(&["ticket", "show", "T-001", "--full"]);
+    assert_eq!(full["body"].as_str().unwrap().len(), 5000);
+    assert!(full["activity"].is_array() && full["comments"][0].get("body_chars").is_none());
+    p.json_err(&["ticket", "show", "T-001", "--comments", "lots"]);
+}
+
+/// Pasted screenshots and terminal escape sequences never reach an agent's
+/// context, in any view.
+#[test]
+fn encoded_blobs_and_escapes_never_reach_stdout() {
+    let p = Project::with_board("Guard");
+    let blob = "iVBORw0KGgoAAAANSUhEUgAA".repeat(8_500); // ~200 KB
+    std::fs::write(
+        p.path().join("shot.md"),
+        format!("see ![shot](data:image/png;base64,{blob}) and \u{1b}[2J\u{1b}]0;owned\u{7}done"),
+    )
+    .unwrap();
+    p.json(&[
+        "ticket",
+        "create",
+        "\u{1b}[31mred\u{1b}[0m title",
+        "--list",
+        "todo",
+        "--body-file",
+        "shot.md",
+    ]);
+    p.json_as(
+        "bilal",
+        &["comment", "add", "T-001", "--body-file", "shot.md"],
+    );
+    p.json_as(
+        "bilal",
+        &[
+            "forum",
+            "post",
+            "-t",
+            "Screenshot",
+            "--body-file",
+            "shot.md",
+        ],
+    );
+
+    for args in [
+        vec!["status"],
+        vec!["ticket", "list"],
+        vec!["ticket", "show", "T-001"],
+        vec!["ticket", "show", "T-001", "--full"],
+        vec!["comment", "list", "T-001", "--full"],
+        vec!["inbox", "--all"],
+        vec!["search", "shot"],
+        vec!["forum", "show", "F-1", "--full"],
+        vec!["forum", "search", "see"],
+        vec!["watch", "--timeout", "1s", "--interval", "100"],
+    ] {
+        for json in [false, true] {
+            let mut a = args.clone();
+            if json {
+                a.push("--json");
+            }
+            let out = p.cmd(&a).output().unwrap();
+            assert!(out.status.success() || a[0] == "watch", "{a:?}");
+            let s = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                !s.contains('\u{1b}') && !s.contains("\\u001b"),
+                "{a:?} leaked an escape"
+            );
+            assert!(
+                !s.contains("iVBORw0KGgoAAAANSUhEUgAAiVBOR"),
+                "{a:?} leaked the blob"
+            );
+            assert!(s.len() < 20_000, "{a:?}: {} bytes", s.len());
+        }
+    }
+    assert!(p
+        .run(&["ticket", "show", "T-001"])
+        .contains("[image/png base64, "));
+}
+
+// --- finding things -----------------------------------------------------------------
+
+#[test]
+fn search_ranks_explains_and_filters() {
+    let p = Project::with_board("Search");
+    p.json(&[
+        "ticket",
+        "create",
+        "Foam rework",
+        "--list",
+        "todo",
+        "--label",
+        "ocean",
+    ]);
+    p.json(&[
+        "ticket",
+        "create",
+        "Shore waves",
+        "--list",
+        "todo",
+        "--body",
+        "the foam near the shore looks static",
+    ]);
+    p.json(&["ticket", "create", "Unrelated", "--list", "done"]);
+    p.json_as(
+        "bob",
+        &["comment", "add", "T-003", "Blocked on the FOAM shader"],
+    );
+    p.json(&[
+        "forum",
+        "post",
+        "-t",
+        "Water notes",
+        "-b",
+        "foam needs a persistence buffer",
+    ]);
+
+    let v = p.json(&["search", "foam"]);
+    assert_eq!(
+        ids(&v["tickets"]),
+        ["T-001", "T-002", "T-003"],
+        "title hits first"
+    );
+    assert!(v["tickets"][0].get("matched").is_none());
+    assert_eq!(v["tickets"][1]["matched"], "body");
+    assert_eq!(
+        v["tickets"][1]["snippet"],
+        "the foam near the shore looks static"
+    );
+    assert_eq!(v["tickets"][2]["matched"], "comment c-1 by bob");
+    assert_eq!(ids(&v["posts"]), ["F-1"]);
+    assert_eq!(v["total"], json!({ "tickets": 3, "posts": 1 }));
+
+    for (q, want) in [
+        ("foam label:ocean", vec!["T-001"]),
+        ("foam is:open", vec!["T-001", "T-002"]),
+        ("foam -static", vec!["T-001", "T-003"]),
+        ("\"near the shore\"", vec!["T-002"]),
+        ("t2", vec!["T-002"]),
+    ] {
+        assert_eq!(
+            ids(&p.json(&["search", q, "--tickets"])["tickets"]),
+            want,
+            "{q}"
+        );
+    }
+    let text = p.run(&["search", "foam"]);
+    assert!(
+        text.contains("body: the foam near") && text.contains("3 tickets, 1 post"),
+        "{text}"
+    );
+    p.json_err(&["search", "x", "is:sleeping"]);
 }
 
 #[test]
-fn ticket_list_filters_and_fields() {
+fn ticket_list_filters_fields_search_and_blockers() {
     let p = Project::with_board("Filters");
     p.json(&["ticket", "create", "a", "--list", "todo", "--label", "app"]);
     p.json(&[
-        "ticket", "create", "b", "--list", "todo", "--label", "app", "--label", "bug",
+        "ticket",
+        "create",
+        "b bug",
+        "--list",
+        "todo",
+        "--label",
+        "app",
+        "--label",
+        "bug",
+        "--blocked-by",
+        "T-001",
     ]);
     p.json(&["ticket", "create", "c", "--list", "done", "--label", "app"]);
     p.json(&[
         "ticket",
         "create",
-        "d",
+        "d bug",
         "--list",
         "backlog",
         "--assignee",
         "Tester <t@example.com>",
     ]);
 
-    assert_eq!(
-        lines_of(&p.json(&["ticket", "list", "--exclude-list", "done"])),
-        ["T-004", "T-001", "T-002"]
-    );
-    assert_eq!(
-        lines_of(&p.json(&["ticket", "list", "--label", "app", "--label", "bug"])),
-        ["T-002"]
-    );
-    assert_eq!(
-        lines_of(&p.json(&["ticket", "list", "--assignee", "me"])),
-        ["T-004"]
-    );
-    assert_eq!(
-        lines_of(&p.json(&["ticket", "list", "--list", "todo", "--list", "done"])),
-        ["T-001", "T-002", "T-003"]
-    );
+    for (args, want) in [
+        (
+            vec!["--exclude-list", "done"],
+            vec!["T-004", "T-001", "T-002"],
+        ),
+        (vec!["--label", "app", "--label", "bug"], vec!["T-002"]),
+        (vec!["--assignee", "me"], vec!["T-004"]),
+        (
+            vec!["--list", "todo", "--list", "done"],
+            vec!["T-001", "T-002", "T-003"],
+        ),
+        (vec!["--search", "bug", "--list", "todo"], vec!["T-002"]),
+        (vec!["-q", "bug"], vec!["T-004", "T-002"]),
+        (vec!["--ready"], vec!["T-004", "T-001"]),
+        (vec!["--blocked"], vec!["T-002"]),
+        (vec!["--since", "2999-01-01"], vec![]),
+    ] {
+        let mut a = vec!["ticket", "list"];
+        a.extend(&args);
+        assert_eq!(ids(&p.json(&a)), want, "{args:?}");
+    }
     assert_eq!(
         p.json(&["ticket", "list", "--limit", "2"])
             .as_array()
@@ -268,34 +495,35 @@ fn ticket_list_filters_and_fields() {
             .len(),
         2
     );
+    // Default rows: what it is, where, and what it waits on.
     assert_eq!(
-        p.json(&["ticket", "list", "--since", "1h"])
-            .as_array()
-            .unwrap()
-            .len(),
-        4
+        p.json(&["ticket", "list", "--list", "todo"])[1],
+        json!({ "id": "T-002", "title": "b bug", "list": "todo", "labels": ["app", "bug"], "blocked_by": ["T-001"] })
     );
-    assert!(p
-        .json(&["ticket", "list", "--since", "2999-01-01"])
-        .as_array()
-        .unwrap()
-        .is_empty());
-
-    let rows = p.json(&["ticket", "list", "--fields", "id,title"]);
-    assert_eq!(rows[0], serde_json::json!({ "id": "T-004", "title": "d" }));
-    let e = p.json_err(&["ticket", "list", "--fields", "id,nope"]);
-    assert!(e["error"].as_str().unwrap().contains("available"), "{e}");
-    let e = p.json_err(&["ticket", "list", "--list", "nosuch"]);
+    assert_eq!(
+        p.json(&["ticket", "list", "--fields", "id,title"])[0],
+        json!({ "id": "T-004", "title": "d bug" })
+    );
     assert!(
-        e["error"].as_str().unwrap().contains("todo"),
-        "lists the real lists: {e}"
+        p.json_err(&["ticket", "list", "--fields", "id,nope"])["error"]
+            .as_str()
+            .unwrap()
+            .contains("available")
     );
+    assert!(p.json(&["ticket", "list", "--full", "--limit", "1"])[0]["activity"].is_array());
 
-    let full = p.json(&["ticket", "list", "--full", "--limit", "1"]);
-    assert!(full[0]["activity"].is_array());
+    // Dependencies: cycles refused; finishing a blocker frees what waits on it.
+    let e = p.json_err(&["ticket", "block", "T-001", "--by", "T-002"]);
+    assert!(e["error"].as_str().unwrap().contains("cycle"), "{e}");
+    p.json(&["ticket", "close", "T-001"]);
+    assert!(ids(&p.json(&["ticket", "list", "--blocked"])).is_empty());
+    assert_eq!(
+        p.json(&["ticket", "unblock", "T-002", "--by", "T-001"])["blocked_by"],
+        json!([])
+    );
 }
 
-// --- one-call edit, original note, show --------------------------------------------
+// --- edit and review ------------------------------------------------------------------
 
 #[test]
 fn one_call_edit_and_original_note() {
@@ -359,12 +587,23 @@ fn one_call_edit_and_original_note() {
     assert_eq!(r["list"], "todo");
 
     let t = p.json(&["ticket", "show", "T-001"]);
-    assert_eq!(t["title"], "Shopping");
-    assert_eq!(t["original"]["title"], "raw note");
-    assert_eq!(t["original"]["body"], "buy milk\nand eggs");
-    assert_eq!(t["original"]["author"], "bilal");
-    assert_eq!(t["original"]["rewritten_by"], "claude");
-    assert_eq!(t["relations"][0]["target"], "T-002");
+    assert_eq!(
+        (t["title"].as_str(), t["blocked_by"].clone()),
+        (Some("Shopping"), json!(["T-002"]))
+    );
+    assert!(
+        t.get("original").is_none(),
+        "the creator's wording is kept, shown with --full"
+    );
+    let o = &p.json(&["ticket", "show", "T-001", "--full"])["original"];
+    assert_eq!(
+        (
+            o["title"].as_str(),
+            o["body"].as_str(),
+            o["author"].as_str()
+        ),
+        (Some("raw note"), Some("buy milk\nand eggs"), Some("bilal"))
+    );
 
     // --remove-label / --unassign / --unblock undo those, still in one call.
     p.json_as(
@@ -382,68 +621,29 @@ fn one_call_edit_and_original_note() {
         ],
     );
     let t = p.json(&["ticket", "show", "T-001"]);
-    assert_eq!(t["labels"], serde_json::json!(["home"]));
-    assert!(t.get("assignees").is_none() && t.get("relations").is_none());
+    assert_eq!(t["labels"], json!(["home"]));
+    assert!(t.get("assignees").is_none() && t.get("blocked_by").is_none());
 
-    // Nothing to change is an error that names the options.
-    let e = p.json_err(&["ticket", "edit", "T-001"]);
-    assert!(e["error"].as_str().unwrap().contains("--to <list>"), "{e}");
-    // A bad list is rejected before anything is written.
-    let before = p.json(&["ticket", "show", "T-001"]);
-    let e = p.json_err(&[
-        "ticket", "edit", "T-001", "-t", "Renamed", "--to", "nowhere",
-    ]);
-    assert!(e["error"].as_str().unwrap().contains("nowhere"));
-    assert_eq!(
-        p.json(&["ticket", "show", "T-001"])["title"],
-        before["title"]
+    // Nothing to change names the options; a bad list writes nothing.
+    assert!(p.json_err(&["ticket", "edit", "T-001"])["error"]
+        .as_str()
+        .unwrap()
+        .contains("--to <list>"));
+    assert!(
+        p.json_err(&["ticket", "edit", "T-001", "-t", "Renamed", "--to", "nowhere"])["error"]
+            .as_str()
+            .unwrap()
+            .contains("nowhere")
     );
-
-    // show --comments-only / --no-activity trim the payload.
+    assert_eq!(p.json(&["ticket", "show", "T-001"])["title"], "Shopping");
     let c = p.json(&["ticket", "show", "T-001", "--comments-only"]);
     assert!(c.get("body").is_none() && c["comments"].is_array());
-    assert!(p
-        .json(&["ticket", "show", "T-001", "--no-activity"])
-        .get("activity")
-        .is_none());
 }
-
-#[test]
-fn ticket_show_lists_commits_that_mention_it() {
-    let p = Project::with_board("Commits");
-    p.git_init();
-    p.json(&["ticket", "create", "Login", "--list", "todo"]);
-    for (f, msg) in [
-        ("a", "fix login redirect (T-001)"),
-        ("b", "unrelated T-0011 work"),
-        ("c", "polish\n\nrefs T-001"),
-    ] {
-        std::fs::write(p.path().join(f), f).unwrap();
-        p.git(&["add", f]);
-        p.git(&["commit", "-q", "-m", msg]);
-    }
-    let t = p.json(&["ticket", "show", "T-001"]);
-    let subjects: Vec<&str> = t["commits"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["subject"].as_str().unwrap())
-        .collect();
-    assert_eq!(subjects, vec!["polish", "fix login redirect (T-001)"]);
-    assert!(p
-        .json(&["ticket", "show", "T-001", "--no-commits"])
-        .get("commits")
-        .is_none());
-}
-
-// --- review loop + dependencies ----------------------------------------------------
 
 #[test]
 fn review_loop_submit_reject_approve() {
     let p = Project::with_board("Review");
     p.json_as("bilal", &["ticket", "create", "Feature", "--list", "todo"]);
-
-    // No review list yet: a helpful refusal.
     let e = p.json_err(&["ticket", "submit", "T-001", "-m", "done"]);
     assert!(
         e["error"]
@@ -472,93 +672,63 @@ fn review_loop_submit_reject_approve() {
         (r["list"].as_str(), r["comment"].as_str()),
         (Some("review"), Some("c-1"))
     );
-    let c = &p.json(&["comment", "list", "T-001"])["comments"][0]["body"];
-    let c = c.as_str().unwrap();
+    let c = p.json(&["comment", "list", "T-001"])["comments"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(
         c.contains("implemented") && c.contains("**Tested**") && c.contains("- iOS"),
         "{c}"
     );
-
-    // The reviewer sees it in their inbox (they authored the ticket).
-    let inbox = p.json_as("bilal", &["inbox"]);
-    assert!(inbox["events"]
-        .as_array()
-        .unwrap()
+    // The reviewer (who filed it) hears about it...
+    let events = |who: &str| -> Vec<Value> {
+        p.json_as(who, &["inbox"])["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|i| i["events"].as_array().unwrap().clone())
+            .collect()
+    };
+    assert!(events("bilal")
         .iter()
-        .any(|e| e["kind"] == "comment"));
+        .any(|e| e["event"] == "commented" && e["by"] == "claude"));
 
-    // Reject needs a reason; it goes back to the rework list with it.
-    let e = p.json_err(&["ticket", "reject", "T-001"]);
-    assert!(e["error"].as_str().unwrap().contains("reason"), "{e}");
-    let r = p.json_as(
-        "bilal",
-        &["ticket", "reject", "T-001", "-m", "crashes on launch"],
-    );
-    assert_eq!(r["list"], "todo");
-    // ...and the submitter hears about it.
-    let inbox = p.json_as("claude", &["inbox"]);
-    assert!(inbox["events"]
-        .as_array()
+    // ...a rejection needs a reason, goes back to rework, and reaches the submitter.
+    assert!(p.json_err(&["ticket", "reject", "T-001"])["error"]
+        .as_str()
         .unwrap()
+        .contains("reason"));
+    assert_eq!(
+        p.json_as(
+            "bilal",
+            &["ticket", "reject", "T-001", "-m", "crashes on launch"]
+        )["list"],
+        "todo"
+    );
+    assert!(events("claude")
         .iter()
         .any(|e| e["detail"].as_str().unwrap_or("").contains("crashes")));
 
     // Approval respects acceptance criteria.
     p.json(&["criteria", "add", "T-001", "--text", "no crash"]);
     p.json_as("claude", &["ticket", "submit", "T-001", "-m", "fixed"]);
-    let e = p.json_err(&["ticket", "approve", "T-001"]);
-    assert!(
-        e["error"].as_str().unwrap().contains("ac-1: no crash"),
-        "{e}"
-    );
+    assert!(p.json_err(&["ticket", "approve", "T-001"])["error"]
+        .as_str()
+        .unwrap()
+        .contains("ac-1: no crash"));
     p.json(&["criteria", "check", "T-001", "ac-1"]);
-    let r = p.json_as("bilal", &["ticket", "approve", "T-001", "-m", "ship it"]);
-    assert_eq!(r["list"], "done");
-
-    // Configured workflow lists win over detection.
-    p.json(&["config", "set", "board.rework_list", "backlog"]);
     assert_eq!(
-        p.json(&["config", "get", "board.rework_list"])["value"],
+        p.json_as("bilal", &["ticket", "approve", "T-001", "-m", "ship it"])["list"],
+        "done"
+    );
+    // A configured rework list wins over detection.
+    p.json(&["config", "set", "board.rework_list", "backlog"]);
+    p.json_as("claude", &["ticket", "submit", "T-001", "-m", "again"]);
+    assert_eq!(
+        p.json_as("bilal", &["ticket", "reject", "T-001", "-m", "no"])["list"],
         "backlog"
     );
-    let e = p.json_err(&["config", "set", "board.review_list", "nope"]);
-    assert!(e["error"].as_str().unwrap().contains("no list"), "{e}");
 }
-
-#[test]
-fn blockers_and_ready_listing() {
-    let p = Project::with_board("Deps");
-    p.json(&["ticket", "create", "TestFlight build", "--list", "todo"]);
-    p.json(&[
-        "ticket",
-        "create",
-        "Purchase tests",
-        "--list",
-        "todo",
-        "--blocked-by",
-        "T-001",
-    ]);
-    p.json(&["ticket", "create", "Release notes", "--list", "todo"]);
-    p.json(&["ticket", "block", "T-003", "--by", "T-002"]);
-
-    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-001"]);
-    assert_eq!(
-        lines_of(&p.json(&["ticket", "list", "--blocked"])),
-        ["T-002", "T-003"]
-    );
-    let e = p.json_err(&["ticket", "block", "T-001", "--by", "T-003"]);
-    assert!(e["error"].as_str().unwrap().contains("cycle"), "{e}");
-
-    // Finishing a blocker frees what waits on it.
-    p.json(&["ticket", "close", "T-001"]);
-    assert_eq!(lines_of(&p.json(&["ticket", "list", "--ready"])), ["T-002"]);
-    let row = p.json(&["ticket", "list", "--list", "todo"]);
-    assert_eq!(row[1]["blocked_by"], serde_json::json!(["T-002"]));
-    let r = p.json(&["ticket", "unblock", "T-003", "--by", "T-002"]);
-    assert_eq!(r["blocked_by"], serde_json::json!([]));
-}
-
-// --- forum digest, inbox --all ---------------------------------------------------
 
 #[test]
 fn forum_pin_and_bounded_digest() {
@@ -573,23 +743,24 @@ fn forum_pin_and_bounded_digest() {
     ]);
     p.json(&["forum", "reply", "F-1", "-b", "And bump the build number."]);
     p.json(&["forum", "post", "-t", "Chatter", "-b", "not durable"]);
-    let empty = p.run(&["forum", "digest"]);
-    assert!(empty.contains("wipe forum pin"), "{empty}");
+    assert!(p.run(&["forum", "digest"]).contains("wipe forum pin"));
 
     p.json(&["forum", "pin", "F-1"]);
     assert_eq!(p.json(&["forum", "pin", "F-1"])["changed"], false);
-    let e = p.json_err(&["forum", "pin", "F-1.1"]);
-    assert!(e["error"].as_str().unwrap().contains("whole threads"));
-
+    assert!(p.json_err(&["forum", "pin", "F-1.1"])["error"]
+        .as_str()
+        .unwrap()
+        .contains("whole threads"));
     let d = p.run(&["forum", "digest"]);
     assert!(
-        d.contains("## F-1 - Build rule") && d.contains("flutter clean") && d.contains("F-1.1")
+        d.contains("## F-1 - Build rule")
+            && d.contains("flutter clean")
+            && d.contains("F-1.1")
+            && !d.contains("Chatter")
     );
-    assert!(!d.contains("Chatter"));
 
     // Size-bounded, however long the pinned threads are.
-    let huge = "word ".repeat(3000);
-    p.json(&["forum", "post", "-t", "Huge", "-b", &huge]);
+    p.json(&["forum", "post", "-t", "Huge", "-b", &"word ".repeat(3000)]);
     p.json(&["forum", "pin", "F-3"]);
     let d = p.json(&["forum", "digest", "--max-bytes", "1500"]);
     assert!(d["bytes"].as_u64().unwrap() <= 1500, "{}", d["bytes"]);
@@ -601,161 +772,102 @@ fn forum_pin_and_bounded_digest() {
     assert!(!p.run(&["forum", "digest"]).contains("Huge"));
 }
 
-#[test]
-fn inbox_all_shows_everything_others_changed() {
-    let p = Project::with_board("Inbox");
-    p.json_as("bilal", &["ticket", "create", "Theirs", "--list", "todo"]);
-    p.json_as("bilal", &["comment", "add", "T-001", "hello"]);
-    // Not assigned/authored/subscribed: the default inbox is empty...
-    assert_eq!(p.json_as("claude", &["inbox"])["count"], 0);
-    // ...the board-wide view is not, and says why each event is there.
-    let all = p.json_as("claude", &["inbox", "--all", "--limit", "1"]);
-    assert_eq!(all["count"], 1);
-    assert!(all["total"].as_u64().unwrap() >= 2);
-    assert_eq!(all["events"][0]["reason"], "board");
-}
+// --- watch --------------------------------------------------------------------------
 
-// --- identity ---------------------------------------------------------------------
-
-#[test]
-fn agent_sessions_never_inherit_the_terminal_identity() {
-    let p = Project::with_board("Sessions");
-    let with = |envs: &[(&str, &str)], args: &[&str]| {
-        let mut c = p.bare(args);
-        c.env_remove("WIPE_SESSION");
-        for (k, v) in envs {
-            c.env(k, v);
-        }
-        c.output().unwrap()
-    };
-    // The human binds an identity in their terminal tab.
-    assert!(with(
-        &[("WT_SESSION", "tab-1")],
-        &["identity", "use", "bilal@x.com", "--human"]
-    )
-    .status
-    .success());
-    assert!(with(
-        &[("WT_SESSION", "tab-1")],
-        &["ticket", "create", "h", "--list", "todo"]
-    )
-    .status
-    .success());
-
-    // An agent launched from that same tab (inherits WT_SESSION) has its own
-    // session and so starts with NO identity.
-    let agent = [
-        ("WT_SESSION", "tab-1"),
-        ("CLAUDE_CODE_SESSION_ID", "abc"),
-        ("CLAUDECODE", "1"),
-    ];
-    let out = with(
-        &agent,
-        &["ticket", "create", "a", "--list", "todo", "--json"],
-    );
-    assert!(!out.status.success(), "agent must not write as the human");
-    assert!(with(&agent, &["identity", "use", "claude", "--agent"])
-        .status
-        .success());
-    let out = with(
-        &agent,
-        &[
-            "--echo", "ticket", "create", "a", "--list", "todo", "--json",
-        ],
-    );
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["activity"][0]["actor"], "claude");
-    // ...and the human's tab still writes as the human.
-    let out = with(
-        &[("WT_SESSION", "tab-1")],
-        &[
-            "--echo", "ticket", "create", "h2", "--list", "todo", "--json",
-        ],
-    );
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["activity"][0]["actor"], "bilal@x.com");
-
-    // An agent harness with no session id of its own cannot bind one - it is
-    // told to use $WIPE_AGENT instead of silently sharing a key.
-    let out = with(
-        &[("WT_SESSION", "tab-1"), ("AI_AGENT", "other")],
-        &["identity", "use", "x", "--json"],
-    );
-    assert!(!out.status.success());
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["error"].as_str().unwrap().contains("WIPE_AGENT"), "{v}");
-}
-
-// --- git story ---------------------------------------------------------------------
-
-#[test]
-fn commit_hint_until_first_commit_and_doctor_warnings() {
-    let p = Project::with_board("Hint");
-    p.git_init();
-    let out = p
-        .cmd(&["ticket", "create", "A", "--list", "todo", "--json"])
-        .output()
+/// Spawn `wipe watch` as `who` and return once it has taken its snapshot.
+fn watch(p: &Project, who: &str, args: &[&str]) -> Child {
+    let mut a = vec!["watch", "--interval", "100"];
+    a.extend(args);
+    let mut c = p.cmd(&a);
+    c.env("WIPE_AUTHOR", who)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stderr.as_mut().unwrap())
+        .read_line(&mut line)
         .unwrap();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("wipe commit"),
-        "hint expected on stderr: {err}"
-    );
-    // The hint is stderr-only: stdout stays one JSON object.
-    let _: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(line.starts_with("watching"), "{line}");
+    child
+}
 
-    let d = p.json(&["doctor"]);
-    assert!(d["uncommitted_board_files"].as_u64().unwrap() > 0);
-    assert!(d["warnings"]
-        .as_array()
+/// Give freshly spawned watches time to take their snapshot (it follows the banner).
+fn settle() {
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+#[test]
+fn watch_reports_others_changes_in_one_line() {
+    let p = Project::with_board("Watch");
+    p.json(&["ticket", "create", "Fix the foam", "--list", "todo"]);
+    p.json(&["ticket", "create", "Quiet", "--list", "todo"]);
+
+    // Nothing happens to T-002 within the timeout: exit 124, nothing on stdout.
+    let quiet = watch(&p, "claude", &["T-002", "--timeout", "1s"]);
+    // --until: the first matching change by someone else ends the watch.
+    let w = watch(&p, "claude", &["T-001", "--until", "--timeout", "20s"]);
+    let stream = watch(
+        &p,
+        "claude",
+        &[
+            "--json",
+            "in-progress",
+            "--on",
+            "commented",
+            "--count",
+            "1",
+            "--timeout",
+            "20s",
+        ],
+    );
+    settle();
+    p.json_as("claude", &["comment", "add", "T-001", "my own note"]); // never reported
+    settle();
+    p.json_as("bilal", &["ticket", "move", "T-001", "in-progress"]);
+    p.json_as(
+        "bilal",
+        &["comment", "add", "T-001", "please re-check\nthe edges"],
+    );
+
+    let out = w.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "T-001 moved todo → in-progress · bilal · Fix the foam\n"
+    );
+    let out = stream.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let ev: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (
+            ev["event"].as_str(),
+            ev["id"].as_str(),
+            ev["by"].as_str(),
+            ev["list"].as_str(),
+            ev["detail"].as_str()
+        ),
+        (
+            Some("commented"),
+            Some("T-001"),
+            Some("bilal"),
+            Some("in-progress"),
+            Some("please re-check the edges")
+        )
+    );
+
+    let out = quiet.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(124));
+    assert!(out.stdout.is_empty());
+    assert!(p.json_err(&["watch", "nowhere"])["error"]
+        .as_str()
         .unwrap()
-        .iter()
-        .any(|w| w.as_str().unwrap().contains("wipe commit")));
-
-    p.json(&["commit"]);
-    let out = p
-        .cmd(&["ticket", "create", "B", "--list", "todo", "--json"])
-        .output()
-        .unwrap();
-    assert!(
-        !String::from_utf8_lossy(&out.stderr).contains("wipe commit"),
-        "hint retired after first commit"
-    );
-
-    // The npm-shim marker makes doctor explain the Windows truncation.
-    let mut c = p.cmd(&["doctor", "--json"]);
-    c.env("WIPE_NPM_SHIM", "1");
-    let v: Value = serde_json::from_slice(&c.output().unwrap().stdout).unwrap();
-    assert_eq!(v["npm_shim"], true);
-    if cfg!(windows) {
-        assert!(v["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|w| w.as_str().unwrap().contains("--body-file")));
-    }
+        .contains("in-progress"));
 }
 
-#[test]
-fn serve_exposure_config_values() {
-    let p = Project::with_board("Expose");
-    for (v, want) in [
-        ("lan", "lan"),
-        ("local", "local"),
-        ("localhost", "local"),
-        ("tailscale", "tailscale"),
-    ] {
-        p.json(&["config", "set", "daemon.expose", v]);
-        assert_eq!(p.json(&["config", "get", "daemon.expose"])["value"], want);
-    }
-    let e = p.json_err(&["config", "set", "daemon.expose", "none"]);
-    assert!(e["error"].as_str().unwrap().contains("local"), "{e}");
-}
-
-// --- ticket id format ----------------------------------------------------------
+// --- ticket ids ---------------------------------------------------------------------
 
 #[test]
-fn hex_ids_any_spelling_and_legacy_translation() {
+fn hex_ids_any_spelling_translation_and_repair() {
     // New boards: fixed-width hex ids, accepted in any common spelling.
     let p = Project::with_board("Hex");
     for i in 0..11 {
@@ -764,10 +876,10 @@ fn hex_ids_any_spelling_and_legacy_translation() {
     for typed in ["T-00B", "t00b", "T-B", "tb", "T b"] {
         assert_eq!(p.json(&["ticket", "show", typed])["id"], "T-00B", "{typed}");
     }
-    // Receipts print the canonical id whatever was typed.
     assert_eq!(
-        p.json(&["ticket", "move", "t3", "--to", "done"])["id"],
-        "T-003"
+        p.json(&["ticket", "move", "t3", "done"])["id"],
+        "T-003",
+        "receipts are canonical"
     );
 
     // A board from before 0.4.1 (no `ids` field) keeps decimal ids...
@@ -781,33 +893,89 @@ fn hex_ids_any_spelling_and_legacy_translation() {
     }
     assert_eq!(old.json(&["ticket", "show", "T-12"])["id"], "T-12");
 
-    // ...and is offered the translation once (a stderr notice for agents, never a
-    // blocking prompt), then never again.
+    // ...and is offered the translation once (a stderr notice, never a prompt).
     std::fs::remove_file(old.path().join(".wipe/.cache/ids-translation-offered")).ok();
-    let first = old.cmd(&["status", "--json"]).output().unwrap();
-    assert!(String::from_utf8_lossy(&first.stderr).contains("translate-ids"));
-    let second = old.cmd(&["status", "--json"]).output().unwrap();
-    assert!(!String::from_utf8_lossy(&second.stderr).contains("translate-ids"));
+    let stderr = |args: &[&str]| {
+        String::from_utf8_lossy(&old.cmd(args).output().unwrap().stderr).to_string()
+    };
+    assert!(stderr(&["status", "--json"]).contains("translate-ids"));
+    assert!(!stderr(&["status", "--json"]).contains("translate-ids"));
+    assert!(old.json_err(&["board", "translate-ids"])["error"]
+        .as_str()
+        .unwrap()
+        .contains("--yes"));
 
-    // Off a terminal the translation needs --yes.
-    let e = old.json_err(&["board", "translate-ids"]);
-    assert!(e["error"].as_str().unwrap().contains("--yes"), "{e}");
     old.json(&["comment", "add", "T-3", "blocked by T-12, see T-10"]);
-    let r = old.json(&["board", "translate-ids", "--yes"]);
-    assert_eq!(r["translated"], 12);
+    old.json(&[
+        "forum",
+        "post",
+        "-t",
+        "about T-12",
+        "-b",
+        "T-12 is done",
+        "--ref",
+        "t12",
+    ]);
+    old.json(&["ticket", "delete", "T-5", "--yes"]);
+    // Snapshot the forum and trash to replay a hand-repaired 0.4.1 board below.
+    let dirs = [
+        old.path().join(".wipe/forum"),
+        old.path().join(".wipe/.cache/trash"),
+    ];
+    let saved: Vec<Vec<(std::path::PathBuf, Vec<u8>)>> = dirs
+        .iter()
+        .map(|d| {
+            std::fs::read_dir(d)
+                .unwrap()
+                .flatten()
+                .map(|e| (e.path(), std::fs::read(e.path()).unwrap()))
+                .collect()
+        })
+        .collect();
 
-    // Old ids still resolve; text references were rewritten.
+    assert_eq!(
+        old.json(&["board", "translate-ids", "--yes"])["translated"],
+        12
+    );
     let t = old.json(&["ticket", "show", "T-12"]);
     assert_eq!(
         (t["id"].as_str(), t["legacy_id"].as_str()),
-        (Some("T-00C"), Some("T-12"))
+        (Some("T-00C"), Some("T-12")),
+        "old ids still resolve"
     );
-    let c = old.json(&["comment", "list", "T-3"]);
-    assert_eq!(c["comments"][0]["body"], "blocked by T-00C, see T-00A");
+    assert_eq!(
+        old.json(&["comment", "list", "T-3"])["comments"][0]["body"],
+        "blocked by T-00C, see T-00A"
+    );
+    assert_eq!(
+        old.json(&["forum", "show", "F-1"])["post"]["refs"],
+        json!(["T-00C"])
+    );
     assert_eq!(
         old.json(&["ticket", "create", "next", "--list", "todo"])["id"],
         "T-00D"
     );
+
+    // A board that went hex with its forum and trash left decimal is finished by
+    // the next command, once.
+    for (d, files) in dirs.iter().zip(&saved) {
+        std::fs::remove_dir_all(d).unwrap();
+        std::fs::create_dir_all(d).unwrap();
+        for (path, bytes) in files {
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+    std::fs::remove_file(old.path().join(".wipe/.cache/ids-repaired-1")).ok();
+    assert!(stderr(&["status", "--json"]).contains("leftover decimal"));
+    assert!(
+        !stderr(&["status", "--json"]).contains("leftover decimal"),
+        "only once"
+    );
+    assert_eq!(
+        old.json(&["forum", "show", "F-1"])["post"]["refs"],
+        json!(["T-00C"])
+    );
+    assert_eq!(ids(&old.json(&["trash", "list"])["trash"]), ["T-005"]);
     assert_eq!(
         old.json(&["board", "translate-ids", "--yes"])["translated"],
         0

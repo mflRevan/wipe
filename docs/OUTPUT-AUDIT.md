@@ -1,8 +1,61 @@
-# Output audit (0.4.0)
+# Output audit
 
 How much each command prints, how that scales with the board, and where output
 is truncated, capped, or compacted. Written for agent use: every byte a command
 prints lands in an agent's context window.
+
+## 0.4.3: a real agent session, before and after
+
+One scripted agent session (orient, drill into the busiest list and two
+tickets, search, read the inbox and the forum, read help, make three writes)
+against copies of three real boards, with 0.4.2 and 0.4.3. "failed" means the
+0.4.2 command did not exist or errored (`wipe search`, a positional
+`ticket move`). Bytes of stdout + stderr; ~4 bytes per token.
+
+| command | DasBoot (60 tickets) | Titan (22 tickets) | huddle (128 tickets) |
+|---|---|---|---|
+| `status` | 4,830 → 4,952 B (+3%) | 1,633 → 1,601 B (-2%) | 2,514 → 2,415 B (-4%) |
+| `status --json` | 11,859 → 7,055 B (-41%) | 3,315 → 2,297 B (-31%) | 5,040 → 3,625 B (-28%) |
+| `ticket list --list <busiest>` | 2,496 → 2,226 B (-11%) | 1,319 → 1,124 B (-15%) | 1,763 → 1,507 B (-15%) |
+| … `--json` | 6,354 → 3,865 B (-39%) | 2,782 → 1,963 B (-29%) | 3,287 → 2,416 B (-26%) |
+| `ticket show <median ticket>` | 1,556 → 1,474 B (-5%) | 925 → 755 B (-18%) | 3,383 → 1,387 B (-59%) |
+| … `--json` | 2,388 → 1,793 B (-25%) | 1,328 → 906 B (-32%) | 4,209 → 1,575 B (-63%) |
+| `ticket show <largest ticket>` | 13,582 → 2,311 B (-83%) | 2,826 → 2,196 B (-22%) | 43,431 → 2,511 B (-94%) |
+| … `--json` | 14,156 → 2,670 B (-81%) | 3,337 → 2,384 B (-29%) | 45,939 → 2,685 B (-94%) |
+| `search <word>` | failed → 1,684 B | failed → 182 B | failed → 3,776 B |
+| … `--json` | failed → 1,966 B | failed → 167 B | failed → 4,146 B |
+| `inbox --all` | 5,212 → 1,909 B (-63%) | 7,728 → 3,554 B (-54%) | 5,495 → 1,240 B (-77%) |
+| … `--json` | 12,987 → 2,971 B (-77%) | 14,525 → 4,862 B (-67%) | 13,699 → 2,862 B (-79%) |
+| `forum list` | 648 → 688 B (+6%) | 1,549 → 1,569 B (+1%) | 11,149 → 3,277 B (-71%) |
+| `forum show F-1` | 1,140 → 1,140 B (+0%) | 960 → 960 B (+0%) | 1,077 → 1,077 B (+0%) |
+| `forum search <word>` | 187 → 187 B (+0%) | 18 → 18 B (+0%) | 2,802 → 2,802 B (+0%) |
+| `wipe --help` | 3,115 → 2,796 B (-10%) | 3,115 → 2,796 B (-10%) | 3,115 → 2,796 B (-10%) |
+| `wipe ticket --help` | 2,130 → 1,463 B (-31%) | 2,130 → 1,463 B (-31%) | 2,130 → 1,463 B (-31%) |
+| `wipe ticket list --help` | 2,043 → 1,451 B (-29%) | 2,043 → 1,451 B (-29%) | 2,043 → 1,451 B (-29%) |
+| `wipe skill` (SKILL.md) | 9,227 → 2,460 B (-73%) | 9,227 → 2,460 B (-73%) | 9,227 → 2,460 B (-73%) |
+| `ticket create` receipt | 33 → 33 B (+0%) | 33 → 33 B (+0%) | 33 → 33 B (+0%) |
+| `comment add` receipt | 29 → 29 B (+0%) | 29 → 29 B (+0%) | 29 → 29 B (+0%) |
+| `ticket move <id> <list>` | failed → 26 B | failed → 31 B | failed → 31 B |
+| **session total** (commands that ran in both) | **93,972 → 41,473 B** | **58,822 → 32,421 B** | **160,365 → 37,611 B** |
+
+What changed, and what an agent does to see more:
+
+- `ticket show`: facts on one line, body (clipped at 2,400 chars), checklists,
+  attachments by name, the newest 3 comments (clipped at 1,000 chars each),
+  3 commits. It ends with `more: --comments all · --full · --activity`.
+- `status` / `ticket list`: JSON rows are id, title, list, labels, assignees,
+  priority and blockers (`--fields` for more); `status` stops a list at 60
+  rows, `ticket list` at 100, each saying how many more there are.
+- `inbox`: grouped by ticket, bursts collapsed, snippets of 90 chars, 20
+  events by default.
+- `search`: 10 results per kind with one 100-char snippet each; `forum list`:
+  25 threads.
+- Help pages no longer repeat the global flags; the skill file is a 2.5 KB
+  bootstrap.
+- Everything printed passes through the output guardrails: no escape
+  sequences, no base64 blobs, no endless lines.
+
+## 0.4.0 synthetic scaling
 
 **Regenerate the numbers** (seeds boards of 10 / 100 / 500 tickets, 60% of them
 done, each with a ~1 KB body and five ~300-byte comments, then runs each command):

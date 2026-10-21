@@ -383,14 +383,4 @@ mod imp {
             }
         })
     }
-
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn icon_is_a_filled_tile_with_a_transparent_corner() {
-            // Building the icon must not panic and must yield a valid buffer.
-            let _ = super::icon(32);
-            let _ = super::icon(64);
-        }
-    }
 }

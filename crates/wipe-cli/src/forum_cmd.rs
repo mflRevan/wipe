@@ -18,6 +18,7 @@ use crate::commands::guess_mime;
 use crate::identity;
 use crate::input;
 use crate::output::{dim, id_style, Out};
+use crate::safe;
 
 fn store() -> Result<Store> {
     Store::discover(".").map_err(Into::into)
@@ -56,9 +57,15 @@ fn stage_attachments(store: &Store, paths: &[PathBuf]) -> Result<Vec<Attachment>
     Ok(out)
 }
 
+/// Post characters `forum show` prints by default.
+const POST_MAX: usize = 1500;
+/// Threads `forum list` prints by default.
+const LIST_LIMIT: usize = 25;
+
 /// First non-empty line of a body, trimmed to a readable length.
 fn snippet(body: &str) -> String {
-    let line = body
+    let clean = safe::clean(body);
+    let line = clean
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
@@ -82,7 +89,7 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
                 title: a.title,
                 body: body.unwrap_or_default(),
                 labels: a.labels,
-                refs: a.refs,
+                refs: canonical_refs(&s, a.refs),
                 attachments,
             };
             let t = forum::create_thread(&s, spec, &author, Utc::now())?;
@@ -100,7 +107,7 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             let spec = NewReply {
                 body,
                 labels: a.labels,
-                refs: a.refs,
+                refs: canonical_refs(&s, a.refs),
                 attachments,
             };
             let id = forum::reply(&s, &parent, spec, &author, Utc::now())?;
@@ -110,25 +117,32 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             );
         }
 
-        ForumCmd::Show { id, depth } => {
+        ForumCmd::Show { id, depth, full } => {
             let thread = forum::get_thread(&s, &id)?;
             let root = thread
                 .root
                 .find(&id)
                 .ok_or_else(|| anyhow!("forum post `{id}` not found"))?;
+            // --depth bounds the JSON tree too, so the payload matches the text.
+            let mut pruned = prune_depth(root, depth);
+            let clipped = clean_tree(&mut pruned, full);
             if out.json {
-                // Honor --depth in JSON too (it previously returned the whole
-                // subtree regardless), so an agent that bounds the tree gets a
-                // bounded payload that matches the human output.
-                let pruned = prune_depth(root, depth);
                 out.json_value(
-                    &json!({ "thread": thread.id, "title": thread.title, "post": to_value(&pruned) }),
+                    &json!({ "thread": thread.id, "title": safe::line(&thread.title), "post": to_value(&pruned) }),
                 );
             } else {
                 if root.id == thread.id {
-                    println!("{}  {}", id_style(&thread.id), thread.title);
+                    println!("{}  {}", id_style(&thread.id), safe::line(&thread.title));
                 }
-                render(root, 0, depth);
+                render(&pruned, 0, None);
+                if clipped > 0 {
+                    println!(
+                        "{}",
+                        dim(&format!(
+                            "{clipped} long post(s) clipped - --full shows them whole"
+                        ))
+                    );
+                }
             }
         }
 
@@ -148,9 +162,12 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
                         .is_none_or(|a| r.author.to_lowercase().contains(&a.to_lowercase()))
                 })
                 .collect();
-            if let Some(n) = limit {
-                roots.truncate(n);
-            }
+            let total = roots.len();
+            roots.truncate(match limit {
+                Some(0) => usize::MAX,
+                Some(n) => n,
+                None => LIST_LIMIT,
+            });
             let total_of = |tid: &str| all.iter().filter(|p| p.thread_id == tid).count();
             if out.json {
                 let arr: Vec<Value> = roots
@@ -171,14 +188,33 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
                 out.line("no threads yet - start one with `wipe forum post`");
             } else {
                 for r in &roots {
+                    let n = total_of(&r.thread_id);
+                    let labels = if r.labels.is_empty() {
+                        String::new()
+                    } else {
+                        format!("[{}] ", r.labels.join(","))
+                    };
                     println!(
                         "{}  {}  {}",
                         id_style(&r.thread_id),
-                        r.thread_title,
+                        crate::view::title(&r.thread_title),
                         dim(&format!(
-                            "({} posts · {})",
-                            total_of(&r.thread_id),
-                            r.author
+                            "({labels}{}{})",
+                            safe::line(&r.author),
+                            if n > 1 {
+                                format!(", {n} posts")
+                            } else {
+                                String::new()
+                            }
+                        ))
+                    );
+                }
+                if total > roots.len() {
+                    println!(
+                        "{}",
+                        dim(&format!(
+                            "… {} older (--limit 0, or wipe search <words> --forum)",
+                            total - roots.len()
                         ))
                     );
                 }
@@ -205,7 +241,21 @@ pub fn run(out: &Out, cmd: ForumCmd) -> Result<()> {
             };
             let hits = forum::search(&s, &q)?;
             if out.json {
-                out.json_value(&to_value(&hits));
+                // Same guardrails as the text view: clean, clipped bodies.
+                let mut v = to_value(&hits);
+                for h in v.as_array_mut().into_iter().flatten() {
+                    for key in ["body", "thread_title", "title"] {
+                        if let Some(text) = h.get(key).and_then(Value::as_str) {
+                            let clean = if key == "body" {
+                                safe::clip(text, POST_MAX).0
+                            } else {
+                                safe::line(text)
+                            };
+                            h[key] = json!(clean);
+                        }
+                    }
+                }
+                out.json_value(&v);
             } else if hits.is_empty() {
                 out.line("no matching posts");
             } else {
@@ -407,6 +457,35 @@ fn prune_depth(post: &Post, max_depth: Option<usize>) -> Post {
     out
 }
 
+/// Ticket refs in their canonical spelling (`t2a` -> `T-02A`, an old `T-42`
+/// -> its hex id), so posts never carry stale ids. Unknown refs stay as typed.
+fn canonical_refs(s: &Store, refs: Vec<String>) -> Vec<String> {
+    refs.into_iter()
+        .map(|r| s.resolve_ticket_id(&r).unwrap_or(r))
+        .collect()
+}
+
+/// Sanitize every body in the tree and (unless `full`) clip long ones.
+/// Returns how many were clipped.
+fn clean_tree(post: &mut Post, full: bool) -> usize {
+    let mut clipped = 0;
+    if full {
+        post.body = safe::clean(&post.body).into_owned();
+    } else {
+        let (body, cut) = safe::clip(&post.body, POST_MAX);
+        post.body = if cut > 0 {
+            clipped += 1;
+            format!("{body}\n… {cut} more chars")
+        } else {
+            body
+        };
+    }
+    for r in &mut post.replies {
+        clipped += clean_tree(r, full);
+    }
+    clipped
+}
+
 /// Render a post and (bounded by `max_depth`) its reply subtree as an indented tree.
 fn render(post: &Post, level: usize, max_depth: Option<usize>) {
     let pad = "  ".repeat(level);
@@ -418,7 +497,7 @@ fn render(post: &Post, level: usize, max_depth: Option<usize>) {
     println!(
         "{pad}{} {}{}",
         id_style(&post.id),
-        dim(&post.author),
+        dim(&safe::line(&post.author)),
         labels
     );
     for line in post.body.lines() {

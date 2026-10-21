@@ -7,7 +7,7 @@
   import Avatar from './Avatar.svelte';
   import CardMenu from './CardMenu.svelte';
   import { definitions, identities, currentProject, recentlyChanged } from '$lib/stores/board';
-  import { searchQuery, searchMatches, jumpTarget, terms, highlight } from '$lib/stores/search';
+  import { searchMatches, searchTerms, jumpTarget, highlight } from '$lib/stores/search';
   import { mediaUrl } from '$lib/api';
   import { labelColorFor, priorityColor, mediaKind } from '$lib/utils';
   import type { Attachment, Ticket } from '$lib/types';
@@ -25,9 +25,15 @@
   let acDone = $derived(ticket.acceptance?.filter((i) => i.done).length ?? 0);
   // How this card just changed (drives the live-update animation).
   let change = $derived($recentlyChanged.get(ticket.id));
-  // Search: the active terms, and where this card matched them.
-  let hl = $derived(terms($searchQuery));
+  // Search: where this card matched, and the highlighted segments - computed
+  // only for cards that matched in their title / labels (on a big board most
+  // cards are hidden by a search, and re-highlighting them all per keystroke
+  // was the bulk of its cost).
   let match = $derived($searchMatches?.get(ticket.id));
+  let titleSegs = $derived(match?.title ? highlight(ticket.title, $searchTerms) : null);
+  let labelSegs = $derived(
+    match?.labels ? ticket.labels.map((l) => highlight(l, $searchTerms)) : null
+  );
   let jumped = $derived($jumpTarget === ticket.id);
 
   // Title typewriter: when a card first appears because an agent/human just
@@ -98,10 +104,10 @@
 
   {#if ticket.labels.length}
     <div class="chips">
-      {#each ticket.labels as label (label)}
+      {#each ticket.labels as label, li (label)}
         <Chip color={labelColorFor(label, $definitions.labels)}
-          >{#each highlight(label, hl) as seg, i (i)}{#if seg.hit}<mark>{seg.s}</mark
-              >{:else}{seg.s}{/if}{/each}</Chip
+          >{#if labelSegs}{#each labelSegs[li] as seg, i (i)}{#if seg.hit}<mark>{seg.s}</mark
+                >{:else}{seg.s}{/if}{/each}{:else}{label}{/if}</Chip
         >
       {/each}
     </div>
@@ -112,9 +118,9 @@
       <span class="prio" style="--d:{dot}" title="Priority: {ticket.priority}"></span>
     {/if}
     <span class="ttext"
-      >{#if typing}{typed}{:else}{#each highlight(ticket.title, hl) as seg, i (i)}{#if seg.hit}<mark
+      >{#if typing}{typed}{:else if titleSegs}{#each titleSegs as seg, i (i)}{#if seg.hit}<mark
               >{seg.s}</mark
-            >{:else}{seg.s}{/if}{/each}{/if}{#if caret}<span class="caret" aria-hidden="true"
+            >{:else}{seg.s}{/if}{/each}{:else}{ticket.title}{/if}{#if caret}<span class="caret" aria-hidden="true"
         ></span>{/if}</span
     >
   </div>

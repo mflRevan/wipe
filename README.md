@@ -170,8 +170,10 @@ Check the board at a glance (add `--json` for a compact machine-readable view):
 
 ```sh
 wipe status
+wipe search foam is:open @me   # tickets + forum, ranked, with the matching snippet
 wipe ticket list --ready       # open work not blocked by other tickets
 wipe inbox --unread            # what others changed on your tickets
+wipe watch T-1 --until         # wait until someone else touches T-1
 ```
 
 Record board changes as their own commit (or `wipe config set board.autocommit true`):
@@ -265,26 +267,36 @@ concurrently.
 
 ## For agents
 
-Agents are expected to interact with the board exclusively through the
-`wipe` CLI - never by reading or hand-editing files under `.wipe/` (their
-format is internal). Every command accepts `--json` for one-line,
-machine-parseable output; reads are compact by default, writes return short
-receipts (`--echo` for the full object), long text goes in via `--body-file` or
-stdin, and the CLI's built-in help (`wipe help`) is written to be sufficient
-documentation on its own. A good session start is `wipe inbox --unread --json`
-then `wipe ticket list --exclude-list done --json`. See
-[docs/OUTPUT-AUDIT.md](docs/OUTPUT-AUDIT.md) for how much each command prints.
+Agents drive the board through the `wipe` CLI only - never by reading or
+hand-editing files under `.wipe/`. The CLI is built to cost an agent as little
+context as possible and to teach itself:
 
-`wipe` ships an agent **skill** (`SKILL.md`) that teaches coding agents how to
-drive the board. Install it into a skills directory that your tools
-auto-discover:
+- **Small by default, deeper on request.** `status` is one line per ticket;
+  `ticket show` gives the body, checklists and the newest three comments, clips
+  long text with a count, and ends with the flags that reveal the rest
+  (`--comments all`, `--activity`, `--full`). Lists, searches and the inbox have
+  default limits that say how much more there is.
+- **Search does the digging.** `wipe search` ranks tickets and forum posts and
+  shows the one snippet that matched, with GitHub-style qualifiers (`label:`,
+  `list:`, `@me`, `is:blocked`...).
+- **Waiting is a plain command.** `wipe watch` prints one line per change by
+  someone else - or, with `--until`, exits on the first - so it works in any
+  harness: as a background task whose completion is the notification, as a
+  line-by-line monitor, or as a blocking call with `--timeout`.
+- **Safe to print.** Terminal escapes are stripped and pasted base64 blobs
+  (screenshots in a body) become `[image/png base64, 34 KB omitted]`, so board
+  text can't flood or hijack a session.
+- `--json` gives the same views as compact one-line JSON; writes return short
+  receipts (`--echo` for the full object); errors exit non-zero with a hint.
+  Long text goes in via `--body-file` or stdin.
+
+See [docs/OUTPUT-AUDIT.md](docs/OUTPUT-AUDIT.md) for what each command prints on
+real boards. A short bootstrap skill is available for tools that load skills:
 
 ```sh
 wipe skill install                 # auto-detect .claude/ or .agents/ in this repo
-wipe skill install --target agents # cross-tool .agents/skills/wipe/
 wipe skill install --global        # user-wide (~/.claude/skills/wipe/)
-wipe skill path                    # show where it would go
-wipe skill show                    # print the guide to stdout
+wipe skill show                    # print it
 ```
 
 ## Repository layout

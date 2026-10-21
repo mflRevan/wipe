@@ -56,7 +56,7 @@ pub fn canonicalize(cmd: &mut Command) {
         },
         Command::Comment(c) => match c {
             CommentCmd::Add { ticket, .. }
-            | CommentCmd::List { ticket }
+            | CommentCmd::List { ticket, .. }
             | CommentCmd::Remove { ticket, .. }
             | CommentCmd::Edit { ticket, .. }
             | CommentCmd::Reattribute { ticket, .. } => fix(s, ticket),
@@ -94,22 +94,82 @@ pub fn canonicalize(cmd: &mut Command) {
 }
 
 /// Finish an id translation that was interrupted (a crash, or a file held open
-/// by another process), so no command ever sees a half-converted board.
+/// by another process), so no command ever sees a half-converted board; and,
+/// once per hex board, convert decimal leftovers the translation never reached
+/// (see [`wipe_core::translate::repair`]).
 pub fn resume_interrupted() {
     let Ok(s) = Store::discover(".") else {
         return;
     };
-    if !wipe_core::translate::interrupted(&s) {
+    if wipe_core::translate::interrupted(&s) {
+        match translate(&s) {
+            Ok(n) => crate::output::hint(format!(
+                "finished an interrupted ticket-id translation ({n} ids now in the hex format)"
+            )),
+            Err(e) => eprintln!(
+                "wipe: an interrupted ticket-id translation could not be finished yet: {e:#}                  (it is retried on the next command, or run `wipe board translate-ids --yes`)"
+            ),
+        }
         return;
     }
-    match translate(&s) {
-        Ok(n) => crate::output::hint(format!(
-            "finished an interrupted ticket-id translation ({n} ids now in the hex format)"
-        )),
-        Err(e) => eprintln!(
-            "wipe: an interrupted ticket-id translation could not be finished yet: {e:#}
-             (it is retried on the next command, or run `wipe board translate-ids --yes`)"
-        ),
+    let marker = s.cache_dir().join(REPAIR_MARKER);
+    if marker.exists() || s.load_board().map_or(true, |b| b.ids != IdFormat::Hex) {
+        return;
+    }
+    match repair(&s) {
+        Ok(r) => {
+            let _ = std::fs::create_dir_all(s.cache_dir());
+            let _ = std::fs::write(&marker, chrono::Utc::now().to_rfc3339());
+            if r.changed() {
+                crate::output::hint(repair_summary(&r));
+            }
+        }
+        Err(e) => eprintln!("wipe: could not finish converting leftover decimal ticket ids: {e:#}"),
+    }
+}
+
+/// Marks a hex board as checked for decimal leftovers (bump to re-run).
+const REPAIR_MARKER: &str = "ids-repaired-1";
+
+/// Run [`wipe_core::translate::repair`] under the board's write lock.
+pub fn repair(s: &Store) -> anyhow::Result<wipe_core::translate::Repair> {
+    let _lock = s.lock()?;
+    Ok(wipe_core::translate::repair(s, chrono::Utc::now())?)
+}
+
+/// One line describing a repair.
+pub fn repair_summary(r: &wipe_core::translate::Repair) -> String {
+    let mut parts = Vec::new();
+    if !r.renamed.is_empty() {
+        let sample: Vec<String> = r
+            .renamed
+            .iter()
+            .take(3)
+            .map(|(o, n)| format!("{o} -> {n}"))
+            .collect();
+        parts.push(format!(
+            "{} leftover decimal ticket id(s) converted ({}{})",
+            r.renamed.len(),
+            sample.join(", "),
+            if r.renamed.len() > 3 { ", ..." } else { "" }
+        ));
+    }
+    if r.refs_fixed > 0 {
+        parts.push(format!(
+            "{} file(s) with stale ticket refs updated",
+            r.refs_fixed
+        ));
+    }
+    if !r.ambiguous.is_empty() {
+        parts.push(format!(
+            "left as is (could be either format): {}",
+            r.ambiguous.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        "no leftover decimal ticket ids".into()
+    } else {
+        parts.join("; ")
     }
 }
 

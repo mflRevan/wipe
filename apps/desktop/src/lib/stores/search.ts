@@ -6,7 +6,7 @@
 // their authors, checklist and acceptance items, attachment names. Each keystroke
 // is then a handful of substring scans over pre-lowered strings - no regex, no
 // re-walking the board - so filtering stays instant on large boards.
-import { derived, writable } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import { board, identities } from './board';
 import type { Board, Identity, Ticket } from '$lib/types';
 
@@ -28,6 +28,9 @@ export function terms(q: string | null): string[] {
   }
   return out;
 }
+
+/** The active query's terms, computed once per keystroke for every card. */
+export const searchTerms = derived(searchQuery, ($q) => terms($q));
 
 type Entry = { id: string; hay: string; title: string; labels: string };
 
@@ -65,19 +68,19 @@ function entryFor(t: Ticket, people: Map<string, string>): Entry {
   };
 }
 
-/** The per-board index, rebuilt only when the board or identities change. Ticket
- *  objects that survive a refresh unchanged keep their entry (cheap rebuilds). */
+/** The per-board index. Ticket objects that survive a refresh unchanged keep
+ *  their entry, so a rebuild only re-folds what changed. */
 let cache = new WeakMap<Ticket, Entry>();
 let cachedIds: unknown = null;
-export const searchIndex = derived([board, identities], ([$board, $ids]) => {
+function indexOf(b: Board | null, ids: Identity[]): Map<string, Entry> {
   // Display names feed the index; new identities invalidate every entry.
-  if ($ids !== cachedIds) {
+  if (ids !== cachedIds) {
     cache = new WeakMap();
-    cachedIds = $ids;
+    cachedIds = ids;
   }
-  const people = new Map<string, string>(($ids as Identity[]).map((i) => [i.id, i.display_name]));
+  const people = new Map<string, string>(ids.map((i) => [i.id, i.display_name]));
   const map = new Map<string, Entry>();
-  for (const l of ($board as Board | null)?.lists ?? []) {
+  for (const l of b?.lists ?? []) {
     for (const t of l.tickets) {
       let e = cache.get(t);
       if (!e) {
@@ -88,18 +91,30 @@ export const searchIndex = derived([board, identities], ([$board, $ids]) => {
     }
   }
   return map;
-});
+}
+
+// Opening the search bar warms the index in idle time, so the first keystroke
+// doesn't pay for folding every ticket.
+if (typeof window !== 'undefined') {
+  const idle =
+    (window as Window & { requestIdleCallback?: (cb: () => void) => number })
+      .requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1));
+  searchQuery.subscribe((q) => {
+    if (q === null) return;
+    idle(() => indexOf(get(board), get(identities)));
+  });
+}
 
 /** Where a ticket matched: drives highlighting and the "matched in" hint. */
 export type Match = { title: boolean; labels: boolean; elsewhere: boolean };
 
 /** Ticket id -> how it matched, for every ticket matching ALL terms. `null` when
- *  no search is active (everything visible). */
-export const searchMatches = derived([searchIndex, searchQuery], ([$index, $q]) => {
-  const ts = terms($q);
+ *  no search is active (everything visible) - and then no index is built at all,
+ *  so board refreshes cost nothing here until someone searches. */
+export const searchMatches = derived([board, identities, searchTerms], ([$board, $ids, ts]) => {
   if (!ts.length) return null;
   const out = new Map<string, Match>();
-  for (const [id, e] of $index) {
+  for (const [id, e] of indexOf($board as Board | null, $ids as Identity[])) {
     if (!ts.every((t) => e.hay.includes(t))) continue;
     const title = ts.some((t) => e.title.includes(t));
     const labels = ts.some((t) => e.labels.includes(t));
@@ -151,6 +166,8 @@ export function resolveJump(b: Board | null, digits: string): Ticket | null {
     return Number.isNaN(n) ? null : n;
   };
   const byLegacy = () => {
+    // Legacy ids are decimal: `2AF` must not parseInt() its way to legacy T-2.
+    if (!/^\d+$/.test(digits)) return null;
     const n = parseInt(digits, 10);
     return all.find((t) => t.legacy_id && valueOf(t.legacy_id, 10) === n) ?? null;
   };

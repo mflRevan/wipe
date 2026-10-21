@@ -52,7 +52,7 @@ impl Store {
         self.wipe_dir().join("settings.json")
     }
 
-    fn tickets_dir(&self) -> PathBuf {
+    pub fn tickets_dir(&self) -> PathBuf {
         self.wipe_dir().join("tickets")
     }
 
@@ -300,14 +300,14 @@ impl Store {
             }
             crate::model::IdFormat::Hex => {
                 let legacy_first = digits.len() < 3 && digits.bytes().all(|b| b.is_ascii_digit());
+                // Translation maps decimal `T-n` to hex `n` (and repair keeps it so),
+                // so the only candidate is one file - no need to read the board.
                 let by_legacy = || -> Option<String> {
                     let n: u64 = digits.parse().ok()?;
                     let legacy = crate::id::ticket_id(n);
-                    self.load_all_tickets()
-                        .ok()?
-                        .into_iter()
-                        .find(|t| t.legacy_id.as_deref() == Some(legacy.as_str()))
-                        .map(|t| t.id)
+                    let id = crate::id::hex_ticket_id(n);
+                    let t: Ticket = read_json(&self.ticket_path(&id)).ok()?;
+                    (t.legacy_id.as_deref() == Some(legacy.as_str())).then_some(id)
                 };
                 let by_hex = || -> Option<String> {
                     let n = u64::from_str_radix(&digits, 16).ok()?;
@@ -541,13 +541,33 @@ pub(crate) fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    serde_json::from_slice(&bytes).map_err(|e| unreadable(path, &bytes, &e))
+}
+
+/// A parse error that names the file (from `.wipe/` on) and, for the common
+/// cause, says what to do: a git merge left conflict markers in it.
+fn unreadable(path: &Path, bytes: &[u8], e: &serde_json::Error) -> Error {
+    let shown = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .rsplit_once("/.wipe/")
+        .map(|(_, rest)| format!(".wipe/{rest}"))
+        .unwrap_or_else(|| path.display().to_string());
+    let conflict = bytes.windows(7).any(|w| w == b"<<<<<<<");
+    Error::msg(if conflict {
+        format!(
+            "{shown} has git merge-conflict markers - resolve the conflict in that file \
+             (keep one side, or merge both by hand), then retry"
+        )
+    } else {
+        format!("{shown} is not valid JSON ({e}) - restore it from git (`git checkout -- {shown}`) or fix it by hand")
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Ticket;
+    use crate::model::{Relation, RelationKind, Ticket};
     use chrono::{TimeZone, Utc};
 
     fn now() -> chrono::DateTime<Utc> {
@@ -561,64 +581,52 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_layout() {
-        let (_dir, store) = temp_project();
-        assert!(store.wipe_dir().join("board.json").is_file());
-        assert!(store.wipe_dir().join("definitions.json").is_file());
-        assert!(store.wipe_dir().join("settings.json").is_file());
-        assert!(store.wipe_dir().join("tickets").is_dir());
-        assert!(store.wipe_dir().join("media").is_dir());
-        assert!(store.wipe_dir().join(".gitignore").is_file());
-    }
-
-    #[test]
-    fn init_twice_fails() {
-        let (dir, _store) = temp_project();
-        let err = Store::init(dir.path(), "Again", now()).unwrap_err();
-        assert!(matches!(err, Error::AlreadyInitialized(_)));
-    }
-
-    #[test]
-    fn discover_walks_up() {
-        let (dir, _store) = temp_project();
+    fn init_layout_reinit_and_discovery() {
+        let (dir, store) = temp_project();
+        for f in [
+            "board.json",
+            "definitions.json",
+            "settings.json",
+            ".gitignore",
+        ] {
+            assert!(store.wipe_dir().join(f).is_file(), "{f}");
+        }
+        for d in ["tickets", "media"] {
+            assert!(store.wipe_dir().join(d).is_dir(), "{d}");
+        }
+        assert!(matches!(
+            Store::init(dir.path(), "Again", now()),
+            Err(Error::AlreadyInitialized(_))
+        ));
         let nested = dir.path().join("a").join("b");
         fs::create_dir_all(&nested).unwrap();
-        let found = Store::discover(&nested).unwrap();
         assert_eq!(
-            fs::canonicalize(found.root()).unwrap(),
+            fs::canonicalize(Store::discover(&nested).unwrap().root()).unwrap(),
             fs::canonicalize(dir.path()).unwrap()
         );
     }
 
     #[test]
-    fn ticket_roundtrip_and_ordering() {
+    fn ticket_files_roundtrip_in_order_and_reject_traversal() {
         let (_dir, store) = temp_project();
-        for n in [1u64, 2, 10] {
-            let t = Ticket::new(format!("T-{n}"), format!("Ticket {n}"), now());
-            store.save_ticket(&t).unwrap();
+        for id in ["T-00A", "T-002", "T-001"] {
+            store
+                .save_ticket(&Ticket::new(id, format!("Ticket {id}"), now()))
+                .unwrap();
         }
-        // Numeric, not lexical, ordering: T-2 before T-10.
-        assert_eq!(store.ticket_ids().unwrap(), vec!["T-1", "T-2", "T-10"]);
-        let loaded = store.load_ticket("T-10").unwrap();
-        assert_eq!(loaded.title, "Ticket 10");
-    }
-
-    #[test]
-    fn missing_ticket_errors() {
-        let (_dir, store) = temp_project();
+        assert_eq!(
+            store.ticket_ids().unwrap(),
+            ["T-001", "T-002", "T-00A"],
+            "by counter"
+        );
+        assert_eq!(store.load_ticket("T-00A").unwrap().title, "Ticket T-00A");
         assert!(matches!(
-            store.load_ticket("T-99"),
+            store.load_ticket("T-099"),
             Err(Error::TicketNotFound(_))
         ));
-    }
 
-    #[test]
-    fn ticket_id_traversal_is_rejected() {
-        let (_dir, store) = temp_project();
-        // A crafted id must never resolve to a path outside tickets/. board.json
-        // exists next to tickets/, so if traversal worked delete would remove it.
+        // A crafted id never resolves outside tickets/ (board.json sits next to it).
         let board_json = store.wipe_dir().join("board.json");
-        assert!(board_json.exists());
         for evil in ["../board", "../../evil", "T-1/../../board", "..\\board"] {
             assert!(matches!(
                 store.delete_ticket(evil),
@@ -629,19 +637,31 @@ mod tests {
                 Err(Error::TicketNotFound(_))
             ));
         }
-        // The sibling file is untouched.
         assert!(board_json.exists());
     }
 
+    /// Board files are written for clean git diffs: newline-terminated, byte
+    /// stable on re-save, empty fields omitted, kebab-case enums.
     #[test]
-    fn serialization_is_deterministic_and_newline_terminated() {
+    fn files_are_deterministic_and_minimal() {
         let (_dir, store) = temp_project();
-        let raw = fs::read_to_string(store.wipe_dir().join("board.json")).unwrap();
+        let path = store.wipe_dir().join("board.json");
+        let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.ends_with('\n'));
-        // Round-trip: load and re-save yields byte-identical output.
-        let board = store.load_board().unwrap();
-        store.save_board(&board).unwrap();
-        let raw2 = fs::read_to_string(store.wipe_dir().join("board.json")).unwrap();
-        assert_eq!(raw, raw2);
+        store.save_board(&store.load_board().unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+
+        let mut t = Ticket::new("T-001", "Hello", now());
+        let json = serde_json::to_string(&t).unwrap();
+        for absent in ["labels", "assignees", "\"body\"", "relations", "legacy_id"] {
+            assert!(!json.contains(absent), "{absent} in {json}");
+        }
+        t.relations.push(Relation {
+            kind: RelationKind::BlockedBy,
+            target: "T-002".into(),
+        });
+        assert!(serde_json::to_string(&t)
+            .unwrap()
+            .contains(r#""kind":"blocked-by""#));
     }
 }

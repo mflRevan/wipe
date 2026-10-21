@@ -82,8 +82,32 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe status",
         description:
-          "Compact rows per list (done collapses to a count), plus your unread count. --all expands done; --full dumps every ticket's content.",
-        example: "wipe status --json",
+          "Every list and its tickets, one line each (done collapses to a count; long lists stop at 60 with a pointer), plus your unread count. --all expands everything.",
+        example: "wipe status",
+      },
+    ],
+  },
+  {
+    name: "search",
+    summary: "Find tickets and forum posts - ranked, with the snippet that matched.",
+    commands: [
+      {
+        command: "wipe search",
+        description:
+          'Words (all must match), "phrases", -exclude, ticket ids in any spelling, and qualifiers: label:, list:, @who / assignee:, author:, priority:, is:open|done|blocked|ready|assigned|unassigned. Title hits rank first; other hits say where they matched (body, comment c-3 by ada, checklist...). --tickets / --forum narrow it.',
+        example: 'wipe search foam "storm waves" is:open @me',
+      },
+    ],
+  },
+  {
+    name: "watch",
+    summary: "Wait for changes - one line per change, or exit on the first.",
+    commands: [
+      {
+        command: "wipe watch",
+        description:
+          "Targets: tickets, lists, forum threads, or forum (none = the board). --on picks events (created, moved, commented, edited, labeled, assigned, blocked, attached, checked, deleted, posted); --from / --to match moves out of / into a list; --until exits 0 on the first match, --timeout gives up with exit 124. Your own changes never fire. Each line names the ticket, what happened, who did it, and the comment text - built for agent harnesses: run it in the background, or block on it.",
+        example: "wipe watch T-02A --from review --until --timeout 30m",
       },
     ],
   },
@@ -142,8 +166,8 @@ export const CLI_GROUPS: CliGroup[] = [
       },
       {
         command: "wipe ticket move",
-        description: "Move a ticket to another list (optionally at a position).",
-        example: "wipe ticket move T-1 --to in-progress",
+        description: "Move a ticket to another list (optionally at a position with --pos).",
+        example: "wipe ticket move T-02A in-progress",
       },
       {
         command: "wipe ticket edit",
@@ -159,14 +183,14 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe ticket show",
         description:
-          "Show a single ticket with its comments, activity, and the commits that mention it (--comments N, --comments-only, --no-activity trim it).",
-        example: "wipe ticket show T-1 --json",
+          "One ticket: facts on one line, body, checklists, attachments, the newest 3 comments and the commits that mention it. Long text is clipped with a count; --comments all / N, --activity and --full reveal the rest.",
+        example: "wipe ticket show T-02A --comments all",
       },
       {
         command: "wipe ticket list",
         description:
-          "Compact rows, filtered by --list / --exclude-list / --label / --assignee me / --since 2d / --ready / --blocked, with --fields to pick columns.",
-        example: "wipe ticket list --exclude-list done --ready --json",
+          "Compact rows (100 by default), filtered by --list / --exclude-list / --label / --assignee me / --since 2d / --ready / --blocked / --search <query>, with --fields to pick JSON columns.",
+        example: "wipe ticket list --exclude-list done --ready",
       },
       {
         command: "wipe ticket submit / approve / reject",
@@ -407,8 +431,8 @@ export const CLI_GROUPS: CliGroup[] = [
       {
         command: "wipe inbox",
         description:
-          "Print new events newest-first (50 by default) and exit. --unread shows only what's new since you last read and advances your read cursor; --all covers everything anyone else changed.",
-        example: "wipe inbox --unread --json",
+          "Events newest-first, grouped by ticket or thread (20 by default), then exit. --unread shows only what's new since you last read and advances your read cursor; --all covers everything anyone else changed (no identity needed).",
+        example: "wipe inbox --unread",
       },
     ],
   },

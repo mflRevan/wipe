@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { dndzone, SHADOW_ITEM_MARKER_PROPERTY_NAME, type DndEvent } from 'svelte-dnd-action';
-  import { flip } from 'svelte/animate';
   import {
     Plus,
     MoreHorizontal,
@@ -72,25 +72,90 @@
     $searchMatches ? tickets.filter((t) => $searchMatches.has(t.id)).length : tickets.length
   );
 
-  // Reorder animation, but only for cards the user can actually see: a long
-  // list shifting by one slot would otherwise start (and measure) an animation
-  // for every card in it on each hover step of a drag.
-  let viewport: { at: number; rect: DOMRect } | null = null;
-  function visibleFlip(
-    node: Element,
-    rects: { from: DOMRect; to: DOMRect },
-    params: { duration: number }
-  ) {
-    const zone = node.parentElement;
-    if (zone) {
-      const now = performance.now();
-      if (!viewport || now - viewport.at > 16) viewport = { at: now, rect: zone.getBoundingClientRect() };
-      const r = viewport.rect;
-      const near = (b: DOMRect) => b.bottom >= r.top - 80 && b.top <= r.bottom + 80;
-      if (!near(rects.from) && !near(rects.to)) return { duration: 0 };
-    }
-    return flip(node, rects, params);
+  // Lists this long get cheaper rendering: off-screen cards skip layout and
+  // paint (content-visibility, see the style block). Short lists render as before.
+  const LONG = 40;
+  let long = $derived(tickets.length > LONG);
+
+  // Reorder animation (FLIP), batched for the whole list: snapshot where the
+  // visible cards are before an update, read where they landed after it, then
+  // slide them with the Web Animations API. Two layouts per update, however long
+  // the list - Svelte's per-item `animate:` measured and restyled every card in
+  // turn, forcing a layout per card on each hover step of a drag.
+  let zone = $state<HTMLElement | null>(null);
+  let snapshot: Map<string, DOMRect> | null = null;
+  const MARGIN = 120;
+  function itemsOf(el: HTMLElement): HTMLElement[] {
+    return Array.from(el.children) as HTMLElement[];
   }
+  function measure(el: HTMLElement): Map<string, DOMRect> {
+    const view = el.getBoundingClientRect();
+    const top = view.top - MARGIN;
+    const bottom = view.bottom + MARGIN;
+    const items = itemsOf(el);
+    // Cards stack top to bottom, so binary-search the first one near the
+    // viewport instead of reading every card's box. (Search hides cards with
+    // display:none - zero-size boxes break the ordering - so scan linearly then.)
+    let lo = 0;
+    if (!$searchMatches) {
+      let hi = items.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (items[mid].getBoundingClientRect().bottom < top) lo = mid + 1;
+        else hi = mid;
+      }
+    }
+    const out = new Map<string, DOMRect>();
+    for (let i = lo; i < items.length; i++) {
+      const item = items[i];
+      const id = item.dataset.id;
+      if (!id) continue;
+      const r = item.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      if (r.top > bottom) break;
+      if (r.bottom >= top) out.set(id, r);
+    }
+    return out;
+  }
+  // Slides this list started and that may still be running.
+  const running = new Map<HTMLElement, Animation>();
+  function play(el: HTMLElement, before: Map<string, DOMRect>) {
+    const items = itemsOf(el).filter((i) => i.dataset.id && before.has(i.dataset.id));
+    // Stop slides still running from the previous step first, so the reads
+    // below see final positions (the snapshot already holds where they were).
+    for (const [node, a] of running) {
+      a.cancel();
+      running.delete(node);
+    }
+    const moves: [HTMLElement, number, number][] = [];
+    for (const i of items) {
+      const from = before.get(i.dataset.id!)!;
+      const to = i.getBoundingClientRect();
+      const dx = from.left - to.left;
+      const dy = from.top - to.top;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) moves.push([i, dx, dy]);
+    }
+    for (const [i, dx, dy] of moves) {
+      const a = i.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+        duration: flipMs,
+        easing: 'cubic-bezier(0.33, 1, 0.68, 1)'
+      });
+      running.set(i, a);
+      a.onfinish = () => running.delete(i);
+    }
+  }
+  $effect.pre(() => {
+    void tickets;
+    // Only `tickets` drives this: binding the zone at mount must not force an
+    // early layout of the whole board just to animate nothing.
+    snapshot = untrack(() => (flipMs && zone ? measure(zone) : null));
+  });
+  $effect(() => {
+    void tickets;
+    const before = snapshot;
+    snapshot = null;
+    if (before?.size && zone) play(zone, before);
+  });
 
   let renaming = $state(false);
   let renameDraft = $state('');
@@ -199,6 +264,8 @@
   <div
     class="col-body wp-scroll"
     class:dragging={dragActive}
+    class:long
+    bind:this={zone}
     use:dndzone={{
       items: tickets,
       flipDurationMs: flipMs,
@@ -237,8 +304,8 @@
     {#each tickets as ticket (ticket.id)}
       <div
         class="item"
+        data-id={ticket.id}
         class:hidden={$searchMatches && !(marker in ticket) && !$searchMatches.has(ticket.id)}
-        animate:visibleFlip={{ duration: flipMs }}
       >
         {#if marker in ticket}
           <!-- The drop slot: render the dragged card hidden so the gap is EXACTLY
@@ -415,6 +482,15 @@
   }
   .item.hidden {
     display: none;
+  }
+  /* Long lists: cards scrolled out of view skip layout and paint until they come
+     near the viewport (their last rendered height is remembered). On the card
+     itself, so its own shadow and focus ring stay unclipped - but not while its
+     quick menu is open: containment would anchor the menu's fixed popover to
+     the card instead of the viewport. */
+  .col-body.long :global(.card:not(:has(.cm-btn.open))) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 92px;
   }
   /* Drop slot: exactly the size of the card being dragged (its hidden card sets the
      height), shown as a dashed accent outline so you see precisely where it lands. */

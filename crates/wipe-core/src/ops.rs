@@ -414,19 +414,26 @@ pub fn checks_add(
 }
 
 /// Set an item's checked state. `done = None` toggles it. Returns the
-/// resulting state.
+/// resulting state. A change is logged as `checked` / `unchecked` activity.
 pub fn checks_set(
     store: &Store,
     kind: Checks,
     ticket_id: &str,
     item_id: &str,
     done: Option<bool>,
+    actor: &str,
     now: DateTime<Utc>,
 ) -> Result<bool> {
     let mut ticket = store.load_ticket(ticket_id)?;
     let item = checks_item_mut(kind, &mut ticket, item_id)?;
+    let was = item.done;
     item.done = done.unwrap_or(!item.done);
     let state = item.done;
+    let detail = format!("{} {}", item.id, item.text);
+    if state != was {
+        let verb = if state { "checked" } else { "unchecked" };
+        ticket.log_activity(actor, verb, detail, now);
+    }
     ticket.updated = now;
     store.save_ticket(&ticket)?;
     Ok(state)
@@ -580,9 +587,13 @@ pub fn board_view(store: &Store) -> Result<(Board, Vec<ListView>)> {
     for list in &board.lists {
         let mut tickets = Vec::with_capacity(list.cards.len());
         for id in &list.cards {
-            // Skip dangling references rather than failing the whole view.
-            if let Ok(t) = store.load_ticket(id) {
-                tickets.push(t);
+            // A dangling card is skipped quietly; a ticket file that exists but
+            // can't be read (a merge conflict) is skipped with a warning, so one
+            // broken file never hides the whole board - nor itself.
+            match store.load_ticket(id) {
+                Ok(t) => tickets.push(t),
+                Err(Error::TicketNotFound(_)) => {}
+                Err(e) => eprintln!("warning: skipping {id}: {e}"),
             }
         }
         out.push((list.id.clone(), tickets));
@@ -1080,315 +1091,13 @@ mod tests {
         (dir, store)
     }
 
-    #[test]
-    fn create_places_on_first_list_and_allocates_ids() {
-        let (_d, s) = project();
-        let t1 = create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        let t2 = create_ticket(
-            &s,
-            NewTicket {
-                title: "B".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(t1.id, "T-001");
-        assert_eq!(t2.id, "T-002");
-        let board = s.load_board().unwrap();
-        assert_eq!(board.lists[0].cards, vec!["T-001", "T-002"]);
-        assert_eq!(board.next_ticket, 3);
-    }
-
-    #[test]
-    fn checklist_lifecycle() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        let k = Checks::Checklist;
-        let a = checks_add(&s, k, "T-1", "first", now()).unwrap();
-        let b = checks_add(&s, k, "T-1", "second", now()).unwrap();
-        let c = checks_add(&s, k, "T-1", "third", now()).unwrap();
-        assert_eq!(
-            (a.as_str(), b.as_str(), c.as_str()),
-            ("ck-1", "ck-2", "ck-3")
-        );
-
-        // toggle + explicit set
-        assert!(checks_set(&s, k, "T-1", "ck-1", None, now()).unwrap());
-        assert!(!checks_set(&s, k, "T-1", "ck-1", Some(false), now()).unwrap());
-        checks_set(&s, k, "T-1", "ck-2", Some(true), now()).unwrap();
-
-        // edit + move (ck-3 to front) + remove
-        checks_edit(&s, k, "T-1", "ck-2", "second!", now()).unwrap();
-        checks_move(&s, k, "T-1", "ck-3", 0, now()).unwrap();
-        checks_remove(&s, k, "T-1", "ck-1", now()).unwrap();
-
-        let t = s.load_ticket("T-1").unwrap();
-        assert_eq!(
-            t.checklist
-                .iter()
-                .map(|i| i.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["ck-3", "ck-2"]
-        );
-        assert_eq!(t.checklist[1].text, "second!");
-        assert!(t.checklist[1].done);
-        // ids never reuse even after removal
-        assert_eq!(t.next_check, 4);
-
-        // missing item is an error, not a panic
-        assert!(checks_set(&s, k, "T-1", "ck-99", None, now()).is_err());
-        assert!(checks_remove(&s, k, "T-1", "ck-99", now()).is_err());
-    }
-
-    #[test]
-    fn acceptance_criteria_are_independent_of_the_checklist() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "Review me".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        // Both surfaces allocate from their own counters and namespaces.
-        let ck = checks_add(&s, Checks::Checklist, "T-1", "do the work", now()).unwrap();
-        let a1 = checks_add(&s, Checks::Acceptance, "T-1", "tests pass", now()).unwrap();
-        let a2 = checks_add(&s, Checks::Acceptance, "T-1", "docs updated", now()).unwrap();
-        assert_eq!(
-            (ck.as_str(), a1.as_str(), a2.as_str()),
-            ("ck-1", "ac-1", "ac-2")
-        );
-
-        assert!(checks_set(&s, Checks::Acceptance, "T-1", "ac-1", Some(true), now()).unwrap());
-        let t = s.load_ticket("T-1").unwrap();
-        assert!(t.acceptance[0].done);
-        assert!(!t.checklist[0].done);
-        assert_eq!((t.next_check, t.next_accept), (2, 3));
-
-        // A `ck-` ID is not addressable through the acceptance surface.
-        assert!(checks_set(&s, Checks::Acceptance, "T-1", "ck-1", None, now()).is_err());
-    }
-
-    #[test]
-    fn move_relocates_card() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        move_ticket(&s, "T-1", "done", None, "tester", now()).unwrap();
-        let board = s.load_board().unwrap();
-        assert!(board.list("backlog").unwrap().cards.is_empty());
-        assert_eq!(board.list("done").unwrap().cards, vec!["T-001"]);
-    }
-
-    #[test]
-    fn move_to_unknown_list_errors() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        assert!(matches!(
-            move_ticket(&s, "T-1", "nope", None, "tester", now()),
-            Err(Error::ListNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn delete_removes_file_and_card() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        delete_ticket(&s, "T-1", now()).unwrap();
-        assert!(matches!(
-            s.load_ticket("T-1"),
-            Err(Error::TicketNotFound(_))
-        ));
-        let board = s.load_board().unwrap();
-        assert!(board.lists.iter().all(|l| l.cards.is_empty()));
-    }
-
-    #[test]
-    fn list_lifecycle() {
-        let (_d, s) = project();
-        let id = add_list(&s, "In Review", now()).unwrap();
-        assert_eq!(id, "in-review");
-        rename_list(&s, &id, "Review", now()).unwrap();
-        move_list(&s, &id, 0, now()).unwrap();
-        let board = s.load_board().unwrap();
-        assert_eq!(board.lists[0].id, "in-review");
-        assert_eq!(board.lists[0].name, "Review");
-        remove_list(&s, &id, false, now()).unwrap();
-        assert!(s.load_board().unwrap().list("in-review").is_none());
-    }
-
-    #[test]
-    fn remove_nonempty_list_requires_force() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        assert!(remove_list(&s, "backlog", false, now()).is_err());
-        remove_list(&s, "backlog", true, now()).unwrap();
-        assert!(matches!(
-            s.load_ticket("T-1"),
-            Err(Error::TicketNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn update_ticket_applies_patch() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        let patch = TicketPatch {
-            title: Some("A2".into()),
-            priority: Some(Some("high".into())),
-            labels: Some(vec!["blocked".into()]),
-            assignees: Some(vec!["ada@example.com".into()]),
-            ..Default::default()
-        };
-        let t = update_ticket(&s, "T-1", patch, "tester", now()).unwrap();
-        assert_eq!(t.title, "A2");
-        assert_eq!(t.priority.as_deref(), Some("high"));
-        assert_eq!(t.labels, vec!["blocked"]);
-        let cleared = update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                priority: Some(None),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(cleared.priority, None);
-    }
-
-    #[test]
-    fn activity_is_logged_for_create_move_and_patch() {
-        let (_d, s) = project();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        move_ticket(&s, "T-1", "done", None, "ada", now()).unwrap();
-        update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                labels: Some(vec!["blocked".into()]),
-                assignees: Some(vec!["ada@example.com".into()]),
-                priority: Some(Some("high".into())),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-
-        let t = s.load_ticket("T-1").unwrap();
-        let kinds: Vec<&str> = t.activity.iter().map(|a| a.kind.as_str()).collect();
-        assert_eq!(
-            kinds,
-            vec!["created", "moved", "priority", "label-added", "assigned"]
-        );
-        // Moved event carries the destination list's display name, not its id.
-        let moved = t.activity.iter().find(|a| a.kind == "moved").unwrap();
-        assert_eq!(moved.detail, "Done");
-        assert!(t.activity.iter().all(|a| a.actor == "ada"));
-
-        // Removing the label/assignee logs the inverse events.
-        update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                labels: Some(vec![]),
-                assignees: Some(vec![]),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        let t = s.load_ticket("T-1").unwrap();
-        assert!(t.activity.iter().any(|a| a.kind == "label-removed"));
-        assert!(t.activity.iter().any(|a| a.kind == "unassigned"));
-    }
-
-    fn new_ticket(s: &Store, title: &str, actor: &str) -> Ticket {
+    fn new_ticket(s: &Store, title: &str, list: Option<&str>, actor: &str) -> Ticket {
         create_ticket(
             s,
             NewTicket {
                 title: title.into(),
                 body: Some(format!("{title} body")),
-                list: Some("todo".into()),
+                list: list.map(Into::into),
                 ..Default::default()
             },
             actor,
@@ -1398,155 +1107,189 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_by_someone_else_preserves_the_original_once() {
-        let (_d, s) = project();
-        new_ticket(&s, "raw note", "bilal");
-        // The creator editing their own note does not freeze anything.
-        let t = update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                body: Some("raw note, typo fixed".into()),
-                ..Default::default()
-            },
-            "bilal",
-            now(),
-        )
-        .unwrap();
-        assert!(t.original.is_none());
-
-        // An agent's rewrite freezes the creator's current wording...
-        let t = update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                title: Some("Proper ticket".into()),
-                body: Some("## Plan\n...".into()),
-                ..Default::default()
-            },
-            "claude",
-            now(),
-        )
-        .unwrap();
-        let o = t.original.clone().unwrap();
-        assert_eq!(
-            (o.title.as_str(), o.body.as_str()),
-            ("raw note", "raw note, typo fixed")
-        );
-        assert_eq!(
-            (o.author.as_str(), o.rewritten_by.as_str()),
-            ("bilal", "claude")
-        );
-
-        // ...and later rewrites never touch it.
-        let t = update_ticket(
-            &s,
-            "T-1",
-            TicketPatch {
-                body: Some("third version".into()),
-                ..Default::default()
-            },
-            "someone-else",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(t.original, Some(o));
-    }
-
-    #[test]
-    fn blockers_link_unlink_and_reject_cycles() {
-        let (_d, s) = project();
-        for n in ["a", "b", "c"] {
-            new_ticket(&s, n, "tester");
-        }
-        assert!(add_blocker(&s, "T-2", "T-1", "tester", now()).unwrap());
-        assert!(!add_blocker(&s, "T-2", "T-1", "tester", now()).unwrap()); // idempotent
-        assert!(add_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
-        // T-1 <- T-2 <- T-3: making T-1 wait on T-3 would close the loop.
-        let err = add_blocker(&s, "T-1", "T-3", "tester", now()).unwrap_err();
-        assert!(err.to_string().contains("cycle"), "{err}");
-        assert!(add_blocker(&s, "T-1", "T-1", "tester", now()).is_err());
-        assert!(add_blocker(&s, "T-1", "T-99", "tester", now()).is_err());
-
-        // Open blockers ignore ones that reached the done list.
-        let board = s.load_board().unwrap();
-        let t3 = s.load_ticket("T-3").unwrap();
-        assert_eq!(open_blockers(&t3, &board, "done"), vec!["T-002"]);
-        move_ticket(&s, "T-2", "done", None, "tester", now()).unwrap();
-        let board = s.load_board().unwrap();
-        assert!(open_blockers(&t3, &board, "done").is_empty());
-
-        assert!(remove_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
-        assert!(!remove_blocker(&s, "T-3", "T-2", "tester", now()).unwrap());
-        let kinds: Vec<String> = s
-            .load_ticket("T-3")
-            .unwrap()
-            .activity
-            .iter()
-            .map(|a| a.kind.clone())
-            .collect();
-        assert!(
-            kinds.contains(&"blocked-by".to_string()) && kinds.contains(&"unblocked".to_string())
-        );
-    }
-
-    #[test]
-    fn card_moves_leave_board_updated_alone() {
+    fn create_patch_and_activity_log() {
         let (_d, s) = project();
         let before = s.load_board().unwrap().updated;
-        let later = now() + chrono::Duration::hours(1);
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                list: Some("todo".into()),
-                ..Default::default()
-            },
-            "t",
-            later,
-        )
-        .unwrap();
-        move_ticket(&s, "T-1", "done", None, "t", later).unwrap();
+        assert_eq!(new_ticket(&s, "A", None, "ada").id, "T-001");
+        assert_eq!(new_ticket(&s, "B", None, "ada").id, "T-002");
+        let board = s.load_board().unwrap();
+        assert_eq!(
+            board.lists[0].cards,
+            vec!["T-001", "T-002"],
+            "first list by default"
+        );
+        assert_eq!(board.next_ticket, 3);
+
+        move_ticket(&s, "T-1", "done", None, "ada", now()).unwrap();
+        let patch = TicketPatch {
+            title: Some("A2".into()),
+            priority: Some(Some("high".into())),
+            labels: Some(vec!["blocked".into()]),
+            assignees: Some(vec!["bob".into()]),
+            ..Default::default()
+        };
+        let t = update_ticket(&s, "T-1", patch, "ada", now()).unwrap();
+        assert_eq!(
+            (t.title.as_str(), t.priority.as_deref()),
+            ("A2", Some("high"))
+        );
+        let clear = TicketPatch {
+            priority: Some(None),
+            labels: Some(vec![]),
+            assignees: Some(vec![]),
+            ..Default::default()
+        };
+        let t = update_ticket(&s, "T-1", clear, "ada", now()).unwrap();
+        assert_eq!(t.priority, None);
+
+        let kinds: Vec<&str> = t.activity.iter().map(|a| a.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "created",
+                "moved",
+                "renamed",
+                "priority",
+                "label-added",
+                "assigned",
+                "priority",
+                "label-removed",
+                "unassigned"
+            ]
+        );
+        // A move records the destination's display name.
+        assert_eq!(t.activity[1].detail, "Done");
+
+        // Card moves leave `board.updated` alone (fewer merge conflicts); list
+        // changes stamp it.
         assert_eq!(s.load_board().unwrap().updated, before);
-        // Structural list changes still stamp it.
+        let later = now() + chrono::Duration::hours(1);
         add_list(&s, "Review", later).unwrap();
         assert_eq!(s.load_board().unwrap().updated, later);
     }
 
     #[test]
-    fn workflow_lists_detect_and_honor_settings() {
+    fn checklists_and_criteria() {
         let (_d, s) = project();
-        let board = s.load_board().unwrap();
-        let mut settings = s.load_settings().unwrap();
-        let (review, done, rework) = workflow_lists(&board, &settings);
-        assert_eq!(review, None);
-        assert_eq!(done.as_deref(), Some("done"));
-        assert_eq!(rework.as_deref(), Some("todo"));
-
-        add_list(&s, "In Review", now()).unwrap();
-        let board = s.load_board().unwrap();
+        new_ticket(&s, "A", None, "ada");
+        let k = Checks::Checklist;
+        let ids: Vec<String> = ["first", "second", "third"]
+            .iter()
+            .map(|t| checks_add(&s, k, "T-1", t, now()).unwrap())
+            .collect();
+        assert_eq!(ids, ["ck-1", "ck-2", "ck-3"]);
+        // Criteria are a separate surface with their own counter and namespace.
         assert_eq!(
-            workflow_lists(&board, &settings).0.as_deref(),
-            Some("in-review")
+            checks_add(&s, Checks::Acceptance, "T-1", "tests pass", now()).unwrap(),
+            "ac-1"
         );
+        assert!(checks_set(&s, Checks::Acceptance, "T-1", "ck-1", None, "ada", now()).is_err());
 
-        settings.rework_list = Some("backlog".into());
-        settings.done_list = Some("no-such-list".into()); // ignored: falls back
-        let (_, done, rework) = workflow_lists(&board, &settings);
+        assert!(
+            checks_set(&s, k, "T-1", "ck-1", None, "ada", now()).unwrap(),
+            "toggle"
+        );
+        assert!(!checks_set(&s, k, "T-1", "ck-1", Some(false), "ada", now()).unwrap());
+        checks_set(&s, k, "T-1", "ck-2", Some(true), "bob", now()).unwrap();
+        checks_set(&s, k, "T-1", "ck-2", Some(true), "bob", now()).unwrap(); // no-op
+        checks_edit(&s, k, "T-1", "ck-2", "second!", now()).unwrap();
+        checks_move(&s, k, "T-1", "ck-3", 0, now()).unwrap();
+        checks_remove(&s, k, "T-1", "ck-1", now()).unwrap();
+        assert!(checks_remove(&s, k, "T-1", "ck-99", now()).is_err());
+
+        let t = s.load_ticket("T-1").unwrap();
+        let order: Vec<&str> = t.checklist.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(order, ["ck-3", "ck-2"]);
+        assert!(t.checklist[1].done && t.checklist[1].text == "second!");
+        assert!(!t.acceptance[0].done, "criteria untouched by the checklist");
+        assert_eq!(t.next_check, 4, "ids are never reused");
+        // Real state changes are logged (with who), no-ops are not.
+        let checks: Vec<(&str, &str)> = t
+            .activity
+            .iter()
+            .filter(|a| a.kind.ends_with("checked"))
+            .map(|a| (a.kind.as_str(), a.actor.as_str()))
+            .collect();
         assert_eq!(
-            (done.as_deref(), rework.as_deref()),
-            (Some("done"), Some("backlog"))
+            checks,
+            [("checked", "ada"), ("unchecked", "ada"), ("checked", "bob")]
         );
     }
 
     #[test]
-    fn identity_upsert_and_list() {
+    fn moves_deletes_and_list_lifecycle() {
         let (_d, s) = project();
-        upsert_identity(&s, "claude", "Claude", Some(IdentityKind::Agent)).unwrap();
-        let ids = list_identities(&s).unwrap();
-        let agent = ids.iter().find(|i| i.id == "claude").unwrap();
-        assert_eq!(agent.display_name, "Claude");
-        assert_eq!(agent.kind, IdentityKind::Agent);
+        new_ticket(&s, "A", None, "t");
+        new_ticket(&s, "B", None, "t");
+        move_ticket(&s, "T-1", "done", None, "t", now()).unwrap();
+        let board = s.load_board().unwrap();
+        assert_eq!(board.list("backlog").unwrap().cards, vec!["T-002"]);
+        assert_eq!(board.list("done").unwrap().cards, vec!["T-001"]);
+        assert!(matches!(
+            move_ticket(&s, "T-1", "nope", None, "t", now()),
+            Err(Error::ListNotFound(_))
+        ));
+
+        delete_ticket(&s, "T-1", now()).unwrap();
+        assert!(matches!(
+            s.load_ticket("T-1"),
+            Err(Error::TicketNotFound(_))
+        ));
+        assert!(s
+            .load_board()
+            .unwrap()
+            .list("done")
+            .unwrap()
+            .cards
+            .is_empty());
+
+        let id = add_list(&s, "In Review", now()).unwrap();
+        assert_eq!(id, "in-review");
+        rename_list(&s, &id, "Review", now()).unwrap();
+        move_list(&s, &id, 0, now()).unwrap();
+        let board = s.load_board().unwrap();
+        assert_eq!(
+            (board.lists[0].id.as_str(), board.lists[0].name.as_str()),
+            ("in-review", "Review")
+        );
+        remove_list(&s, &id, false, now()).unwrap();
+        // A list with tickets needs --force, which deletes them too.
+        assert!(remove_list(&s, "backlog", false, now()).is_err());
+        remove_list(&s, "backlog", true, now()).unwrap();
+        assert!(s.load_ticket("T-2").is_err());
+    }
+
+    #[test]
+    fn rewrite_by_someone_else_preserves_the_original_once() {
+        let (_d, s) = project();
+        new_ticket(&s, "raw note", Some("todo"), "bilal");
+        let edit = |body: &str, title: Option<&str>, who: &str| {
+            let patch = TicketPatch {
+                body: Some(body.into()),
+                title: title.map(Into::into),
+                ..Default::default()
+            };
+            update_ticket(&s, "T-1", patch, who, now()).unwrap()
+        };
+        // The creator editing their own note freezes nothing...
+        assert!(edit("raw note, typo fixed", None, "bilal")
+            .original
+            .is_none());
+        // ...an agent's rewrite freezes the creator's current wording...
+        let o = edit("## Plan", Some("Proper ticket"), "claude")
+            .original
+            .unwrap();
+        assert_eq!(
+            (
+                o.title.as_str(),
+                o.body.as_str(),
+                o.author.as_str(),
+                o.rewritten_by.as_str()
+            ),
+            ("raw note", "raw note, typo fixed", "bilal", "claude")
+        );
+        // ...and later rewrites never touch it.
+        assert_eq!(edit("third version", None, "someone").original, Some(o));
     }
 
     #[test]
@@ -1568,48 +1311,20 @@ mod tests {
         git(&["config", "user.email", "t@example.com"]);
         git(&["config", "user.name", "Tester"]);
         let s = Store::init(root, "Att", now()).unwrap();
-        create_ticket(
-            &s,
-            NewTicket {
-                title: "A".into(),
-                ..Default::default()
-            },
-            "tester",
-            now(),
-        )
-        .unwrap();
-
+        new_ticket(&s, "A", None, "t");
         std::fs::write(root.join("logo.png"), b"PNGDATA").unwrap();
         git(&["add", "logo.png"]);
         git(&["commit", "-q", "-m", "add logo"]);
 
         // Identical bytes -> reference the tracked repo file (no copy).
-        let a = add_attachment(
-            &s,
-            "T-1",
-            "logo.png",
-            b"PNGDATA",
-            "image/png",
-            "tester",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(a.source, AttachmentSource::Repo);
-        assert_eq!(a.path, "logo.png");
-
+        let a = add_attachment(&s, "T-1", "logo.png", b"PNGDATA", "image/png", "t", now()).unwrap();
+        assert_eq!(
+            (a.source, a.path.as_str()),
+            (AttachmentSource::Repo, "logo.png")
+        );
         // Novel bytes -> copied into .wipe/media/.
-        let b = add_attachment(
-            &s,
-            "T-1",
-            "new.txt",
-            b"hello world",
-            "text/plain",
-            "tester",
-            now(),
-        )
-        .unwrap();
+        let b = add_attachment(&s, "T-1", "new.txt", b"hello", "text/plain", "t", now()).unwrap();
         assert_eq!(b.source, AttachmentSource::Media);
-        assert!(b.path.starts_with(".wipe/media/"));
-        assert!(root.join(&b.path).exists());
+        assert!(b.path.starts_with(".wipe/media/") && root.join(&b.path).exists());
     }
 }

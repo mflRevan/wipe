@@ -78,26 +78,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn formats_ids() {
+    fn formats_ids_parses_refs_and_slugs_names() {
         assert_eq!(ticket_id(23), "T-23");
         assert_eq!(hex_ticket_id(1), "T-001");
         assert_eq!(hex_ticket_id(0x2AF), "T-2AF");
         assert_eq!(hex_ticket_id(0x1000), "T-1000");
-        assert_eq!(ticket_ref_digits("t2af").as_deref(), Some("2AF"));
-        assert_eq!(ticket_ref_digits("T-005").as_deref(), Some("005"));
-        assert_eq!(ticket_ref_digits(" #T 12 ").as_deref(), Some("12"));
-        assert_eq!(ticket_ref_digits("Tx1"), None);
-        assert_eq!(ticket_ref_digits("T-"), None);
-        assert_eq!(comment_id(7), "c-7");
-        assert_eq!(checklist_id(3), "ck-3");
-        assert_eq!(acceptance_id(2), "ac-2");
-    }
-
-    #[test]
-    fn slugs_names() {
-        assert_eq!(slug("In Progress"), "in-progress");
-        assert_eq!(slug("  To-Do!! "), "to-do");
-        assert_eq!(slug("Backlog"), "backlog");
-        assert_eq!(slug("***"), "list");
+        for (raw, want) in [
+            ("t2af", Some("2AF")),
+            ("T-005", Some("005")),
+            (" #T 12 ", Some("12")),
+            ("Tx1", None),
+            ("T-", None),
+        ] {
+            assert_eq!(ticket_ref_digits(raw).as_deref(), want, "{raw}");
+        }
+        assert_eq!(
+            (comment_id(7), checklist_id(3), acceptance_id(2)),
+            ("c-7".into(), "ck-3".into(), "ac-2".into())
+        );
+        for (name, s) in [
+            ("In Progress", "in-progress"),
+            ("  To-Do!! ", "to-do"),
+            ("***", "list"),
+        ] {
+            assert_eq!(slug(name), s);
+        }
     }
 }

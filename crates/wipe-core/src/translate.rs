@@ -119,8 +119,185 @@ pub fn translate_ids(store: &Store, now: DateTime<Utc>) -> Result<Vec<(String, S
 
 fn unfinished(e: Error) -> Error {
     Error::msg(format!(
-        "ticket-id translation interrupted: {e}. Nothing is lost - it is saved and          finishes on the next wipe command (or `wipe board translate-ids`). If this          repeats, close whatever has the board's files open (an editor, a sync client)"
+        "ticket-id translation interrupted: {e}. Nothing is lost - it is saved and \
+         finishes on the next wipe command (or `wipe board translate-ids`). If this \
+         repeats, close whatever has the board's files open (an editor, a sync client)"
     ))
+}
+
+/// What [`repair`] changed on a hex board.
+#[derive(Debug, Default, PartialEq)]
+pub struct Repair {
+    /// Ticket / trash ids converted from leftover decimal form, `(old, new)`.
+    pub renamed: Vec<(String, String)>,
+    /// Forum threads, subscriptions and relations whose refs were rewritten.
+    pub refs_fixed: usize,
+    /// Decimal-looking ids that could also be a real hex id - left untouched.
+    pub ambiguous: Vec<String>,
+}
+
+impl Repair {
+    /// Whether anything was changed.
+    pub fn changed(&self) -> bool {
+        !self.renamed.is_empty() || self.refs_fixed > 0
+    }
+}
+
+/// Whether `id` on a hex board is a leftover decimal id rather than a real hex
+/// one. Hex ids are zero-padded to three digits and always below the board's
+/// counter, so `T-5`/`T-42` are decimal, `T-005`/`T-02A` are hex, and a
+/// three-digit `T-300` is decimal only if hex 0x300 was never allocated.
+fn leftover_decimal(id: &str, next_ticket: u64) -> Option<u64> {
+    let digits = id.strip_prefix("T-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if digits.len() >= 3 && digits.starts_with('0') {
+        return None;
+    }
+    let n: u64 = digits.parse().ok()?;
+    if digits.len() < 3 || u64::from_str_radix(digits, 16).map_or(true, |h| h >= next_ticket) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// Finish a hex board that still holds decimal references the translation
+/// never reached: trash entries and stray ticket files with decimal ids, forum
+/// refs and `T-<n>` mentions in threads, subscriptions and relations. This
+/// happens to boards repaired by hand after 0.4.1 (`board.json` flipped to hex,
+/// the forum and trash left as they were). Idempotent; callers must hold the
+/// board's write lock.
+pub fn repair(store: &Store, now: DateTime<Utc>) -> Result<Repair> {
+    let mut board = store.load_board()?;
+    let mut report = Repair::default();
+    if board.ids != IdFormat::Hex {
+        return Ok(report);
+    }
+    let next = board.next_ticket;
+    let tickets = store.load_all_tickets()?;
+    let trash = crate::trash::read_entries(store)?;
+
+    // Every id in use, and old -> new for everything already translated.
+    let mut taken: BTreeSet<String> = tickets
+        .iter()
+        .map(|t| t.id.clone())
+        .chain(trash.iter().map(|e| e.ticket.id.clone()))
+        .collect();
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for t in tickets.iter().chain(trash.iter().map(|e| &e.ticket)) {
+        if let Some(old) = &t.legacy_id {
+            map.insert(old.clone(), t.id.clone());
+        }
+    }
+    // Leftover decimal ids get their hex id, unless it is already taken.
+    let mut convert = |t: &Ticket, report: &mut Repair| -> Option<String> {
+        if t.legacy_id.is_some() {
+            return None;
+        }
+        let n = leftover_decimal(&t.id, next)?;
+        let new = crate::id::hex_ticket_id(n);
+        if taken.contains(&new) || map.values().any(|v| *v == new) {
+            report.ambiguous.push(t.id.clone());
+            return None;
+        }
+        taken.insert(new.clone());
+        map.insert(t.id.clone(), new.clone());
+        Some(new)
+    };
+    let stray: Vec<&Ticket> = tickets
+        .iter()
+        .filter(|t| convert(t, &mut report).is_some())
+        .collect();
+    let stray_trash: Vec<&TrashEntry> = trash
+        .iter()
+        .filter(|e| convert(&e.ticket, &mut report).is_some())
+        .collect();
+    let re = Regex::new(r"\bT-\d+\b").expect("static regex");
+
+    for t in stray {
+        let mut t = t.clone();
+        let old = t.id.clone();
+        rewrite_ticket(&mut t, &map, &re);
+        store.save_ticket(&t)?;
+        store.remove_ticket_file(&old)?;
+        report.renamed.push((old, t.id));
+    }
+    for e in stray_trash {
+        let mut e = e.clone();
+        let old = e.ticket.id.clone();
+        rewrite_ticket(&mut e.ticket, &map, &re);
+        crate::trash::write_entry(store, &e)?;
+        crate::trash::remove_entry_file(store, &old)?;
+        report.renamed.push((old, e.ticket.id));
+    }
+    // A ref is stale when it names an old id that is not also a live one (a
+    // live hex `T-100` wins over a legacy `T-100`, as in `resolve_ticket_id`).
+    let renamed: BTreeSet<&str> = report.renamed.iter().map(|(o, _)| o.as_str()).collect();
+    let stale: BTreeMap<String, String> = map
+        .iter()
+        .filter(|(old, _)| !taken.contains(old.as_str()) || renamed.contains(old.as_str()))
+        .map(|(o, n)| (o.clone(), n.clone()))
+        .collect();
+    if stale.is_empty() {
+        return Ok(report);
+    }
+    let fix = |r: &mut String| -> bool {
+        match stale.get(r.as_str()) {
+            Some(new) => {
+                *r = new.clone();
+                true
+            }
+            None => false,
+        }
+    };
+
+    let mut cards_changed = false;
+    for c in board.lists.iter_mut().flat_map(|l| l.cards.iter_mut()) {
+        cards_changed |= fix(c);
+    }
+    if cards_changed {
+        board.updated = now;
+        store.save_board(&board)?;
+    }
+    for mut t in store.load_all_tickets()? {
+        let mut changed = false;
+        for rel in &mut t.relations {
+            changed |= fix(&mut rel.target);
+        }
+        if changed {
+            store.save_ticket(&t)?;
+            report.refs_fixed += 1;
+        }
+    }
+    let mut subs = store.load_subscriptions()?;
+    let mut subs_changed = false;
+    for r in subs.subs.values_mut().flat_map(|v| v.iter_mut()) {
+        subs_changed |= fix(r);
+    }
+    if subs_changed {
+        store.save_subscriptions(&subs)?;
+        report.refs_fixed += 1;
+    }
+    // Forum text was never translated (`T-30` -> `T-01E`; a real `T-030` stays).
+    for mut thread in store.load_all_threads()? {
+        let before = thread.clone();
+        thread.title = rewrite_refs(&thread.title, &stale, &re);
+        let mut stack = vec![&mut thread.root];
+        while let Some(p) = stack.pop() {
+            p.body = rewrite_refs(&p.body, &stale, &re);
+            for r in &mut p.refs {
+                fix(r);
+            }
+            stack.extend(p.replies.iter_mut());
+        }
+        if thread != before {
+            store.save_thread(&thread)?;
+            report.refs_fixed += 1;
+        }
+    }
+    Ok(report)
 }
 
 /// Compute the translation without writing anything (`None` if already hex).
@@ -331,25 +508,33 @@ mod tests {
         b.ids = IdFormat::Decimal;
         s.save_board(&b).unwrap();
         for i in 0..n {
-            ops::create_ticket(
-                &s,
-                NewTicket {
-                    title: format!("ticket {i}"),
-                    list: Some("todo".into()),
-                    ..Default::default()
-                },
-                "ada",
-                Utc::now(),
-            )
-            .unwrap();
+            let spec = NewTicket {
+                title: format!("ticket {i}"),
+                list: Some("todo".into()),
+                ..Default::default()
+            };
+            ops::create_ticket(&s, spec, "ada", Utc::now()).unwrap();
         }
         (dir, s)
+    }
+
+    fn new_ticket(s: &Store, title: &str) -> String {
+        let spec = NewTicket {
+            title: title.into(),
+            list: Some("todo".into()),
+            ..Default::default()
+        };
+        ops::create_ticket(s, spec, "ada", Utc::now()).unwrap().id
     }
 
     #[test]
     fn translates_ids_everywhere_and_keeps_legacy_aliases() {
         let (_d, s) = legacy_board(300);
-        assert_eq!(s.load_board().unwrap().lists[1].cards[9], "T-10");
+        // Before: plain decimal ids, ordered numerically.
+        assert_eq!(s.resolve_ticket_id("t12").unwrap(), "T-12");
+        assert!(s.resolve_ticket_id("T-301").is_err());
+        assert_eq!(s.ticket_ids().unwrap()[8..11], ["T-9", "T-10", "T-11"]);
+
         // References in text, relations, subscriptions, forum, trash.
         let mut t = s.load_ticket("T-3").unwrap();
         t.body = "see T-10 and T-256, not T-1000 or XT-10".into();
@@ -360,19 +545,18 @@ mod tests {
         s.save_ticket(&t).unwrap();
         ops::add_comment(&s, "T-3", "ada", "follow-up in T-299", Utc::now()).unwrap();
         crate::inbox::subscribe(&s, "ada", "T-256").unwrap();
-        crate::forum::create_thread(
-            &s,
-            crate::forum::NewThread {
-                title: "about T-12".into(),
-                body: "T-12 is done".into(),
-                refs: vec!["T-12".into()],
-                ..Default::default()
-            },
-            "ada",
-            Utc::now(),
-        )
-        .unwrap();
-        crate::trash::trash_ticket(&s, "T-300", 7, Utc::now()).unwrap();
+        let spec = crate::forum::NewThread {
+            title: "about T-12".into(),
+            body: "T-12 is done".into(),
+            refs: vec!["T-12".into()],
+            ..Default::default()
+        };
+        crate::forum::create_thread(&s, spec, "ada", Utc::now()).unwrap();
+        // Old T-101 becomes T-065 while old T-257 becomes T-101: both trashed, both
+        // must survive (they once shared a file name mid-rekey).
+        for id in ["T-300", "T-101", "T-257"] {
+            crate::trash::trash_ticket(&s, id, 7, Utc::now()).unwrap();
+        }
 
         let pairs = translate_ids(&s, Utc::now()).unwrap();
         assert_eq!(pairs.len(), 300);
@@ -382,8 +566,8 @@ mod tests {
         let b = s.load_board().unwrap();
         assert_eq!(b.ids, IdFormat::Hex);
         assert_eq!(b.lists[1].cards[9], "T-00A");
-        assert_eq!(b.lists[1].cards.len(), 299);
-        // Old T-100 and new T-100 (=256) did not clobber each other.
+        assert_eq!(b.lists[1].cards.len(), 297);
+        // Old T-100 and new T-100 (= 256) did not clobber each other.
         assert_eq!(s.load_ticket("T-064").unwrap().title, "ticket 99");
         assert_eq!(s.load_ticket("T-100").unwrap().title, "ticket 255");
 
@@ -394,15 +578,20 @@ mod tests {
         assert_eq!(t.comments[0].body, "follow-up in T-12B");
         assert_eq!(
             crate::inbox::subscriptions_of(&s, "ada").unwrap(),
-            vec!["T-100"]
+            ["T-100"]
         );
         let th = s.load_thread("F-1").unwrap();
         assert_eq!(
             (th.title.as_str(), th.root.refs[0].as_str()),
             ("about T-00C", "T-00C")
         );
-        let trashed = crate::trash::list_trash(&s, 7, Utc::now()).unwrap();
-        assert_eq!(trashed[0].ticket.id, "T-12C");
+        let mut trashed: Vec<String> = crate::trash::list_trash(&s, 7, Utc::now())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.ticket.id)
+            .collect();
+        trashed.sort();
+        assert_eq!(trashed, ["T-065", "T-101", "T-12C"]);
         crate::trash::restore_ticket(&s, "T-12C", Utc::now()).unwrap();
 
         // Every way of naming a ticket still resolves.
@@ -418,29 +607,9 @@ mod tests {
             assert_eq!(s.resolve_ticket_id(typed).unwrap(), want, "{typed}");
         }
         // New tickets continue the counter in hex; a second run is a no-op.
-        let n = ops::create_ticket(
-            &s,
-            NewTicket {
-                title: "new".into(),
-                list: Some("todo".into()),
-                ..Default::default()
-            },
-            "ada",
-            Utc::now(),
-        )
-        .unwrap();
-        assert_eq!(n.id, "T-12D");
+        assert_eq!(new_ticket(&s, "new"), "T-12D");
         assert!(translate_ids(&s, Utc::now()).unwrap().is_empty());
         assert_eq!(s.ticket_ids().unwrap()[..3], ["T-001", "T-002", "T-003"]);
-    }
-
-    #[test]
-    fn decimal_boards_keep_working_until_translated() {
-        let (_d, s) = legacy_board(12);
-        assert_eq!(s.resolve_ticket_id("t12").unwrap(), "T-12");
-        assert!(s.resolve_ticket_id("T-13").is_err());
-        let ids = s.ticket_ids().unwrap();
-        assert_eq!(&ids[8..], ["T-9", "T-10", "T-11", "T-12"]);
     }
 
     /// A small legacy board with cross-references in a ticket, the forum and
@@ -451,18 +620,13 @@ mod tests {
         t.body = "see T-10".into();
         s.save_ticket(&t).unwrap();
         crate::inbox::subscribe(&s, "ada", "T-11").unwrap();
-        crate::forum::create_thread(
-            &s,
-            crate::forum::NewThread {
-                title: "about T-12".into(),
-                body: "T-12".into(),
-                refs: vec!["T-12".into()],
-                ..Default::default()
-            },
-            "ada",
-            Utc::now(),
-        )
-        .unwrap();
+        let spec = crate::forum::NewThread {
+            title: "about T-12".into(),
+            body: "T-12".into(),
+            refs: vec!["T-12".into()],
+            ..Default::default()
+        };
+        crate::forum::create_thread(&s, spec, "ada", Utc::now()).unwrap();
         (d, s)
     }
 
@@ -470,10 +634,9 @@ mod tests {
         let b = s.load_board().unwrap();
         assert_eq!(b.ids, IdFormat::Hex);
         assert_eq!(b.lists[1].cards[9], "T-00A");
-        assert_eq!(s.ticket_ids().unwrap().len(), 12);
-        for id in s.ticket_ids().unwrap() {
-            assert_eq!(id.len(), 5, "stale file {id}");
-        }
+        let ids = s.ticket_ids().unwrap();
+        assert_eq!(ids.len(), 12);
+        assert!(ids.iter().all(|id| id.len() == 5), "stale files: {ids:?}");
         for c in b.lists.iter().flat_map(|l| &l.cards) {
             s.load_ticket(c).unwrap();
         }
@@ -482,107 +645,141 @@ mod tests {
             s.load_ticket("T-00C").unwrap().legacy_id.as_deref(),
             Some("T-12")
         );
-        assert_eq!(
-            crate::inbox::subscriptions_of(s, "ada").unwrap(),
-            vec!["T-00B"]
-        );
+        assert_eq!(crate::inbox::subscriptions_of(s, "ada").unwrap(), ["T-00B"]);
         assert_eq!(s.load_thread("F-1").unwrap().root.refs[0], "T-00C");
         assert!(!interrupted(s));
         assert!(stage_dirs(s).is_empty());
         assert!(!s.cache_dir().join(JOURNAL).exists());
     }
 
-    /// Replays what 0.4.1 left behind when `board.json` could not be written:
-    /// a staging dir, every ticket renamed, everything else still decimal.
+    /// The states an interrupted translation can leave behind - each must be
+    /// finished by the next run, never redone (redoing would re-map refs that
+    /// are already translated).
     #[test]
-    fn finishes_a_board_half_converted_by_0_4_1() {
-        let (_d, s) = legacy_board_with_refs();
-        let j = plan(&s, Utc::now()).unwrap().unwrap();
-        let stage = s.cache_dir().join("translate-1790875456");
-        std::fs::create_dir_all(&stage).unwrap();
-        for t in &j.tickets {
-            std::fs::write(
-                stage.join(format!("{}.json", t.id)),
-                serde_json::to_string(t).unwrap(),
-            )
-            .unwrap();
+    fn interrupted_translations_are_finished_not_redone() {
+        // `stage`: write 0.4.1's staging snapshot; `remove`/`save`: how far its
+        // swap got; `journal`: a 0.4.2+ run stopped while applying its journal.
+        struct Case {
+            what: &'static str,
+            stage: bool,
+            remove: usize,
+            save: usize,
+            journal: bool,
         }
-        for id in &j.remove_tickets {
-            s.remove_ticket_file(id).unwrap();
+        for c in [
+            // What 0.4.1 left on real boards when board.json could not be written:
+            // every ticket renamed, everything else still decimal. Before 0.4.2 the
+            // re-run failed: "unexpected ticket id `T-001` on a decimal board".
+            Case {
+                what: "0.4.1: board.json not written",
+                stage: true,
+                remove: 12,
+                save: 12,
+                journal: false,
+            },
+            Case {
+                what: "0.4.1: killed mid-swap",
+                stage: true,
+                remove: 8,
+                save: 1,
+                journal: false,
+            },
+            Case {
+                what: "journal partly applied",
+                stage: false,
+                remove: 3,
+                save: 5,
+                journal: true,
+            },
+        ] {
+            let (_d, s) = legacy_board_with_refs();
+            let j = plan(&s, Utc::now()).unwrap().unwrap();
+            if c.stage {
+                let stage = s.cache_dir().join("translate-1790875456");
+                std::fs::create_dir_all(&stage).unwrap();
+                for t in &j.tickets {
+                    let json = serde_json::to_string(t).unwrap();
+                    std::fs::write(stage.join(format!("{}.json", t.id)), json).unwrap();
+                }
+            }
+            if c.journal {
+                crate::store::write_json_atomic(&s.cache_dir().join(JOURNAL), &j).unwrap();
+            }
+            for id in &j.remove_tickets[..c.remove] {
+                s.remove_ticket_file(id).unwrap();
+            }
+            for t in &j.tickets[..c.save] {
+                s.save_ticket(t).unwrap();
+            }
+            assert!(interrupted(&s), "{}", c.what);
+            assert_eq!(
+                translate_ids(&s, Utc::now()).unwrap().len(),
+                12,
+                "{}",
+                c.what
+            );
+            assert_fully_translated(&s);
         }
-        for t in &j.tickets {
-            s.save_ticket(t).unwrap();
-        }
-        assert_eq!(s.load_board().unwrap().ids, IdFormat::Decimal);
-        assert!(interrupted(&s));
-
-        // Before 0.4.2 this failed: "unexpected ticket id `T-001` on a decimal board".
-        let pairs = translate_ids(&s, Utc::now()).unwrap();
-        assert_eq!(pairs.len(), 12);
-        assert_eq!(pairs[11], ("T-12".into(), "T-00C".into()));
-        assert_fully_translated(&s);
     }
 
-    /// 0.4.1 killed mid-swap: some old files deleted, few new ones written;
-    /// the staging snapshot fills the gap.
+    /// Boards hand-repaired after 0.4.1 read as hex, but their trash and forum
+    /// still use decimal ids (found on a real board). `repair` finishes them.
     #[test]
-    fn recovers_tickets_only_present_in_the_0_4_1_staging_dir() {
+    fn repair_finishes_decimal_leftovers_on_a_hex_board() {
         let (_d, s) = legacy_board_with_refs();
-        let j = plan(&s, Utc::now()).unwrap().unwrap();
-        let stage = s.cache_dir().join("translate-1");
-        std::fs::create_dir_all(&stage).unwrap();
-        for t in &j.tickets {
-            std::fs::write(
-                stage.join(format!("{}.json", t.id)),
-                serde_json::to_string(t).unwrap(),
-            )
-            .unwrap();
+        for id in ["T-5", "T-11"] {
+            crate::trash::trash_ticket(&s, id, 7, Utc::now()).unwrap();
         }
-        for id in &j.remove_tickets[..8] {
-            s.remove_ticket_file(id).unwrap();
-        }
-        s.save_ticket(&j.tickets[0]).unwrap();
-
+        let snapshot = |dir: std::path::PathBuf| -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| (e.path(), std::fs::read(e.path()).unwrap()))
+                .collect()
+        };
+        let (forum, trash) = (snapshot(s.forum_dir()), snapshot(s.trash_dir()));
         translate_ids(&s, Utc::now()).unwrap();
-        assert_fully_translated(&s);
-    }
-
-    /// A run interrupted while applying its journal is replayed, not redone
-    /// (redoing would re-map refs that are already translated).
-    #[test]
-    fn replays_an_interrupted_journal() {
-        let (_d, s) = legacy_board_with_refs();
-        let j = plan(&s, Utc::now()).unwrap().unwrap();
-        crate::store::write_json_atomic(&s.cache_dir().join(JOURNAL), &j).unwrap();
-        for t in &j.tickets[..5] {
-            s.save_ticket(t).unwrap();
+        // Put the old forum and trash back, as the hand repair left them.
+        for dir in [s.forum_dir(), s.trash_dir()] {
+            std::fs::remove_dir_all(&dir).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
         }
-        for id in &j.remove_tickets[..3] {
-            s.remove_ticket_file(id).unwrap();
+        for (p, bytes) in forum.iter().chain(&trash) {
+            std::fs::write(p, bytes).unwrap();
         }
-        assert!(interrupted(&s));
-        assert_eq!(translate_ids(&s, Utc::now()).unwrap().len(), 12);
-        assert_fully_translated(&s);
-    }
+        assert_eq!(s.load_thread("F-1").unwrap().root.refs[0], "T-12");
 
-    /// Old `T-100` and new `T-100` (= 256) in the trash must not clobber each other.
-    #[test]
-    fn trash_entries_with_colliding_names_both_survive() {
-        let (_d, s) = legacy_board(260);
-        crate::trash::trash_ticket(&s, "T-100", 7, Utc::now()).unwrap();
-        crate::trash::trash_ticket(&s, "T-256", 7, Utc::now()).unwrap();
-        translate_ids(&s, Utc::now()).unwrap();
-        let mut ids: Vec<String> = crate::trash::list_trash(&s, 7, Utc::now())
-            .unwrap()
-            .into_iter()
-            .map(|e| e.ticket.id)
-            .collect();
-        ids.sort();
-        assert_eq!(ids, ["T-064", "T-100"]);
+        let r = repair(&s, Utc::now()).unwrap();
+        let mut renamed = r.renamed.clone();
+        renamed.sort();
         assert_eq!(
-            s.load_board().unwrap().lists[1].cards.len(),
-            258,
-            "trashed tickets stay off the board"
+            renamed,
+            [
+                ("T-11".into(), "T-00B".into()),
+                ("T-5".into(), "T-005".into())
+            ]
         );
+        assert!(r.ambiguous.is_empty() && r.refs_fixed >= 1, "{r:?}");
+        let th = s.load_thread("F-1").unwrap();
+        assert_eq!(
+            (
+                th.title.as_str(),
+                th.root.body.as_str(),
+                th.root.refs[0].as_str()
+            ),
+            ("about T-00C", "T-00C", "T-00C")
+        );
+        crate::trash::restore_ticket(&s, "T-5", Utc::now()).unwrap();
+        assert_eq!(
+            s.load_ticket("T-005").unwrap().legacy_id.as_deref(),
+            Some("T-5")
+        );
+
+        assert!(!repair(&s, Utc::now()).unwrap().changed(), "idempotent");
+        // A hex id that merely looks decimal is never touched.
+        assert_eq!(leftover_decimal("T-100", 0x200), None);
+        assert_eq!(leftover_decimal("T-100", 0x50), Some(100));
+        assert_eq!(leftover_decimal("T-042", 0x200), None);
+        assert_eq!(leftover_decimal("T-42", 0x200), Some(42));
     }
 }

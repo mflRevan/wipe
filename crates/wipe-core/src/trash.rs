@@ -261,62 +261,57 @@ mod tests {
         (dir, store)
     }
 
-    fn make(store: &Store, title: &str, list: &str) -> String {
-        ops::create_ticket(
-            store,
-            NewTicket {
-                title: title.into(),
-                list: Some(list.into()),
-                ..Default::default()
-            },
-            "tester",
-            Utc::now(),
-        )
-        .unwrap()
-        .id
+    fn make(store: &Store, title: &str) -> String {
+        let spec = NewTicket {
+            title: title.into(),
+            list: Some("todo".into()),
+            ..Default::default()
+        };
+        ops::create_ticket(store, spec, "tester", Utc::now())
+            .unwrap()
+            .id
     }
 
     #[test]
-    fn trash_restore_roundtrip_preserves_list_and_position() {
+    fn trash_and_restore_keep_list_position_and_never_touch_paths() {
         let (_d, s) = project();
-        let first = s.load_board().unwrap().lists[0].id.clone();
-        let a = make(&s, "A", &first);
-        let b = make(&s, "B", &first);
-        let c = make(&s, "C", &first);
+        let (a, b, c) = (make(&s, "A"), make(&s, "B"), make(&s, "C"));
+        let cards = |s: &Store| s.load_board().unwrap().list("todo").unwrap().cards.clone();
 
-        // Delete the middle card.
         trash_ticket(&s, &b, 7, Utc::now()).unwrap();
-        assert!(s.load_ticket(&b).is_err(), "ticket file removed");
-        let board = s.load_board().unwrap();
-        assert_eq!(board.lists[0].cards, vec![a.clone(), c.clone()]);
+        assert!(s.load_ticket(&b).is_err());
+        assert_eq!(cards(&s), [a.clone(), c.clone()]);
         assert_eq!(list_trash(&s, 7, Utc::now()).unwrap().len(), 1);
 
-        // Restore it back to its original index (1).
-        restore_ticket(&s, &b, Utc::now()).unwrap();
-        let board = s.load_board().unwrap();
-        assert_eq!(board.lists[0].cards, vec![a, b.clone(), c]);
-        assert!(s.load_ticket(&b).is_ok());
+        // Typed refs are matched against the entries, never turned into paths:
+        // `purge ../../board` once deleted .wipe/board.json (0.4.1).
+        let board_json = s.wipe_dir().join("board.json");
+        for evil in ["../board", "../../board", "..\\board"] {
+            assert!(!purge_ticket(&s, evil).unwrap(), "{evil}");
+            assert!(restore_ticket(&s, evil, Utc::now()).is_err(), "{evil}");
+        }
+        assert!(board_json.exists());
+
+        // Restored to its old index, by any spelling of its id.
+        restore_ticket(&s, &b.to_lowercase().replace('-', ""), Utc::now()).unwrap();
+        assert_eq!(cards(&s), [a, b, c]);
         assert!(list_trash(&s, 7, Utc::now()).unwrap().is_empty());
     }
 
     #[test]
-    fn expired_entries_are_purged_and_unrestorable() {
+    fn retention_expires_entries_and_zero_deletes_outright() {
         let (_d, s) = project();
-        let first = s.load_board().unwrap().lists[0].id.clone();
-        let t = make(&s, "old", &first);
-        // Deleted 10 days ago, retention 7 -> expired.
-        let ten_days_ago = Utc::now() - Duration::days(10);
-        trash_ticket(&s, &t, 7, ten_days_ago).unwrap();
-        assert!(list_trash(&s, 7, Utc::now()).unwrap().is_empty());
-        assert!(restore_ticket(&s, &t, Utc::now()).is_err());
-    }
+        let old = make(&s, "old");
+        trash_ticket(&s, &old, 7, Utc::now() - Duration::days(10)).unwrap();
+        assert!(
+            list_trash(&s, 7, Utc::now()).unwrap().is_empty(),
+            "expired entries purge"
+        );
+        assert!(restore_ticket(&s, &old, Utc::now()).is_err());
 
-    #[test]
-    fn zero_retention_deletes_outright() {
-        let (_d, s) = project();
-        let first = s.load_board().unwrap().lists[0].id.clone();
-        let t = make(&s, "gone", &first);
-        trash_ticket(&s, &t, 0, Utc::now()).unwrap();
+        let gone = make(&s, "gone");
+        trash_ticket(&s, &gone, 0, Utc::now()).unwrap();
         assert!(list_trash(&s, 7, Utc::now()).unwrap().is_empty());
+        assert!(s.load_ticket(&gone).is_err());
     }
 }

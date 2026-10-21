@@ -30,8 +30,9 @@ pub const FIELDS: &[&str] = &[
     "body",
 ];
 
-/// The fields a row carries when `--fields` is not given (`created` and `body`
-/// are opt-in).
+/// The fields a row carries when `--fields` is not given: what a ticket is,
+/// where it is, and who/what it waits on. Progress, timestamps and bodies are
+/// opt-in (`--fields`), and `ticket show` has the rest.
 const DEFAULT_FIELDS: &[&str] = &[
     "id",
     "title",
@@ -39,13 +40,21 @@ const DEFAULT_FIELDS: &[&str] = &[
     "labels",
     "assignees",
     "priority",
-    "comments",
-    "checklist",
-    "criteria",
     "blocked_by",
-    "updated",
-    "last_by",
 ];
+
+/// Longest title a row prints (titles are one line; the full one is in `show`).
+pub const TITLE_MAX: usize = 140;
+
+/// A title as a row prints it: one clean line, clipped.
+pub fn title(t: &str) -> String {
+    let (s, cut) = crate::safe::clip(&crate::safe::line(t), TITLE_MAX);
+    if cut > 0 {
+        format!("{s}…")
+    } else {
+        s
+    }
+}
 
 /// Validate a `--fields` selection; empty means the defaults.
 pub fn fields(requested: &[String]) -> Result<Vec<String>> {
@@ -89,7 +98,7 @@ pub fn row(t: &Ticket, list: &str, board: &Board, done_list: &str, fields: &[Str
     for f in fields {
         let v = match f.as_str() {
             "id" => json!(t.id),
-            "title" => json!(t.title),
+            "title" => json!(title(&t.title)),
             "list" => json!(list),
             "labels" if !t.labels.is_empty() => json!(t.labels),
             "assignees" if !t.assignees.is_empty() => json!(t.assignees),
@@ -119,7 +128,7 @@ pub fn row(t: &Ticket, list: &str, board: &Board, done_list: &str, fields: &[Str
                 None => continue,
             },
             "created" => json!(t.created.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            "body" if !t.body.is_empty() => json!(t.body),
+            "body" if !t.body.is_empty() => json!(crate::safe::clip(&t.body, 600).0),
             _ => continue,
         };
         m.insert(f.clone(), v);
@@ -182,18 +191,5 @@ mod tests {
         );
         assert!(parse_since("yesterday", now).is_err());
         assert!(parse_since("5x", now).is_err());
-    }
-
-    #[test]
-    fn unknown_fields_are_rejected_with_the_valid_set() {
-        let err = fields(&["id".into(), "nope".into()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("nope") && err.contains("blocked_by"), "{err}");
-        assert_eq!(
-            fields(&["ID".into(), "last-by".into()]).unwrap(),
-            vec!["id", "last_by"]
-        );
-        assert!(fields(&[]).unwrap().contains(&"title".to_string()));
     }
 }

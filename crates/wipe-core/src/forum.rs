@@ -459,281 +459,151 @@ mod tests {
         }
     }
 
-    #[test]
-    fn threads_and_replies_get_dotted_ids() {
-        let (_d, s) = project();
-        let t = create_thread(
-            &s,
-            NewThread {
-                title: "Decisions".into(),
-                body: "Use OAuth".into(),
-                labels: vec!["decision".into()],
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(t.id, "F-1");
-        assert_eq!(t.root.id, "F-1");
+    fn thread(s: &Store, title: &str, body: &str, labels: &[&str], by: &str) -> String {
+        let spec = NewThread {
+            title: title.into(),
+            body: body.into(),
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+            ..Default::default()
+        };
+        create_thread(s, spec, by, now()).unwrap().id
+    }
 
-        let r1 = reply(&s, "F-1", post("agree"), "bob", now()).unwrap();
-        let r2 = reply(&s, "F-1", post("also"), "cara", now()).unwrap();
-        assert_eq!(r1, "F-1.1");
-        assert_eq!(r2, "F-1.2");
-        let nested = reply(&s, "F-1.1", post("why?"), "dan", now()).unwrap();
-        assert_eq!(nested, "F-1.1.1");
-
-        // A second thread starts a fresh counter.
-        let t2 = create_thread(
-            &s,
-            NewThread {
-                title: "Gotchas".into(),
-                body: "watch the cache".into(),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(t2.id, "F-2");
+    fn ids(s: &Store) -> Vec<String> {
+        index(s).unwrap().into_iter().map(|p| p.id).collect()
     }
 
     #[test]
-    fn deleting_a_post_removes_its_whole_subtree() {
+    fn dotted_ids_subtree_delete_and_no_id_reuse() {
         let (_d, s) = project();
-        create_thread(
-            &s,
-            NewThread {
-                title: "T".into(),
-                body: "root".into(),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        reply(&s, "F-1", post("a"), "b", now()).unwrap(); // F-1.1
-        reply(&s, "F-1.1", post("a.a"), "b", now()).unwrap(); // F-1.1.1
-        reply(&s, "F-1", post("c"), "b", now()).unwrap(); // F-1.2
+        assert_eq!(thread(&s, "Decisions", "Use OAuth", &[], "ada"), "F-1");
+        assert_eq!(
+            reply(&s, "F-1", post("agree"), "bob", now()).unwrap(),
+            "F-1.1"
+        );
+        assert_eq!(
+            reply(&s, "F-1", post("also"), "cy", now()).unwrap(),
+            "F-1.2"
+        );
+        assert_eq!(
+            reply(&s, "F-1.1", post("why?"), "dan", now()).unwrap(),
+            "F-1.1.1"
+        );
+        // The cached index follows every write.
+        assert_eq!(ids(&s), ["F-1", "F-1.1", "F-1.1.1", "F-1.2"]);
 
-        // Delete F-1.1 -> F-1.1 and F-1.1.1 gone, F-1 and F-1.2 remain.
         delete_post(&s, "F-1.1", now()).unwrap();
-        let ids: Vec<String> = index(&s).unwrap().into_iter().map(|p| p.id).collect();
-        assert!(ids.contains(&"F-1".to_string()));
-        assert!(ids.contains(&"F-1.2".to_string()));
-        assert!(!ids.iter().any(|i| i.starts_with("F-1.1")));
+        assert_eq!(
+            ids(&s),
+            ["F-1", "F-1.2"],
+            "a post takes its subtree with it"
+        );
 
-        // Deleting the root removes the whole thread file.
+        // Even with the counter rewound (board/forum divergence after a merge), an
+        // existing thread file is never overwritten.
+        let mut b = s.load_board().unwrap();
+        b.next_thread = 1;
+        s.save_board(&b).unwrap();
+        assert_eq!(thread(&s, "T2", "two", &[], "a"), "F-2");
+        assert_eq!(s.load_thread("F-1").unwrap().root.body, "Use OAuth");
+
         delete_post(&s, "F-1", now()).unwrap();
         assert!(matches!(
             s.load_thread("F-1"),
             Err(Error::ThreadNotFound(_))
         ));
-        assert!(index(&s).unwrap().is_empty());
+        assert_eq!(ids(&s), ["F-2"]);
     }
 
     #[test]
-    fn search_filters_by_pattern_author_label_and_scope() {
+    fn search_by_pattern_author_label_title_and_scope() {
         let (_d, s) = project();
-        create_thread(
+        thread(
             &s,
-            NewThread {
-                title: "Auth design".into(),
-                body: "We will use OAuth 2.1 with PKCE".into(),
-                labels: vec!["decision".into()],
-                ..Default::default()
-            },
+            "Auth design",
+            "We use OAuth 2.1\nERROR: boom",
+            &["decision"],
             "ada@x.com",
-            now(),
-        )
-        .unwrap();
-        reply(
-            &s,
-            "F-1",
-            NewReply {
-                body: "beware token refresh races".into(),
-                labels: vec!["gotcha".into()],
-                ..Default::default()
-            },
-            "claude",
-            now(),
-        )
-        .unwrap();
-        create_thread(
-            &s,
-            NewThread {
-                title: "Unrelated".into(),
-                body: "nothing to see".into(),
-                ..Default::default()
-            },
-            "bob",
-            now(),
-        )
-        .unwrap();
+        );
+        let gotcha = NewReply {
+            body: "beware token refresh races".into(),
+            labels: vec!["gotcha".into()],
+            ..Default::default()
+        };
+        reply(&s, "F-1", gotcha, "claude", now()).unwrap();
+        thread(&s, "Unrelated", "nothing to see", &[], "bob");
 
-        // Regex on body.
-        let hits = search(
-            &s,
-            &SearchQuery {
-                pattern: Some(compile_pattern("OAuth|token", false).unwrap()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(hits.len(), 2);
-
-        // Author filter.
-        let by_agent = search(
-            &s,
-            &SearchQuery {
-                author: Some("claude".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(by_agent.len(), 1);
-        assert_eq!(by_agent[0].id, "F-1.1");
-
-        // Label filter.
-        let gotchas = search(
-            &s,
-            &SearchQuery {
-                labels: vec!["gotcha".into()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(gotchas.len(), 1);
-
-        // Titles only.
-        let titles = search(
-            &s,
-            &SearchQuery {
-                pattern: Some(compile_pattern("auth", true).unwrap()),
-                titles_only: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(titles.len(), 1);
-        assert_eq!(titles[0].id, "F-1");
-
-        // Scope to a thread subtree.
-        let scoped = search(
-            &s,
-            &SearchQuery {
-                scope: Some("F-1".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(scoped.len(), 2);
-    }
-
-    #[test]
-    fn default_search_finds_threads_by_title() {
-        let (_d, s) = project();
-        create_thread(
-            &s,
-            NewThread {
-                title: "Auth design".into(),
-                body: "OAuth 2.1".into(),
-                ..Default::default()
-            },
-            "a",
-            now(),
-        )
-        .unwrap();
-        reply(&s, "F-1", post("a reply"), "b", now()).unwrap();
-        // "design" appears only in the title; a plain search still finds the root.
-        let hits = search(
-            &s,
-            &SearchQuery {
-                pattern: Some(compile_pattern("design", true).unwrap()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "F-1");
-    }
-
-    #[test]
-    fn search_anchors_are_line_scoped() {
-        let (_d, s) = project();
-        create_thread(
-            &s,
-            NewThread {
-                title: "T".into(),
-                body: "context line\nERROR: boom".into(),
-                ..Default::default()
-            },
-            "a",
-            now(),
-        )
-        .unwrap();
-        // `^ERROR` must match a line inside a multi-line body.
-        let hits = search(
-            &s,
-            &SearchQuery {
-                pattern: Some(compile_pattern("^ERROR", false).unwrap()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(hits.len(), 1);
-    }
-
-    #[test]
-    fn create_thread_never_reuses_an_id() {
-        let (_d, s) = project();
-        let t1 = create_thread(
-            &s,
-            NewThread {
-                title: "T".into(),
-                body: "one".into(),
-                ..Default::default()
-            },
-            "a",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(t1.id, "F-1");
-        // Simulate board/forum divergence: rewind the counter while F-1.json stays.
-        let mut b = s.load_board().unwrap();
-        b.next_thread = 1;
-        s.save_board(&b).unwrap();
-        let t2 = create_thread(
-            &s,
-            NewThread {
-                title: "T2".into(),
-                body: "two".into(),
-                ..Default::default()
-            },
-            "a",
-            now(),
-        )
-        .unwrap();
-        // Must skip the existing F-1 and allocate F-2, not overwrite F-1.
-        assert_eq!(t2.id, "F-2");
-        assert_eq!(s.load_thread("F-1").unwrap().root.body, "one");
+        let re = |p: &str| Some(compile_pattern(p, true).unwrap());
+        let cases: Vec<(&str, SearchQuery, Vec<&str>)> = vec![
+            (
+                "regex over bodies",
+                SearchQuery {
+                    pattern: re("oauth|token"),
+                    ..Default::default()
+                },
+                vec!["F-1", "F-1.1"],
+            ),
+            (
+                "title-only words still find the root",
+                SearchQuery {
+                    pattern: re("design"),
+                    ..Default::default()
+                },
+                vec!["F-1"],
+            ),
+            (
+                "anchors are line-scoped",
+                SearchQuery {
+                    pattern: re("^ERROR"),
+                    ..Default::default()
+                },
+                vec!["F-1"],
+            ),
+            (
+                "author",
+                SearchQuery {
+                    author: Some("claude".into()),
+                    ..Default::default()
+                },
+                vec!["F-1.1"],
+            ),
+            (
+                "label",
+                SearchQuery {
+                    labels: vec!["gotcha".into()],
+                    ..Default::default()
+                },
+                vec!["F-1.1"],
+            ),
+            (
+                "titles only",
+                SearchQuery {
+                    pattern: re("auth"),
+                    titles_only: true,
+                    ..Default::default()
+                },
+                vec!["F-1"],
+            ),
+            (
+                "scope",
+                SearchQuery {
+                    scope: Some("F-1".into()),
+                    ..Default::default()
+                },
+                vec!["F-1", "F-1.1"],
+            ),
+        ];
+        for (what, q, want) in cases {
+            let mut got: Vec<String> = search(&s, &q).unwrap().into_iter().map(|h| h.id).collect();
+            got.sort();
+            assert_eq!(got, want, "{what}");
+        }
     }
 
     #[test]
     fn path_traversal_ids_are_rejected() {
         let (_d, s) = project();
-        create_thread(
-            &s,
-            NewThread {
-                title: "T".into(),
-                body: "x".into(),
-                ..Default::default()
-            },
-            "a",
-            now(),
-        )
-        .unwrap();
+        thread(&s, "T", "x", &[], "a");
         for bad in [
             "F-1/../../secret",
             "..",
@@ -741,41 +611,13 @@ mod tests {
             "/etc/passwd",
             "F-1\\..\\x",
         ] {
-            assert!(
-                get_thread(&s, bad).is_err(),
-                "get_thread({bad}) should error"
-            );
+            assert!(get_thread(&s, bad).is_err(), "get_thread({bad})");
             assert!(
                 reply(&s, bad, post("x"), "a", now()).is_err(),
-                "reply({bad}) should error"
+                "reply({bad})"
             );
-            assert!(
-                delete_post(&s, bad, now()).is_err(),
-                "delete_post({bad}) should error"
-            );
+            assert!(delete_post(&s, bad, now()).is_err(), "delete_post({bad})");
         }
-        // The legitimate thread is untouched.
         assert!(get_thread(&s, "F-1").is_ok());
-    }
-
-    #[test]
-    fn index_cache_reflects_new_posts() {
-        let (_d, s) = project();
-        create_thread(
-            &s,
-            NewThread {
-                title: "T".into(),
-                body: "one".into(),
-                ..Default::default()
-            },
-            "ada",
-            now(),
-        )
-        .unwrap();
-        assert_eq!(index(&s).unwrap().len(), 1); // builds + caches
-        assert_eq!(index(&s).unwrap().len(), 1); // served from cache
-        reply(&s, "F-1", post("two"), "bob", now()).unwrap();
-        // Signature changed -> cache rebuilt -> new post visible.
-        assert_eq!(index(&s).unwrap().len(), 2);
     }
 }

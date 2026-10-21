@@ -12,10 +12,13 @@ mod ids;
 mod input;
 mod onboard;
 mod output;
+mod safe;
+mod show;
 mod skills;
 mod tray;
 mod update_check;
 mod view;
+mod watch;
 
 use std::process::ExitCode;
 
@@ -24,7 +27,35 @@ use clap::{CommandFactory, Parser};
 use args::{Cli, Command};
 use output::{emit_error, Out};
 
+/// `wipe status | head -1` closes stdout early: that is the reader's choice, not
+/// an error - exit quietly like other CLIs. Any other panic becomes one line
+/// that says where to report it, instead of a backtrace dump.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("unknown panic");
+        if msg.contains("Broken pipe")
+            || msg.contains("os error 232")
+            || msg.contains("failed printing to stdout")
+        {
+            std::process::exit(0);
+        }
+        let at = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!(
+            "error: internal error: {msg}{at} - please report it at https://github.com/mflRevan/wipe/issues"
+        );
+    }));
+}
+
 fn main() -> ExitCode {
+    install_panic_hook();
     let mut cli = Cli::parse();
 
     // Honor `-C/--cwd` by switching directories before anything touches the board.
@@ -209,6 +240,8 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Unsubscribe(a) => commands::subscribe(out, a, true),
         Command::Subscriptions { author } => commands::subscriptions(out, author),
         Command::Inbox(a) => commands::inbox(out, a),
+        Command::Search(a) => commands::search(out, a),
+        Command::Watch(a) => watch::run(out, a),
         Command::Trash { cmd } => commands::trash(out, cmd),
         Command::Commit(a) => commands::commit(out, a),
         Command::Doctor => commands::doctor(out),

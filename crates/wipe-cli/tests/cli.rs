@@ -1,8 +1,6 @@
-//! End-to-end CLI tests driving the real `wipe` binary against throwaway boards.
-//!
-//! These double as the "mock project + predefined flow" harness: they set up a
-//! board, run the exact commands an agent would run, and assert on both the
-//! human output and the `--json` contract. Reuse [`Project`] for new flows.
+//! End-to-end CLI contract: the real `wipe` binary against throwaway boards -
+//! setup, the everyday agent loop, identity gating, git integration, trash, the
+//! inbox, and multi-agent collaboration. Each test is one realistic scenario.
 
 mod common;
 
@@ -10,75 +8,133 @@ use std::process::Command as StdCommand;
 
 use assert_cmd::prelude::*;
 use common::Project;
-use serde_json::Value;
+use serde_json::{json, Value};
 
-#[test]
-fn init_creates_board_and_status_shows_lists() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Demo"]);
-    assert!(p.path().join(".wipe/board.json").is_file());
-    let status = p.json(&["status"]);
-    assert_eq!(status["board"], "Demo");
-    let lists = status["lists"].as_array().unwrap();
-    assert_eq!(lists.len(), 4);
-    assert_eq!(lists[0]["id"], "backlog");
+fn ids(v: &Value) -> Vec<String> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["id"].as_str().unwrap().to_string())
+        .collect()
 }
 
 #[test]
-fn full_agent_flow() {
+fn init_starters_global_defaults_and_discovery() {
     let p = Project::new();
-    p.run(&["init", ".", "--name", "Flow"]);
+    p.run(&["init", ".", "--name", "Demo"]);
+    let status = p.json(&["status"]);
+    assert_eq!(status["board"], "Demo");
+    assert_eq!(
+        ids(&status["lists"]),
+        ["backlog", "todo", "in-progress", "done"]
+    );
 
-    // Create two tickets; IDs are allocated deterministically.
-    let t1 = p.json(&[
+    // Commands find the board from any subdirectory, or from anywhere via -C.
+    let sub = p.path().join("src").join("deep");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mut c = StdCommand::cargo_bin("wipe").unwrap();
+    c.current_dir(&sub)
+        .env("WIPE_CONFIG_DIR", p.path())
+        .args(["status", "--json"]);
+    let v: Value = serde_json::from_slice(&c.output().unwrap().stdout).unwrap();
+    assert_eq!(v["board"], "Demo");
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut c = StdCommand::cargo_bin("wipe").unwrap();
+    c.current_dir(elsewhere.path())
+        .env("WIPE_CONFIG_DIR", p.path());
+    c.args(["-C", p.path().to_str().unwrap(), "status", "--json"]);
+    assert!(c.output().unwrap().status.success());
+
+    // Stored global defaults drive a non-interactive init; `empty` has no lists.
+    let g = Project::new();
+    g.json(&["config", "--global", "set", "autoserve", "true"]);
+    g.json(&["config", "--global", "set", "starter", "empty"]);
+    assert_eq!(
+        g.json(&["config", "--global", "get", "starter"])["value"],
+        "empty"
+    );
+    let v = g.json(&["init", ".", "--name", "G", "--yes"]);
+    assert_eq!(
+        (v["starter"].as_str(), v["autoserve"].as_bool()),
+        (Some("empty"), Some(true))
+    );
+    assert!(g.json(&["status"])["lists"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn agent_work_loop() {
+    let p = Project::with_board("Flow");
+    let t = p.json(&[
         "ticket",
         "create",
-        "--list",
-        "backlog",
-        "--title",
         "Add login",
+        "--list",
+        "todo",
         "--priority",
         "high",
     ]);
-    assert_eq!(t1["id"], "T-001");
-    let t2 = p.json(&[
+    assert_eq!(
+        (t["id"].as_str(), t["title"].as_str()),
+        (Some("T-001"), Some("Add login"))
+    );
+    p.json(&[
         "ticket",
         "create",
-        "--list",
-        "backlog",
         "--title",
         "Fix navbar",
+        "--list",
+        "backlog",
     ]);
-    assert_eq!(t2["id"], "T-002");
+    // Positional and --title together are ambiguous.
+    assert!(!p
+        .cmd(&["ticket", "create", "A", "--title", "B", "--list", "todo"])
+        .output()
+        .unwrap()
+        .status
+        .success());
 
-    // Move, comment, label.
-    p.json(&["ticket", "move", "T-001", "--to", "in-progress"]);
-    let c = p.json(&["comment", "add", "T-001", "--body", "Use OAuth"]);
-    assert_eq!(c["comment"], "c-1");
-    assert_eq!(c["author"], "Tester <t@example.com>");
-    p.json(&["label", "assign", "T-001", "needs-review"]);
+    // `move <id> <list>` (and --to) answer with a receipt in the canonical id.
+    assert_eq!(
+        p.json(&["ticket", "move", "t1", "in-progress"]),
+        json!({ "ok": true, "id": "T-001", "list": "in-progress" })
+    );
+    let c = p.json(&["comment", "add", "T-001", "Use OAuth"]);
+    assert_eq!(
+        (c["comment"].as_str(), c["author"].as_str()),
+        (Some("c-1"), Some("Tester <t@example.com>"))
+    );
+    assert_eq!(
+        p.json(&["label", "assign", "T-001", "app", "bug", "ios"])["labels"],
+        json!(["app", "bug", "ios"])
+    );
+    assert_eq!(
+        p.json(&["label", "remove", "T-001", "bug", "ios"])["labels"],
+        json!(["app"])
+    );
 
-    // Verify ticket state via JSON.
     let show = p.json(&["ticket", "show", "T-001"]);
-    assert_eq!(show["list"], "in-progress");
-    assert_eq!(show["labels"][0], "needs-review");
-    assert_eq!(show["comments"][0]["body"], "Use OAuth");
-
-    // Close moves to done.
-    let closed = p.json(&["ticket", "close", "T-001"]);
-    assert_eq!(closed["list"], "done");
-
-    // Filtered listing.
-    let backlog = p.json(&["ticket", "list", "--list", "backlog"]);
-    let arr = backlog.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["id"], "T-002");
+    assert_eq!(
+        (show["list"].as_str(), show["priority"].as_str()),
+        (Some("in-progress"), Some("high"))
+    );
+    assert_eq!(show["labels"], json!(["app"]));
+    assert_eq!(
+        (
+            show["comments"][0]["by"].as_str(),
+            show["comments"][0]["body"].as_str()
+        ),
+        (Some("Tester <t@example.com>"), Some("Use OAuth"))
+    );
+    assert_eq!(p.json(&["ticket", "close", "T-001"])["list"], "done");
+    assert_eq!(
+        ids(&p.json(&["ticket", "list", "--list", "backlog"])),
+        ["T-002"]
+    );
 }
 
 #[test]
-fn json_error_object_and_nonzero_exit_on_missing_ticket() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Err"]);
+fn errors_are_json_on_stdout_with_guidance() {
+    let p = Project::with_board("Err");
     let out = p
         .cmd(&["ticket", "show", "T-063", "--json"])
         .output()
@@ -87,325 +143,224 @@ fn json_error_object_and_nonzero_exit_on_missing_ticket() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["ok"], false);
     assert!(v["error"].as_str().unwrap().contains("T-063"));
-}
 
-#[test]
-fn delete_requires_confirmation() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Del"]);
-    p.json(&["ticket", "create", "--list", "backlog", "--title", "Temp"]);
-    // Without --yes it must refuse and exit non-zero.
-    let refused = p.cmd(&["ticket", "delete", "T-001"]).output().unwrap();
-    assert!(!refused.status.success());
-    // With --yes it succeeds.
+    // A missing list names the real ones.
+    let e = p.json_err(&["ticket", "create", "No list"]);
+    assert!(e["error"].as_str().unwrap().contains("todo"), "{e}");
+    let e = p.json_err(&["ticket", "create", "x", "--list", "nosuch"]);
+    assert!(e["error"].as_str().unwrap().contains("nosuch"), "{e}");
+    p.json(&["ticket", "create", "Temp", "--list", "todo"]);
+    let e = p.json_err(&["ticket", "move", "T-001", "nowhere"]);
+    assert!(e["error"].as_str().unwrap().contains("in-progress"), "{e}");
+    // Destructive commands need --yes.
+    p.json_err(&["ticket", "delete", "T-001"]);
     p.json(&["ticket", "delete", "T-001", "--yes"]);
-    let missing = p
-        .cmd(&["ticket", "show", "T-001", "--json"])
-        .output()
-        .unwrap();
-    assert!(!missing.status.success());
 }
 
 #[test]
-fn discovers_board_from_subdirectory() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Nested"]);
-    let sub = p.path().join("src").join("deep");
-    std::fs::create_dir_all(&sub).unwrap();
-    let mut c = StdCommand::cargo_bin("wipe").unwrap();
-    c.current_dir(&sub)
-        .env("WIPE_AUTHOR", "T <t@e.com>")
-        .args(["status", "--json"]);
-    let out = c.output().unwrap();
-    assert!(out.status.success());
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["board"], "Nested");
-}
-
-#[test]
-fn config_roundtrip() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Cfg"]);
+fn config_values_roundtrip_and_validate() {
+    let p = Project::with_board("Cfg");
     p.json(&["config", "set", "daemon.port", "9999"]);
-    let got = p.json(&["config", "get", "daemon.port"]);
-    assert_eq!(got["value"], 9999);
-    p.json(&["config", "set", "daemon.expose", "tailscale"]);
-    let expose = p.json(&["config", "get", "daemon.expose"]);
-    assert_eq!(expose["value"], "tailscale");
+    assert_eq!(p.json(&["config", "get", "daemon.port"])["value"], 9999);
+    for (v, want) in [
+        ("lan", "lan"),
+        ("localhost", "local"),
+        ("tailscale", "tailscale"),
+    ] {
+        p.json(&["config", "set", "daemon.expose", v]);
+        assert_eq!(p.json(&["config", "get", "daemon.expose"])["value"], want);
+    }
+    let e = p.json_err(&["config", "set", "daemon.expose", "none"]);
+    assert!(e["error"].as_str().unwrap().contains("local"), "{e}");
+    let e = p.json_err(&["config", "set", "board.review_list", "nope"]);
+    assert!(e["error"].as_str().unwrap().contains("no list"), "{e}");
 }
 
 #[test]
-fn skill_is_embedded() {
+fn skill_prints_and_installs() {
     let p = Project::new();
-    let out = p.run(&["skill"]);
-    assert!(out.contains("wipe - agent operating guide"));
-    // `skill show` is the explicit form of the same output.
-    assert!(p.run(&["skill", "show"]).contains("agent operating guide"));
-}
+    let skill = p.run(&["skill"]);
+    assert!(
+        skill.starts_with("---\nname: wipe") && skill.len() < 4000,
+        "a short bootstrap: {} bytes",
+        skill.len()
+    );
 
-#[test]
-fn init_empty_starter_has_no_lists() {
-    let p = Project::new();
-    let v = p.json(&[
-        "init",
-        ".",
-        "--name",
-        "Blank",
-        "--yes",
-        "--starter",
-        "empty",
-    ]);
-    assert_eq!(v["starter"], "empty");
-    let status = p.json(&["status"]);
-    assert!(status["lists"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn skill_install_writes_file_and_respects_force() {
-    let p = Project::new();
     let base = p.path().join("dest");
     let base_s = base.to_str().unwrap();
-
-    let v = p.json(&["skill", "install", "--dir", base_s, "--target", "claude"]);
-    assert_eq!(v["target"], "claude");
+    assert_eq!(
+        p.json(&["skill", "install", "--dir", base_s, "--target", "claude"])["target"],
+        "claude"
+    );
     assert!(base.join("skills/wipe/SKILL.md").is_file());
-
-    // A second install without --force fails; with --force it succeeds.
-    let again = p
-        .cmd(&["skill", "install", "--dir", base_s])
-        .output()
-        .unwrap();
-    assert!(!again.status.success());
+    assert!(
+        !p.cmd(&["skill", "install", "--dir", base_s])
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "no silent overwrite"
+    );
     p.json(&["skill", "install", "--dir", base_s, "--force"]);
-
-    // `skill path` reports the location without writing.
-    let path = p.json(&["skill", "path", "--dir", base_s, "--target", "agents"]);
-    assert!(path["path"].as_str().unwrap().contains("SKILL.md"));
-}
-
-#[test]
-fn skill_install_auto_detects_agents_dir() {
-    let p = Project::new();
+    assert!(
+        p.json(&["skill", "path", "--dir", base_s, "--target", "agents"])["path"]
+            .as_str()
+            .unwrap()
+            .contains("SKILL.md")
+    );
+    // Auto-detects the agents convention from the project.
     std::fs::create_dir_all(p.path().join(".agents")).unwrap();
-    let v = p.json(&["skill", "install"]);
-    assert_eq!(v["target"], "agents");
-    assert!(p.path().join(".agents/skills/wipe/SKILL.md").is_file());
+    assert_eq!(p.json(&["skill", "install"])["target"], "agents");
 }
 
 #[test]
-fn global_config_roundtrip() {
-    let p = Project::new();
-    p.json(&["config", "--global", "set", "autoserve", "true"]);
-    p.json(&["config", "--global", "set", "starter", "empty"]);
-    assert_eq!(
-        p.json(&["config", "--global", "get", "autoserve"])["value"],
-        true
-    );
-    assert_eq!(
-        p.json(&["config", "--global", "get", "starter"])["value"],
-        "empty"
-    );
-    // The stored global default then drives a non-interactive init.
-    let v = p.json(&["init", ".", "--name", "G", "--yes"]);
-    assert_eq!(v["starter"], "empty");
-    assert_eq!(v["autoserve"], true);
-}
-
-#[test]
-fn forum_threads_replies_and_search() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "F"]);
-
-    let t = p.json(&[
-        "forum",
-        "post",
-        "-t",
-        "Auth",
-        "-b",
-        "use OAuth 2.1",
-        "--label",
-        "decision",
-    ]);
-    assert_eq!(t["id"], "F-1");
-    let r = p.json(&[
-        "forum",
-        "reply",
-        "F-1",
-        "-b",
-        "watch token races",
-        "--label",
-        "gotcha",
-    ]);
-    assert_eq!(r["id"], "F-1.1");
-    let nested = p.json(&["forum", "reply", "F-1.1", "-b", "use a mutex"]);
-    assert_eq!(nested["id"], "F-1.1.1");
-
-    // regex over bodies
-    let hits = p.json(&["forum", "search", "token|mutex"]);
-    assert_eq!(hits.as_array().unwrap().len(), 2);
-    // by label
-    let g = p.json(&["forum", "search", "--label", "gotcha"]);
-    assert_eq!(g.as_array().unwrap().len(), 1);
-    assert_eq!(g[0]["id"], "F-1.1");
-    // titles only
-    let titles = p.json(&["forum", "search", "auth", "--titles"]);
-    assert_eq!(titles.as_array().unwrap().len(), 1);
-    assert_eq!(titles[0]["id"], "F-1");
-    // scoped to a subtree
-    let scoped = p.json(&["forum", "search", "--scope", "F-1"]);
-    assert_eq!(scoped.as_array().unwrap().len(), 3);
-}
-
-#[test]
-fn forum_delete_removes_subtree_and_requires_yes() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "F"]);
-    p.json(&["forum", "post", "-t", "T", "-b", "root"]);
-    p.json(&["forum", "reply", "F-1", "-b", "a"]); // F-1.1
-    p.json(&["forum", "reply", "F-1.1", "-b", "aa"]); // F-1.1.1
-    p.json(&["forum", "reply", "F-1", "-b", "b"]); // F-1.2
-
-    // Delete refuses without --yes.
-    assert!(!p
-        .cmd(&["forum", "delete", "F-1.1"])
-        .output()
-        .unwrap()
-        .status
-        .success());
-    p.json(&["forum", "delete", "F-1.1", "--yes"]);
-
-    let ids: Vec<String> = p
-        .json(&["forum", "search"])
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v["id"].as_str().unwrap().to_string())
-        .collect();
-    assert!(ids.contains(&"F-1".to_string()));
-    assert!(ids.contains(&"F-1.2".to_string()));
-    assert!(!ids.iter().any(|i| i.starts_with("F-1.1")));
-}
-
-#[test]
-fn checklist_and_criteria_are_independent_surfaces() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Ship it"]); // T-001
-
-    // Two independent tickable lists with their own ID namespaces.
-    assert_eq!(
-        p.json(&["checklist", "add", "T-001", "-t", "write code"])["item"],
-        "ck-1"
-    );
-    assert_eq!(
-        p.json(&["criteria", "add", "T-001", "-t", "tests pass"])["item"],
-        "ac-1"
-    );
-    assert_eq!(
-        p.json(&["criteria", "add", "T-001", "-t", "docs updated"])["item"],
-        "ac-2"
-    );
-
-    // A reviewer accepts one criterion; the checklist is untouched.
-    p.json(&["criteria", "check", "T-001", "ac-1"]);
-    let ac = p.json(&["criteria", "list", "T-001"]);
-    let items = ac["acceptance"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["done"], true);
-    assert_eq!(items[1]["done"], false);
-    let ck = p.json(&["checklist", "list", "T-001"]);
-    assert_eq!(ck["checklist"][0]["done"], false);
-
-    // A ck- id is not addressable through the criteria surface.
-    assert!(!p
-        .cmd(&["criteria", "check", "T-001", "ck-1"])
-        .output()
-        .unwrap()
-        .status
-        .success());
-}
-
-#[test]
-fn comments_can_be_added_and_removed() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "C"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Talk"]); // T-001
-    assert_eq!(
-        p.json(&["comment", "add", "T-001", "-b", "first"])["comment"],
-        "c-1"
-    );
-    p.json(&["comment", "add", "T-001", "-b", "second"]); // c-2
-
+fn comments_and_authorship_corrections_are_audited() {
+    let p = Project::with_board("Talk");
+    p.json(&["ticket", "create", "X", "--list", "todo"]);
+    p.json(&["comment", "add", "T-001", "-b", "first"]);
+    p.json(&["comment", "add", "T-001", "-b", "second"]);
     p.json(&["comment", "remove", "T-001", "c-1"]);
-    let listed = p.json(&["comment", "list", "T-001"]);
-    let ids: Vec<String> = listed["comments"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["id"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(ids, vec!["c-2"]);
-
-    // A fresh comment still advances the counter (no id reuse after deletion).
     assert_eq!(
         p.json(&["comment", "add", "T-001", "-b", "third"])["comment"],
-        "c-3"
+        "c-3",
+        "ids are never reused"
     );
-    // Removing a missing comment is an error, not a panic.
-    assert!(!p
-        .cmd(&["comment", "remove", "T-001", "c-99"])
-        .output()
+    p.json_err(&["comment", "remove", "T-001", "c-99"]);
+
+    p.json(&["comment", "edit", "T-001", "c-2", "--body", "edited body"]);
+    assert_eq!(
+        p.json(&["comment", "reattribute", "T-001", "c-2", "--to", "alice"])["to"],
+        "alice"
+    );
+    p.json(&["ticket", "edit", "T-001", "--author", "bob"]);
+    let show = p.json(&["ticket", "show", "T-001", "--activity"]);
+    assert_eq!(show["author"], "bob", "creator rewritten");
+    let c2 = show["comments"]
+        .as_array()
         .unwrap()
-        .status
-        .success());
+        .iter()
+        .find(|c| c["id"] == "c-2")
+        .unwrap();
+    assert_eq!(
+        (c2["by"].as_str(), c2["body"].as_str()),
+        (Some("alice"), Some("edited body"))
+    );
+    // Corrections leave an audit trail instead of silently overwriting.
+    assert!(
+        show["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["detail"].as_str().unwrap_or("").contains("c-2")),
+        "{show}"
+    );
+
+    p.json(&["forum", "post", "--title", "T", "--body", "b"]);
+    assert_eq!(
+        p.json(&["forum", "edit", "F-1", "--author", "carol"])["to"],
+        "carol"
+    );
+    assert_eq!(p.json(&["forum", "show", "F-1"])["post"]["author"], "carol");
 }
 
 #[test]
-fn commit_creates_atomic_wipe_attributed_commit() {
-    let p = Project::new();
-    p.git(&["init", "-q"]);
-    p.git(&["config", "user.email", "repo@example.com"]);
-    p.git(&["config", "user.name", "Repo User"]);
-    p.run(&["init", ".", "--name", "L"]);
-    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
+fn git_commits_are_scoped_attributed_and_linked() {
+    let p = Project::with_board("Git");
+    p.git_init();
+    // Until the first `wipe commit`, writes hint at it - on stderr only.
+    let out = p
+        .cmd(&["ticket", "create", "Login", "--list", "todo", "--json"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("wipe commit"));
+    let _: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = p.json(&["doctor"]);
+    assert!(d["uncommitted_board_files"].as_u64().unwrap() > 0);
+    assert!(d["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains("wipe commit")));
 
-    // A stray non-board change must NOT be swept into the board commit.
+    // `wipe commit` takes only .wipe/, as the wipe identity, not the repo user.
     std::fs::write(p.path().join("unrelated.txt"), "hi\n").unwrap();
-
     let c = p.json(&["commit", "-m", "board init", "--author", "claude-dev"]);
-    assert!(c["commit"].is_string(), "returns the new commit hash");
-    // Attributed to the wipe identity, not the ambient repo user.
+    assert!(c["commit"].is_string());
     assert_eq!(p.head_author(), "claude-dev <claude-dev@wipe.local>");
-
-    // The unrelated file is still untracked (the commit was scoped to .wipe/).
     let st = StdCommand::new("git")
         .current_dir(p.path())
         .args(["status", "--porcelain", "unrelated.txt"])
         .output()
         .unwrap();
+    assert!(String::from_utf8(st.stdout)
+        .unwrap()
+        .contains("?? unrelated.txt"));
     assert!(
-        String::from_utf8(st.stdout)
-            .unwrap()
-            .contains("?? unrelated.txt"),
-        "unrelated change stays out of the board commit"
+        p.json(&["commit"])["commit"].is_null(),
+        "nothing left to commit"
+    );
+    let out = p
+        .cmd(&["ticket", "create", "B", "--list", "todo", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("wipe commit"),
+        "hint retired"
     );
 
-    // Nothing new to commit -> reports null, exits 0.
-    let again = p.json(&["commit"]);
-    assert!(again["commit"].is_null());
+    // `ticket show` links commits that name the ticket (standalone ids only).
+    for (f, msg) in [
+        ("a", "fix login redirect (T-001)"),
+        ("b", "unrelated T-0011 work"),
+        ("c", "polish\n\nrefs T-001"),
+    ] {
+        std::fs::write(p.path().join(f), f).unwrap();
+        p.git(&["add", f]);
+        p.git(&["commit", "-q", "-m", msg]);
+    }
+    let t = p.json(&["ticket", "show", "T-001"]);
+    let subjects: Vec<&str> = t["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["polish", "fix login redirect (T-001)"]);
+    assert!(p
+        .json(&["ticket", "show", "T-001", "--no-commits"])
+        .get("commits")
+        .is_none());
+
+    // Autocommit: every write commits .wipe/ by itself.
+    p.run(&["config", "set", "board.autocommit", "true"]);
+    p.json(&["ticket", "create", "X", "--list", "todo"]);
+    let files = StdCommand::new("git")
+        .current_dir(p.path())
+        .args(["--no-pager", "show", "--name-only", "--format=", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(files.stdout)
+        .unwrap()
+        .contains("tickets/T-003.json"));
+
+    // Through the npm shim on Windows, doctor explains the argument truncation.
+    let mut c = p.cmd(&["doctor", "--json"]);
+    c.env("WIPE_NPM_SHIM", "1");
+    let v: Value = serde_json::from_slice(&c.output().unwrap().stdout).unwrap();
+    assert_eq!(v["npm_shim"], true);
+    if cfg!(windows) {
+        assert!(v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("--body-file")));
+    }
 }
 
 #[test]
-fn subscriptions_and_inbox_flow() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "L"]);
-
-    // alice creates a ticket and assigns bob (who is auto-subscribed).
-    let t = p.json_as(
-        "alice",
-        &["ticket", "create", "--list", "todo", "-t", "Task"],
-    );
-    assert_eq!(t["id"], "T-001");
+fn inbox_subscriptions_and_read_cursor() {
+    let p = Project::with_board("Inbox");
+    p.json_as("alice", &["ticket", "create", "Task", "--list", "todo"]);
     p.json_as("alice", &["ticket", "assign", "T-001", "bob"]);
     let subs = p.json_as("bob", &["subscriptions"]);
     assert!(
@@ -414,40 +369,53 @@ fn subscriptions_and_inbox_flow() {
             .unwrap()
             .iter()
             .any(|r| r == "T-001"),
-        "assignee auto-subscribed to their ticket"
+        "assignees are subscribed"
     );
+    p.json_as("alice", &["comment", "add", "T-001", "please start"]);
+    p.json_as("bob", &["comment", "add", "T-001", "on it"]);
 
-    // alice comments; bob comments too.
-    p.json_as(
-        "alice",
-        &["comment", "add", "T-001", "--body", "please start"],
-    );
-    p.json_as("bob", &["comment", "add", "T-001", "--body", "on it"]);
-
-    // bob's inbox shows alice's activity but never bob's own actions.
+    // Grouped per ticket; others' changes only, never your own.
     let ib = p.json_as("bob", &["inbox"]);
-    let events = ib["events"].as_array().unwrap();
-    assert!(
-        events
-            .iter()
-            .any(|e| e["kind"] == "comment" && e["actor"] == "alice"),
-        "sees alice's comment"
+    let item = &ib["items"][0];
+    assert_eq!(
+        (item["id"].as_str(), item["why"].as_str()),
+        (Some("T-001"), Some("assigned"))
     );
-    assert!(
-        events.iter().all(|e| e["actor"] != "bob"),
-        "own actions excluded from inbox"
-    );
+    let events = item["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e["event"] == "commented" && e["by"] == "alice" && e["detail"] == "please start"));
+    assert!(events.iter().all(|e| e["by"] != "bob"));
 
-    // --unread consumes: first call has items, the second is empty.
-    let u1 = p.json_as("bob", &["inbox", "--unread"]);
-    assert!(u1["count"].as_u64().unwrap() >= 1);
-    let u2 = p.json_as("bob", &["inbox", "--unread"]);
-    assert_eq!(u2["count"], 0, "read-cursor advanced");
+    // --unread consumes: the second call is empty.
+    assert!(
+        p.json_as("bob", &["inbox", "--unread"])["total"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(p.json_as("bob", &["inbox", "--unread"])["total"], 0);
+
+    // Not involved: empty; the board-wide view is not, and needs no identity.
+    assert_eq!(p.json_as("carol", &["inbox"])["total"], 0);
+    let out = p
+        .bare(&["inbox", "--all", "--limit", "1", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let all: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(all["total"].as_u64().unwrap() >= 3 && all.get("identity").is_none());
+    assert_eq!(all["items"].as_array().unwrap().len(), 1);
+    assert!(all["items"][0].get("why").is_none(), "`board` is implied");
 }
 
 #[test]
-fn writes_without_an_identity_are_refused_with_guidance() {
-    let p = Project::with_board("L");
+fn writes_need_an_explicit_identity() {
+    let p = Project::with_board("Who");
     p.run(&[
         "identity",
         "use",
@@ -458,14 +426,11 @@ fn writes_without_an_identity_are_refused_with_guidance() {
     ]);
     p.run(&["identity", "clear"]);
 
-    // No identity of any kind: the write is refused, nothing is created, and the
-    // error lists the board's identities, how to pick one, and asks agents to
-    // check with their user instead of guessing.
     let out = p
         .bare(&["ticket", "create", "X", "--list", "todo", "--json"])
         .output()
         .unwrap();
-    assert!(!out.status.success(), "a write without identity must fail");
+    assert!(!out.status.success(), "no identity, no write");
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     let err = v["error"].as_str().unwrap();
     for needle in [
@@ -479,42 +444,32 @@ fn writes_without_an_identity_are_refused_with_guidance() {
         assert!(err.contains(needle), "missing `{needle}` in: {err}");
     }
     assert!(!p.path().join(".wipe/tickets/T-001.json").exists());
-
-    // The legacy strict flag changes nothing: writes are always strict now.
     let mut c = p.bare(&["ticket", "create", "X", "--list", "todo", "--json"]);
     c.env("WIPE_STRICT_IDENTITY", "0");
-    assert!(!c.output().unwrap().status.success());
+    assert!(
+        !c.output().unwrap().status.success(),
+        "the legacy opt-out is gone"
+    );
 
-    // Reads never need an identity.
+    // Reads never need one.
     for read in [
         vec!["status", "--json"],
         vec!["ticket", "list", "--json"],
-        vec!["list", "show", "--json"],
+        vec!["search", "x", "--json"],
         vec!["forum", "list", "--json"],
         vec!["identity", "whoami", "--json"],
     ] {
-        let out = p.bare(&read).output().unwrap();
         assert!(
-            out.status.success(),
-            "read {read:?} failed without identity"
+            p.bare(&read).output().unwrap().status.success(),
+            "read {read:?}"
         );
     }
-    let who: Value = serde_json::from_slice(
-        &p.bare(&["identity", "whoami", "--json"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    assert!(who["identity"].is_null());
 
-    // Any explicit source unlocks writes: $WIPE_AGENT, --agentid, or a session.
-    let mut c = p.bare(&["ticket", "create", "Y", "--list", "todo", "--json"]);
-    c.env("WIPE_AGENT", "claude-dev");
-    assert!(
-        c.output().unwrap().status.success(),
-        "$WIPE_AGENT unlocks writes"
-    );
+    // Any explicit source unlocks writes; $WIPE_AGENT outranks $WIPE_AUTHOR.
+    let mut c = p.cmd(&["ticket", "create", "Y", "--list", "todo", "--json"]);
+    c.env("WIPE_AGENT", "agent-7");
+    assert!(c.output().unwrap().status.success());
+    assert_eq!(p.json(&["ticket", "show", "T-001"])["author"], "agent-7");
     let out = p
         .bare(&[
             "--agentid",
@@ -529,208 +484,156 @@ fn writes_without_an_identity_are_refused_with_guidance() {
         .output()
         .unwrap();
     assert!(out.status.success(), "--agentid unlocks writes");
-    assert!(p
-        .bare(&["identity", "use", "claude", "--agent"])
-        .output()
-        .unwrap()
+}
+
+#[test]
+fn identities_bind_per_session_and_never_leak() {
+    let p = Project::with_board("Sessions");
+    let run = |envs: &[(&str, &str)], args: &[&str]| {
+        let mut c = p.bare(args);
+        c.env_remove("WIPE_SESSION");
+        for (k, v) in envs {
+            c.env(k, v);
+        }
+        c.output().unwrap()
+    };
+    let author = |envs: &[(&str, &str)], title: &str| -> Option<String> {
+        let out = run(
+            envs,
+            &["ticket", "create", title, "--list", "todo", "--json"],
+        );
+        if !out.status.success() {
+            return None;
+        }
+        let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        Some(
+            p.json(&["ticket", "show", &id])["author"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        )
+    };
+    let tab = [("WT_SESSION", "tab-1")];
+    assert_eq!(author(&tab, "h0"), None, "a fresh terminal has no identity");
+    assert!(run(&tab, &["identity", "use", "bilal@x.com", "--human"])
         .status
         .success());
-    let out = p
-        .bare(&["ticket", "create", "W", "--list", "todo", "--json"])
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "a bound session unlocks writes");
-}
-
-#[test]
-fn autocommit_commits_after_mutations_when_enabled() {
-    let p = Project::new();
-    p.git(&["init", "-q"]);
-    p.git(&["config", "user.email", "repo@example.com"]);
-    p.git(&["config", "user.name", "Repo User"]);
-    p.run(&["init", ".", "--name", "L"]);
-    p.run(&["config", "set", "board.autocommit", "true"]);
-
-    // A board mutation now auto-commits .wipe/ with no explicit `wipe commit`.
-    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
-    let files = StdCommand::new("git")
-        .current_dir(p.path())
-        .args(["--no-pager", "show", "--name-only", "--format=", "HEAD"])
-        .output()
-        .unwrap();
-    let files = String::from_utf8(files.stdout).unwrap();
-    assert!(
-        files.contains("tickets/T-001.json"),
-        "autocommit included the new ticket file: {files}"
+    assert_eq!(author(&tab, "h1").as_deref(), Some("bilal@x.com"));
+    assert_eq!(
+        author(&[("WT_SESSION", "tab-2")], "x"),
+        None,
+        "other terminals don't inherit it"
     );
-}
 
-#[test]
-fn author_correction_verbs_reattribute_with_audit() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "L"]);
-    p.json(&["ticket", "create", "--list", "todo", "-t", "X"]);
-
-    // Comment, then edit its body.
-    p.json(&["comment", "add", "T-001", "--body", "first"]);
-    p.json(&["comment", "edit", "T-001", "c-1", "--body", "edited body"]);
-    // Reattribute the comment to another identity.
-    let r = p.json(&["comment", "reattribute", "T-001", "c-1", "--to", "alice"]);
-    assert_eq!(r["to"], "alice");
-
-    let show = p.json(&["ticket", "show", "T-001"]);
-    let c = show["comments"]
+    // An agent launched from that tab has its own session: no identity until it
+    // picks one, and then its own.
+    let agent = [
+        ("WT_SESSION", "tab-1"),
+        ("CLAUDE_CODE_SESSION_ID", "abc"),
+        ("CLAUDECODE", "1"),
+    ];
+    assert_eq!(
+        author(&agent, "a0"),
+        None,
+        "an agent never writes as the human"
+    );
+    assert!(run(
+        &agent,
+        &["identity", "use", "claude", "--agent", "--name", "Claude"]
+    )
+    .status
+    .success());
+    assert_eq!(author(&agent, "a1").as_deref(), Some("claude"));
+    assert_eq!(
+        author(&tab, "h2").as_deref(),
+        Some("bilal@x.com"),
+        "the human's tab is unaffected"
+    );
+    // A one-command --agentid wins over the session; the list marks the active one.
+    let out = run(
+        &agent,
+        &[
+            "--agentid",
+            "gizmo",
+            "--echo",
+            "ticket",
+            "create",
+            "g",
+            "--list",
+            "todo",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["activity"][0]["actor"],
+        "gizmo"
+    );
+    let list: Value =
+        serde_json::from_slice(&run(&agent, &["identity", "list", "--json"]).stdout).unwrap();
+    assert_eq!(list["active"], "claude");
+    assert!(list["identities"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["id"] == "c-1")
-        .unwrap();
-    assert_eq!(c["author"], "alice", "comment reattributed");
-    assert_eq!(c["body"], "edited body", "comment body edited");
-    // An audit entry records the correction (not a silent overwrite).
-    assert!(
-        show["activity"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["kind"] == "reattributed" && a["detail"].as_str().unwrap().contains("c-1")),
-        "reattribution audit entry present"
+        .any(|i| i["id"] == "claude" && i["kind"] == "agent"));
+    assert!(run(&agent, &["identity", "clear"]).status.success());
+    assert_eq!(author(&agent, "a2"), None);
+
+    // A harness with no session id of its own is told to use $WIPE_AGENT.
+    let out = run(
+        &[("WT_SESSION", "tab-1"), ("AI_AGENT", "other")],
+        &["identity", "use", "x", "--json"],
     );
-
-    // Reattribute the ticket's creation.
-    p.json(&["ticket", "edit", "T-001", "--author", "bob"]);
-    let show = p.json(&["ticket", "show", "T-001"]);
-    let created = show["activity"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["kind"] == "created")
-        .unwrap();
-    assert_eq!(created["actor"], "bob", "ticket creator rewritten");
-
-    // Reattribute a forum post.
-    p.json(&["forum", "post", "--title", "T", "--body", "b"]);
-    let fe = p.json(&["forum", "edit", "F-1", "--author", "carol"]);
-    assert_eq!(fe["to"], "carol");
-    let fs = p.json(&["forum", "show", "F-1"]);
-    assert_eq!(fs["post"]["author"], "carol", "forum post reattributed");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("WIPE_AGENT"));
 }
 
 #[test]
-fn trash_soft_delete_restore_and_duplicate() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "T"]);
-    p.json(&["ticket", "create", "--list", "todo", "-t", "A"]);
-    p.json(&["ticket", "create", "--list", "todo", "-t", "B"]);
-
-    // Duplicate places a "(copy)" right after the original.
+fn delete_trash_restore_duplicate_and_traversal() {
+    let p = Project::with_board("Trash");
+    p.json(&["ticket", "create", "A", "--list", "todo"]);
+    p.json(&["ticket", "create", "B", "--list", "todo"]);
     let d = p.json(&["ticket", "duplicate", "T-001"]);
     assert_eq!(d["id"], "T-003");
     assert!(d["title"].as_str().unwrap().contains("(copy)"));
+    assert_eq!(
+        ids(&p.json(&["ticket", "list", "--list", "todo"])),
+        ["T-001", "T-003", "T-002"],
+        "the copy sits after the original"
+    );
 
-    // Soft-delete goes to the (restorable) trash by default.
-    let del = p.json(&["ticket", "delete", "T-002", "--yes"]);
-    assert_eq!(del["trashed"], true);
-    assert!(!p
-        .cmd(&["ticket", "show", "T-002", "--json"])
-        .output()
-        .unwrap()
-        .status
-        .success());
-    let tl = p.json(&["trash", "list"]);
-    assert!(tl["trash"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|t| t["id"] == "T-002"));
-
-    // Restore brings it back onto the board.
-    p.json(&["trash", "restore", "T-002"]);
-    assert!(p
-        .cmd(&["ticket", "show", "T-002", "--json"])
-        .output()
-        .unwrap()
-        .status
-        .success());
-
-    // --purge deletes permanently (never enters the trash).
+    assert_eq!(
+        p.json(&["ticket", "delete", "T-002", "--yes"])["trashed"],
+        true
+    );
+    p.json_err(&["ticket", "show", "T-002"]);
+    assert_eq!(ids(&p.json(&["trash", "list"])["trash"]), ["T-002"]);
+    p.json(&["trash", "restore", "t2"]);
+    p.json(&["ticket", "show", "T-002"]);
     p.json(&["ticket", "delete", "T-001", "--yes", "--purge"]);
-    let tl2 = p.json(&["trash", "list"]);
-    assert!(!tl2["trash"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|t| t["id"] == "T-001"));
-}
-
-#[test]
-fn ticket_create_requires_a_list() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "L"]);
-    let out = p
-        .cmd(&["ticket", "create", "-t", "No list", "--json"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success(), "create without --list should fail");
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["ok"], false);
-    let err = v["error"].as_str().unwrap();
-    assert!(err.contains("--list"), "error should mention --list: {err}");
     assert!(
-        err.contains("todo"),
-        "error should list available lists: {err}"
+        p.json(&["trash", "list"])["trash"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "--purge skips the trash"
     );
-    // With a list it succeeds.
-    let t = p.json(&["ticket", "create", "--list", "todo", "-t", "Ok"]);
-    assert_eq!(t["id"], "T-001");
+
+    // Crafted ids never escape their directory.
+    let board = p.path().join(".wipe/board.json");
+    p.json_err(&["ticket", "delete", "../board", "--yes"]);
+    assert_eq!(p.json(&["trash", "purge", "../../board"])["purged"], false);
+    assert!(board.is_file());
 }
 
-#[test]
-fn wipe_agent_env_outranks_wipe_author() {
-    // The per-terminal $WIPE_AGENT identity must win over $WIPE_AUTHOR (which the
-    // test harness always sets), so multi-agent attribution is race-free.
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "A"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "X"]); // T-001
-    let mut c = p.cmd(&["comment", "add", "T-001", "-b", "hi", "--json"]);
-    c.env("WIPE_AGENT", "agent-7");
-    let out = c.output().unwrap();
-    assert!(
-        out.status.success(),
-        "comment add failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let listed = p.json(&["comment", "list", "T-001"]);
-    assert_eq!(listed["comments"][0]["author"], "agent-7");
-}
-
-#[test]
-fn ticket_delete_rejects_path_traversal() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Safe"]);
-    p.json(&["ticket", "create", "--list", "backlog", "-t", "Real"]); // T-001
-    assert!(p.path().join(".wipe/board.json").is_file());
-
-    // A crafted id that would escape tickets/ must fail, not delete board.json.
-    let out = p
-        .cmd(&["ticket", "delete", "../board", "--yes", "--json"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(p.path().join(".wipe/board.json").is_file());
-}
-
-/// Multi-agent collaboration through the forum, each agent a separate process
-/// (as real harnesses are). This is the flagship guard that project knowledge
-/// posted by one agent is discoverable by another, and that the on-disk search
-/// cache stays correct ACROSS processes. Bugs here (stale cache, cross-author
-/// search misses, subtree corruption) surface as failures.
+/// Knowledge one agent posts is found by others, each a separate process (as in
+/// real harnesses) - the forum's on-disk index must stay correct across them.
 #[test]
 fn multi_agent_forum_collaboration() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Calc Service"]);
-
-    // The architect records a durable decision and a gotcha (compounding knowledge).
+    let p = Project::with_board("Calc");
     let dec = p.json_as(
         "architect",
         &[
@@ -752,46 +655,17 @@ fn multi_agent_forum_collaboration() {
             "reply",
             "F-1",
             "-b",
-            "Gotcha: JSON serializes big ints as strings; parse carefully.",
+            "Gotcha: big ints serialize as strings.",
             "--label",
             "gotcha",
         ],
     );
 
-    // A supervisor files work that points at the forum.
-    p.json(&[
-        "ticket",
-        "create",
-        "--title",
-        "Implement add()",
-        "--list",
-        "todo",
-        "--body",
-        "Follow the money rules in the forum.",
-    ]);
-
-    // The coder starts a FRESH process and, as the skill teaches, searches the
-    // forum first - and must find the architect's decision (cross-agent, cross-process).
-    let rules = p.json_as("coder", &["forum", "search", "cents|float|money"]);
-    let rules = rules.as_array().unwrap();
-    assert!(
-        !rules.is_empty(),
-        "coder must discover the architect's decision via search"
-    );
-    assert!(rules.iter().any(|r| r["author"] == "architect"));
-    let thread = rules[0]["thread_id"].as_str().unwrap().to_string();
-    assert_eq!(thread, "F-1");
-
-    // The coder confirms understanding in-thread and records a NEW discovered rule.
+    let found = p.json_as("coder", &["forum", "search", "cents|float"]);
+    assert_eq!(found[0]["thread_id"], "F-1");
     p.json_as(
         "coder",
-        &[
-            "forum",
-            "reply",
-            "F-1",
-            "-b",
-            "Confirmed. Using i64 cents in add().",
-        ],
+        &["forum", "reply", "F-1", "-b", "Confirmed. Using i64 cents."],
     );
     p.json_as(
         "coder",
@@ -807,14 +681,6 @@ fn multi_agent_forum_collaboration() {
         ],
     );
 
-    // A reviewer (third process) searches and finds insights from BOTH agents -
-    // the forum is the shared, compounding project memory.
-    let all_rules = p.json_as("reviewer", &["forum", "search", "--label", "decision"]);
-    assert!(all_rules
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["author"] == "architect"));
     let authors: std::collections::HashSet<String> = p
         .json_as("reviewer", &["forum", "search", "."])
         .as_array()
@@ -824,134 +690,19 @@ fn multi_agent_forum_collaboration() {
         .collect();
     assert!(
         authors.contains("architect") && authors.contains("coder"),
-        "the reviewer should see contributions from every agent: {authors:?}"
+        "{authors:?}"
     );
-
-    // The reviewer can scope a search to one thread and dive in.
-    let in_thread = p.json_as("reviewer", &["forum", "search", "--scope", "F-1"]);
-    assert_eq!(in_thread.as_array().unwrap().len(), 3); // decision + gotcha + coder confirm
-}
-
-/// Deterministic mirror of the agent-to-agent supervision loop (no LLM), so CI
-/// guards the exact collaboration protocol the live opencode harness exercises.
-#[test]
-fn supervision_protocol_offline() {
-    let p = Project::new();
-    p.run(&["init", ".", "--name", "Calc Service"]);
-
-    // Supervisor files a spec ticket into `todo`.
-    let filed = p.json(&[
-        "ticket",
-        "create",
-        "--title",
-        "Implement add",
-        "--list",
-        "todo",
-        "--body",
-        "Create calc.py defining add(a, b).",
-    ]);
-    assert_eq!(filed["id"], "T-001");
-
-    // Subordinate discovers assigned work purely via --json.
-    let todo = p.json(&["ticket", "list", "--list", "todo"]);
-    let assigned = todo.as_array().unwrap();
-    assert_eq!(assigned.len(), 1);
-    let id = assigned[0]["id"].as_str().unwrap().to_string();
-
-    // ...reads the spec...
-    let spec = p.json(&["ticket", "show", &id]);
-    assert!(spec["body"].as_str().unwrap().contains("calc.py"));
-
-    // ...reports back and advances the ticket.
-    p.json(&[
-        "comment",
-        "add",
-        &id,
-        "--body",
-        "Implemented add(a,b) in calc.py",
-    ]);
-    p.json(&["ticket", "move", &id, "--to", "done"]);
-
-    // Supervisor verifies the acceptance state.
-    let done = p.json(&["ticket", "show", &id]);
-    assert_eq!(done["list"], "done");
-    assert!(!done["comments"].as_array().unwrap().is_empty());
-}
-
-/// Identity resolution: a fresh session has NO identity (writes refused); a
-/// session-bound identity and a one-shot `--agentid` override both attribute
-/// correctly; sessions never leak between terminals; `identity list` marks the
-/// active one.
-#[test]
-fn identity_session_and_agentid_override() {
-    let p = Project::with_board("Ids");
-    let run_in = |session: &str, args: &[&str]| -> std::process::Output {
-        let mut v = args.to_vec();
-        v.push("--json");
-        let mut c = p.bare(&v);
-        c.env("WIPE_SESSION", session);
-        c.output().unwrap()
-    };
-    let run = |args: &[&str]| -> Value {
-        let out = run_in("sess-A", args);
-        assert!(
-            out.status.success(),
-            "command {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stdout)
-        );
-        serde_json::from_slice(&out.stdout).unwrap()
-    };
-
-    // No session identity yet: the write is refused (no VCS/default fallback).
-    assert!(
-        !run_in("sess-A", &["ticket", "create", "one", "--list", "backlog"])
-            .status
-            .success()
+    assert_eq!(
+        p.json_as("reviewer", &["forum", "search", "--scope", "F-1"])
+            .as_array()
+            .unwrap()
+            .len(),
+        3
     );
-
-    // Bind a session identity; the next ticket is authored by it.
-    run(&["identity", "use", "claude", "--agent", "--name", "Claude"]);
-    let t2 = run(&["--echo", "ticket", "create", "two", "--list", "backlog"]);
-    assert_eq!(t2["activity"][0]["actor"], "claude");
-
-    // whoami reflects the bound identity.
-    assert_eq!(run(&["identity", "whoami"])["identity"], "claude");
-
-    // Another terminal (session) does NOT inherit it.
-    assert!(
-        !run_in("sess-B", &["ticket", "create", "x", "--list", "backlog"])
-            .status
-            .success()
-    );
-
-    // A single-command --agentid override wins over the session.
-    let t3 = run(&[
-        "--echo",
-        "--agentid",
-        "gizmo",
-        "ticket",
-        "create",
-        "three",
-        "--list",
-        "backlog",
-    ]);
-    assert_eq!(t3["activity"][0]["actor"], "gizmo");
-
-    // The agent shows up in the identity list, marked active.
-    let list = run(&["identity", "list"]);
-    assert_eq!(list["active"], "claude");
-    let has_agent = list["identities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|i| i["id"] == "claude" && i["kind"] == "agent");
-    assert!(has_agent, "claude should be listed as an agent");
-
-    // Clearing the session makes writes refused again.
-    run(&["identity", "clear"]);
-    assert!(
-        !run_in("sess-A", &["ticket", "create", "four", "--list", "backlog"])
-            .status
-            .success()
+    // The unified search finds forum knowledge too.
+    let s = p.json_as("reviewer", &["search", "cents"]);
+    assert_eq!(
+        s["posts"][0]["id"].as_str().unwrap().split('.').next(),
+        Some("F-1")
     );
 }

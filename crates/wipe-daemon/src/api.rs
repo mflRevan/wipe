@@ -758,7 +758,8 @@ async fn patch_checks_item(
         ops::checks_edit(&store, kind, &id, &item, &text, now)?;
     }
     if let Some(done) = b.done {
-        ops::checks_set(&store, kind, &id, &item, Some(done), now)?;
+        let actor = resolve_actor(&state, &store, None);
+        ops::checks_set(&store, kind, &id, &item, Some(done), &actor, now)?;
     }
     notify(&state);
     Ok(Json(serde_json::to_value(store.load_ticket(&id)?)?))

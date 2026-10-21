@@ -284,9 +284,16 @@ export async function loadBoard(opts: { silent?: boolean } = {}): Promise<void> 
   }
 }
 
+/** Replace a small store's value only when its content changed: the live-update
+ *  handler refetches definitions and identities on every board change, and a new
+ *  (equal) array would make every card re-resolve its label colors and avatars. */
+function setIfChanged<T>(store: { set(v: T): void }, current: T, next: T): void {
+  if (JSON.stringify(current) !== JSON.stringify(next)) store.set(next);
+}
+
 export async function loadDefinitions(): Promise<void> {
   try {
-    definitions.set(await api.definitions(project()));
+    setIfChanged(definitions, get(definitions), await api.definitions(project()));
   } catch {
     /* definitions are non-critical */
   }
@@ -294,7 +301,7 @@ export async function loadDefinitions(): Promise<void> {
 
 export async function loadIdentities(): Promise<void> {
   try {
-    identities.set(await api.identities(project()));
+    setIfChanged(identities, get(identities), await api.identities(project()));
   } catch {
     /* identities are non-critical */
   }

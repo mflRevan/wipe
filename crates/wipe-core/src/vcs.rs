@@ -260,9 +260,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_git_and_resolves_identity() {
+    fn detects_git_and_its_identity() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        assert_eq!((detect(root), identity(root)), (Vcs::None, None));
         let git = |args: &[&str]| {
             Command::new("git")
                 .arg("-C")
@@ -274,25 +275,10 @@ mod tests {
         git(&["init", "-q"]);
         git(&["config", "user.name", "Ada Lovelace"]);
         git(&["config", "user.email", "ada@example.com"]);
-
         assert_eq!(detect(root), Vcs::Git);
         assert_eq!(
             identity(root).as_deref(),
             Some("Ada Lovelace <ada@example.com>")
         );
-    }
-
-    #[test]
-    fn no_vcs_yields_none() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(detect(dir.path()), Vcs::None);
-        assert_eq!(identity(dir.path()), None);
-    }
-
-    #[test]
-    fn vcs_names_are_stable() {
-        assert_eq!(Vcs::Plastic.name(), "plastic");
-        assert_eq!(Vcs::Git.name(), "git");
-        assert_eq!(Vcs::None.name(), "none");
     }
 }

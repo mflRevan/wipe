@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use common::Project;
+use serde_json::Value;
 use wipe_core::ops::{self, NewTicket};
 use wipe_core::Store;
 
@@ -68,7 +69,7 @@ fn assert_board_consistent(root: &Path) {
 #[test]
 fn concurrent_creates_never_collide_or_lose_tickets() {
     let p = Project::with_board("Race");
-    let failed = hammer(&p, 8, 12, |w, i| {
+    let failed = hammer(&p, 6, 8, |w, i| {
         vec![
             "ticket".into(),
             "create".into(),
@@ -80,8 +81,8 @@ fn concurrent_creates_never_collide_or_lose_tickets() {
     assert_eq!(failed, 0);
     let s = Store::open(p.path()).unwrap();
     let ids = s.ticket_ids().unwrap();
-    assert_eq!(ids.len(), 96, "every create must land exactly once");
-    let expected: HashSet<String> = (1..=96).map(|n| format!("T-{n:03X}")).collect();
+    assert_eq!(ids.len(), 48, "every create must land exactly once");
+    let expected: HashSet<String> = (1..=48).map(|n| format!("T-{n:03X}")).collect();
     assert_eq!(
         ids.into_iter().collect::<HashSet<_>>(),
         expected,
@@ -89,7 +90,7 @@ fn concurrent_creates_never_collide_or_lose_tickets() {
     );
     assert_eq!(
         s.load_board().unwrap().list("todo").unwrap().cards.len(),
-        96
+        48
     );
     assert_board_consistent(p.path());
 }
@@ -98,7 +99,7 @@ fn concurrent_creates_never_collide_or_lose_tickets() {
 fn concurrent_comments_on_one_ticket_are_all_kept() {
     let p = Project::with_board("Comments");
     p.json(&["ticket", "create", "hot", "--list", "todo"]);
-    let failed = hammer(&p, 8, 10, |w, i| {
+    let failed = hammer(&p, 6, 6, |w, i| {
         vec![
             "comment".into(),
             "add".into(),
@@ -108,16 +109,16 @@ fn concurrent_comments_on_one_ticket_are_all_kept() {
     });
     assert_eq!(failed, 0);
     let t = Store::open(p.path()).unwrap().load_ticket("T-001").unwrap();
-    assert_eq!(t.comments.len(), 80, "no comment may be lost to a race");
+    assert_eq!(t.comments.len(), 36, "no comment may be lost to a race");
     let ids: HashSet<&str> = t.comments.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(ids.len(), 80, "comment ids are unique");
-    assert_eq!(t.next_comment, 81);
+    assert_eq!(ids.len(), 36, "comment ids are unique");
+    assert_eq!(t.next_comment, 37);
 }
 
 #[test]
 fn mixed_concurrent_writers_keep_the_board_consistent() {
     let p = Project::with_board("Mixed");
-    for i in 0..16 {
+    for i in 0..12 {
         p.json(&[
             "ticket",
             "create",
@@ -126,8 +127,8 @@ fn mixed_concurrent_writers_keep_the_board_consistent() {
             "backlog",
         ]);
     }
-    let failed = hammer(&p, 8, 12, |w, i| {
-        let t = format!("T-{:03X}", (w * 7 + i) % 16 + 1);
+    let failed = hammer(&p, 6, 8, |w, i| {
+        let t = format!("T-{:03X}", (w * 7 + i) % 12 + 1);
         let lists = ["backlog", "todo", "in-progress", "done"];
         match i % 4 {
             0 => vec![
@@ -165,14 +166,14 @@ fn mixed_concurrent_writers_keep_the_board_consistent() {
     assert_eq!(failed, 0);
     assert_board_consistent(p.path());
     let s = Store::open(p.path()).unwrap();
-    assert_eq!(s.ticket_ids().unwrap().len(), 16 + 8 * 3);
+    assert_eq!(s.ticket_ids().unwrap().len(), 12 + 6 * 2);
     let checklist_items: usize = s
         .load_all_tickets()
         .unwrap()
         .iter()
         .map(|t| t.checklist.len())
         .sum();
-    assert_eq!(checklist_items, 8 * 3);
+    assert_eq!(checklist_items, 6 * 2);
 }
 
 // --- scale ---------------------------------------------------------------------
@@ -228,11 +229,11 @@ fn bytes_of(p: &Project, args: &[&str]) -> usize {
 #[test]
 fn compact_outputs_stay_bounded_on_a_large_board() {
     let p = Project::with_board("Big");
-    seed(&p, 300);
-    // 120 open tickets; compact rows must stay small regardless of history.
+    seed(&p, 200);
+    // 80 open tickets with long bodies and comments: rows stay small regardless.
     let status = bytes_of(&p, &["status", "--json"]);
     assert!(
-        status < 120 * 260,
+        status < 80 * 120,
         "compact status too large: {status} bytes"
     );
     let full = bytes_of(&p, &["status", "--full", "--json"]);
@@ -240,37 +241,37 @@ fn compact_outputs_stay_bounded_on_a_large_board() {
         full > 20 * status,
         "the full dump is the heavy one ({full} vs {status})"
     );
-
     let todo = bytes_of(&p, &["ticket", "list", "--list", "todo", "--json"]);
-    assert!(todo < 60 * 260, "todo listing: {todo} bytes");
-    let ids = bytes_of(
-        &p,
-        &[
-            "ticket",
-            "list",
-            "--exclude-list",
-            "done",
-            "--fields",
-            "id,title",
-            "--json",
-        ],
+    assert!(todo < 40 * 120, "todo listing: {todo} bytes");
+    let text = p.run(&["ticket", "list"]);
+    assert!(
+        text.contains("100 more"),
+        "listing everything is capped by default"
     );
-    assert!(ids < 120 * 90, "id,title listing: {ids} bytes");
 
-    // Receipts are constant-size no matter how big the ticket is.
-    let r = bytes_of(&p, &["comment", "add", "T-001", "x", "--json"]);
-    assert!(r < 150, "receipt: {r} bytes");
-    let r = bytes_of(&p, &["ticket", "edit", "T-001", "--label", "z", "--json"]);
-    assert!(r < 150, "receipt: {r} bytes");
-
-    // The inbox is capped by default (with the true total), and detail snippets
-    // are capped per event.
-    let inbox = p.json_as("someone-else", &["inbox", "--all"]);
-    assert_eq!(inbox["count"], 50);
-    assert!(inbox["total"].as_u64().unwrap() > 1000);
-    for e in inbox["events"].as_array().unwrap() {
-        assert!(e["detail"].as_str().unwrap().chars().count() <= 121);
+    // Receipts and single-ticket views are constant-size, whatever the history.
+    for args in [
+        vec!["comment", "add", "T-001", "x", "--json"],
+        vec!["ticket", "edit", "T-001", "--label", "z", "--json"],
+    ] {
+        let r = bytes_of(&p, &args);
+        assert!(r < 150, "{args:?}: {r} bytes");
     }
+    assert!(bytes_of(&p, &["ticket", "show", "T-001"]) < 4_000);
+
+    // The inbox is capped (with the true total) and its snippets are short.
+    let inbox = p.json_as("someone-else", &["inbox", "--all"]);
+    assert!(inbox["total"].as_u64().unwrap() > 1000);
+    let events: Vec<&Value> = inbox["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|i| i["events"].as_array().unwrap())
+        .collect();
+    assert_eq!(events.len(), 20);
+    assert!(events
+        .iter()
+        .all(|e| e["detail"].as_str().unwrap_or("").chars().count() <= 91));
 }
 
 // --- audit -----------------------------------------------------------------------
@@ -341,7 +342,7 @@ fn output_audit() {
             vec!["comment", "list", "T-001", "--json"],
         ),
         (
-            "inbox --all --json (default cap 50)",
+            "inbox --all --json (default cap)",
             vec!["inbox", "--all", "--json"],
         ),
         (

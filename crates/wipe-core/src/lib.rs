@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod forum;
 pub mod git;
 pub mod id;
@@ -17,6 +18,7 @@ pub mod inbox;
 pub mod model;
 pub mod ops;
 pub mod registry;
+pub mod search;
 pub mod store;
 pub mod translate;
 pub mod trash;

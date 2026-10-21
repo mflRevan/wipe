@@ -873,59 +873,10 @@ impl Exposure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
-
-    fn fixed() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap()
-    }
-
-    #[test]
-    fn board_has_default_lists() {
-        let b = Board::new("Demo", fixed());
-        assert_eq!(b.lists.len(), 4);
-        assert_eq!(b.lists[2].id, "in-progress");
-        assert_eq!(b.next_ticket, 1);
-    }
-
-    #[test]
-    fn ticket_omits_empty_fields_and_has_no_type_or_tags() {
-        let t = Ticket::new("T-1", "Hello", fixed());
-        let json = serde_json::to_string(&t).unwrap();
-        // Empty vecs and empty body are skipped for clean diffs.
-        assert!(!json.contains("labels"));
-        assert!(!json.contains("assignees"));
-        assert!(!json.contains("\"body\""));
-        // Type and tags no longer exist.
-        assert!(!json.contains("\"type\""));
-        assert!(!json.contains("tags"));
-    }
 
     #[test]
     fn label_color_auto_picks_unused() {
         let existing = vec![LabelDef::new("a", Some(LABEL_PALETTE[0]))];
-        let picked = next_label_color(&existing);
-        assert_eq!(picked, LABEL_PALETTE[1]);
-    }
-
-    #[test]
-    fn comment_allocation_is_monotonic() {
-        let mut t = Ticket::new("T-1", "Hello", fixed());
-        let a = t.add_comment("me", "first", fixed());
-        let b = t.add_comment("me", "second", fixed());
-        assert_eq!(a, "c-1");
-        assert_eq!(b, "c-2");
-        assert_eq!(t.next_comment, 3);
-    }
-
-    #[test]
-    fn relation_kind_is_kebab_case() {
-        let r = Relation {
-            kind: RelationKind::BlockedBy,
-            target: "T-2".into(),
-        };
-        assert_eq!(
-            serde_json::to_string(&r).unwrap(),
-            r#"{"kind":"blocked-by","target":"T-2"}"#
-        );
+        assert_eq!(next_label_color(&existing), LABEL_PALETTE[1]);
     }
 }

@@ -9,36 +9,43 @@ use clap::{Args, Parser, Subcommand};
 
 /// Git-native task board for humans and agents.
 ///
-/// `wipe` stores a Trello-style board as flat JSON under `.wipe/`, engineered for
-/// clean git diffs. Agents drive it through this CLI (add `--json` to any command);
-/// humans use the local UI via `wipe serve`.
-///
-/// Every write needs a chosen identity (`wipe identity use <id>`, `$WIPE_AGENT`, or
-/// `--agentid`). Start a session with `wipe inbox` and `wipe ticket list`.
+/// The board lives as JSON under `.wipe/` and travels with git. Start with
+/// `wipe status`; every view ends with the commands that go deeper.
 #[derive(Debug, Parser)]
-#[command(name = "wipe", version, about, long_about = None, propagate_version = true)]
+#[command(
+    name = "wipe",
+    version,
+    about,
+    long_about = None,
+    after_help = "Global flags (any command): --json  machine-readable output  ·  -C <dir>  run in <dir>  ·\n\
+                  --agentid <id>  act as this identity  ·  --echo  writes print the full object  ·  --pretty  indent JSON"
+)]
 pub struct Cli {
-    /// Emit machine-readable JSON instead of human-formatted text.
+    /// Machine-readable JSON output (compact, one line).
     #[arg(long, global = true)]
     pub json: bool,
 
     /// Run as if wipe was started in <PATH> instead of the current directory.
-    #[arg(short = 'C', long = "cwd", global = true, value_name = "PATH")]
+    #[arg(
+        short = 'C',
+        long = "cwd",
+        global = true,
+        value_name = "PATH",
+        hide = true
+    )]
     pub cwd: Option<PathBuf>,
 
     /// Author authored actions as this identity for this command (typically an
     /// agent id). Overrides the session/VCS identity; see `wipe identity`.
-    #[arg(long = "agentid", global = true, value_name = "ID")]
+    #[arg(long = "agentid", global = true, value_name = "ID", hide = true)]
     pub agentid: Option<String>,
 
-    /// On writes, print the full updated object instead of the short receipt
-    /// (`{"ok":true,"id":...}`) that write commands return by default.
-    #[arg(long, global = true)]
+    /// On writes, print the full updated object instead of the short receipt.
+    #[arg(long, global = true, hide = true)]
     pub echo: bool,
 
-    /// Pretty-print `--json` output (indented, multi-line). By default it is a
-    /// single compact line - about half the bytes, which matters to agents.
-    #[arg(long, global = true)]
+    /// Pretty-print `--json` output (indented, multi-line).
+    #[arg(long, global = true, hide = true)]
     pub pretty: bool,
 
     #[command(subcommand)]
@@ -48,24 +55,11 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Initialize a new wipe board in a directory.
-    Init(InitArgs),
-    /// Configure machine-wide defaults (a guided global setup).
-    Onboard(OnboardArgs),
-    /// Manage who your actions are attributed to (humans and agents).
-    #[command(subcommand)]
-    Identity(IdentityCmd),
-    /// Discover `.wipe` boards on disk and add them to the local registry.
-    Scan(ScanArgs),
-    /// Show the board at a glance: per list, a compact row per ticket (done
-    /// tickets collapse to a count). For one list, `wipe ticket list --list <id>`.
+    /// The board at a glance: every list and its tickets, one line each.
     Status(StatusArgs),
-    /// Inspect and manage the board itself.
-    #[command(subcommand)]
-    Board(BoardCmd),
-    /// Manage lists (the board's columns).
-    #[command(subcommand)]
-    List(ListCmd),
+    /// Search tickets and forum posts: words, "phrases", -exclude, ticket ids,
+    /// label:, list:, @who, author:, priority:, is:open|done|blocked|ready.
+    Search(SearchArgs),
     /// Manage tickets (cards).
     #[command(subcommand)]
     Ticket(TicketCmd),
@@ -81,25 +75,18 @@ pub enum Command {
     /// Manage labels.
     #[command(subcommand)]
     Label(LabelCmd),
-    /// Manage media/attachments referenced by tickets.
+    /// Manage lists (the board's columns).
     #[command(subcommand)]
-    Media(MediaCmd),
+    List(ListCmd),
+    /// Wait for changes and print each as one line (`--until`: exit on the first).
+    /// Your own changes are skipped.
+    Watch(WatchArgs),
+    /// What others changed on things you're assigned to, authored or subscribed
+    /// to (`--all`: the whole board) - returns at once, newest first.
+    Inbox(InboxArgs),
     /// Post to and search the project forum (git-tracked discussion threads).
     #[command(subcommand)]
     Forum(ForumCmd),
-    /// Start the local web UI daemon.
-    Serve(ServeArgs),
-    /// Run the board server as a tray / menu-bar app (Windows, macOS): open the
-    /// board, open it on a phone, start at login, quit - from the icon's menu.
-    Tray(TrayArgs),
-    /// Get or set settings (project by default; `--global` for user defaults).
-    Config {
-        /// Operate on the machine-wide user config instead of this board.
-        #[arg(long)]
-        global: bool,
-        #[command(subcommand)]
-        cmd: ConfigCmd,
-    },
     /// Subscribe your identity to a ticket, list, or forum thread (for the inbox).
     Subscribe(SubscribeArgs),
     /// Unsubscribe your identity from a ticket, list, or forum thread.
@@ -110,9 +97,9 @@ pub enum Command {
         #[arg(long)]
         author: Option<String>,
     },
-    /// Show unread activity on things you're assigned to, authored, or subscribed
-    /// to - returns and exits (non-blocking), newest first.
-    Inbox(InboxArgs),
+    /// Manage media/attachments referenced by tickets.
+    #[command(subcommand)]
+    Media(MediaCmd),
     /// Manage the trash: list, restore, or permanently purge deleted tickets.
     Trash {
         #[command(subcommand)]
@@ -120,9 +107,33 @@ pub enum Command {
     },
     /// Commit the board's `.wipe/` changes as one atomic, wipe-attributed commit.
     Commit(CommitArgs),
+    /// Manage who your actions are attributed to (humans and agents).
+    #[command(subcommand)]
+    Identity(IdentityCmd),
+    /// Initialize a new wipe board in a directory.
+    Init(InitArgs),
+    /// Inspect and manage the board itself.
+    #[command(subcommand)]
+    Board(BoardCmd),
+    /// Get or set settings (project by default; `--global` for user defaults).
+    Config {
+        /// Operate on the machine-wide user config instead of this board.
+        #[arg(long)]
+        global: bool,
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
     /// Diagnose the environment and the current board.
     Doctor,
-    /// Print or install the agent SKILL guide for this CLI.
+    /// Start the local web UI daemon.
+    Serve(ServeArgs),
+    /// Run the board server as a tray / menu-bar app (Windows, macOS).
+    Tray(TrayArgs),
+    /// Discover `.wipe` boards on disk and add them to the local registry.
+    Scan(ScanArgs),
+    /// Configure machine-wide defaults (a guided global setup).
+    Onboard(OnboardArgs),
+    /// Print or install a short agent guide (the CLI's hints teach the rest).
     Skill {
         #[command(subcommand)]
         cmd: Option<SkillCmd>,
@@ -147,6 +158,9 @@ pub struct StatusArgs {
     /// Skip a list entirely (repeatable).
     #[arg(long = "exclude-list", value_name = "LIST")]
     pub exclude_lists: Vec<String>,
+    /// JSON: comma-separated fields per row (see `wipe ticket list --help`).
+    #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
+    pub fields: Vec<String>,
 }
 
 /// `wipe subscribe` / `wipe unsubscribe`
@@ -158,6 +172,69 @@ pub struct SubscribeArgs {
     /// Act as this identity instead of the resolved one.
     #[arg(long)]
     pub author: Option<String>,
+}
+
+/// `wipe search`
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// The query, e.g. `foam shader`, `"storm waves" -wip`, `label:bug is:open`,
+    /// `@me list:review`, `T-02A`.
+    #[arg(required = true, num_args = 1.., value_name = "QUERY")]
+    pub query: Vec<String>,
+    /// Cap the results [default: 10; 0 = no cap].
+    #[arg(long)]
+    pub limit: Option<usize>,
+    /// Only tickets.
+    #[arg(long, conflicts_with = "forum")]
+    pub tickets: bool,
+    /// Only forum posts.
+    #[arg(long)]
+    pub forum: bool,
+}
+
+/// `wipe watch`
+#[derive(Debug, Args)]
+#[command(after_help = "Examples:
+  wipe watch T-02A --until                 block until someone else touches T-02A
+  wipe watch --from review --until         ... until a ticket leaves review (approved/rejected)
+  wipe watch review --on commented,moved   stream comments and moves on the review list
+  wipe watch forum                         stream new forum posts
+  wipe watch T-02A --until --timeout 30m   give up after 30 minutes (exit 124)
+Agent harnesses: run it in the background and treat each stdout line (or the
+exit of an --until watch) as the notification.")]
+pub struct WatchArgs {
+    /// What to watch: tickets (`T-02A`), lists (`review`), forum threads
+    /// (`F-3`), `forum`. Several are OR-ed; none = the whole board.
+    #[arg(value_name = "TARGET")]
+    pub targets: Vec<String>,
+    /// Only these events (comma-separated): created, moved, commented, edited,
+    /// labeled, assigned, blocked, attached, checked, deleted, posted.
+    #[arg(long, value_delimiter = ',', value_name = "EVENTS")]
+    pub on: Vec<String>,
+    /// Only moves out of this list (e.g. `--from review`).
+    #[arg(long, value_name = "LIST")]
+    pub from: Option<String>,
+    /// Only moves into this list.
+    #[arg(long, value_name = "LIST")]
+    pub to: Option<String>,
+    /// Only changes by this identity (substring).
+    #[arg(long, value_name = "WHO")]
+    pub by: Option<String>,
+    /// Exit after the first matching change (exit 0).
+    #[arg(long, visible_alias = "once")]
+    pub until: bool,
+    /// Exit after this many matching changes.
+    #[arg(long, value_name = "N", conflicts_with = "until")]
+    pub count: Option<usize>,
+    /// Give up after this long (`90s`, `10m`, `2h`); exit 124 if nothing matched.
+    #[arg(long, value_name = "DURATION")]
+    pub timeout: Option<String>,
+    /// Also report your own changes.
+    #[arg(long)]
+    pub include_self: bool,
+    /// Poll interval in milliseconds.
+    #[arg(long, default_value = "1000", hide = true)]
+    pub interval: u64,
 }
 
 /// `wipe inbox`
@@ -174,9 +251,9 @@ pub struct InboxArgs {
     /// Act as this identity instead of the resolved one.
     #[arg(long)]
     pub author: Option<String>,
-    /// Cap the number of events returned, newest first (`0` = no cap). The JSON
-    /// `total` says how many there were.
-    #[arg(long, default_value = "50")]
+    /// Cap the events shown, newest first (`0` = no cap). The JSON `total`
+    /// says how many there were.
+    #[arg(long, default_value = "20")]
     pub limit: usize,
     /// Everything anyone else changed on the board, not just what you are
     /// assigned to, authored, or subscribed to ("what happened while I was away").
@@ -361,13 +438,16 @@ pub enum TicketCmd {
     /// Edit a ticket: fields, labels, assignees, blockers, list, and a comment -
     /// all in one call.
     Edit(TicketEditArgs),
-    /// Move a ticket to another list.
+    /// Move a ticket to another list: `wipe ticket move T-02A review`.
     Move {
         /// Ticket ID.
         id: String,
+        /// Destination list ID (or pass it with --to).
+        #[arg(value_name = "LIST", required_unless_present = "to")]
+        list: Option<String>,
         /// Destination list ID.
-        #[arg(long)]
-        to: String,
+        #[arg(long, conflicts_with = "list")]
+        to: Option<String>,
         /// 0-based position within the list (appended if omitted).
         #[arg(long)]
         pos: Option<usize>,
@@ -478,21 +558,26 @@ pub struct TicketCreateArgs {
 /// `wipe ticket show`
 #[derive(Debug, Args)]
 pub struct TicketShowArgs {
-    /// Ticket ID, e.g. T-1.
+    /// Ticket ID (`T-02A`, `t2a`, or a pre-translation `T-42`).
     pub id: String,
-    /// Only the comment thread (no body, activity, or commits).
+    /// How many of the newest comments to show: a number or `all` [default: 3].
+    #[arg(long, value_name = "N|all")]
+    pub comments: Option<String>,
+    /// Everything, unabridged: full body and comments, original wording,
+    /// activity log, all commits.
+    #[arg(long)]
+    pub full: bool,
+    /// Include the activity log (moves, edits, labels, checks...).
+    #[arg(long)]
+    pub activity: bool,
+    /// Only the comments.
     #[arg(long)]
     pub comments_only: bool,
-    /// Leave out the activity log.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub no_activity: bool,
-    /// Leave out the commits whose messages mention this ticket.
+    /// Leave out the commits that mention this ticket.
     #[arg(long)]
     pub no_commits: bool,
-    /// Only the newest N comments (`0` = none); the JSON `comments_total` keeps
-    /// the full count.
-    #[arg(long, value_name = "N")]
-    pub comments: Option<usize>,
 }
 
 /// `wipe ticket edit`
@@ -651,15 +736,19 @@ pub struct TicketListArgs {
     /// Only tickets waiting on an open blocker.
     #[arg(long)]
     pub blocked: bool,
-    /// Comma-separated fields per row (default: all compact fields). Available:
-    /// id, title, list, labels, assignees, priority, comments, checklist,
-    /// criteria, blocked_by, updated, last_by, created, body.
+    /// Only tickets matching this search (same syntax as `wipe search`),
+    /// best match first.
+    #[arg(long, short = 'q', value_name = "QUERY")]
+    pub search: Option<String>,
+    /// JSON: comma-separated fields per row. Default: id, title, list, labels,
+    /// assignees, priority, blocked_by. Also: comments, checklist, criteria,
+    /// updated, last_by, created, body.
     #[arg(long, value_delimiter = ',', value_name = "FIELDS")]
     pub fields: Vec<String>,
     /// Full ticket objects (body, comments, activity) instead of compact rows.
     #[arg(long, conflicts_with = "fields")]
     pub full: bool,
-    /// Cap the number of rows.
+    /// Cap the number of rows [default: 100; 0 = no cap].
     #[arg(long)]
     pub limit: Option<usize>,
 }
@@ -684,10 +773,13 @@ pub enum CommentCmd {
         #[arg(long)]
         author: Option<String>,
     },
-    /// List a ticket's comments.
+    /// List a ticket's comments (each clipped to 1000 characters).
     List {
         /// Ticket ID.
         ticket: String,
+        /// Don't clip long comments.
+        #[arg(long)]
+        full: bool,
     },
     /// Remove a comment from a ticket.
     Remove {
@@ -865,6 +957,9 @@ pub enum ForumCmd {
         /// Limit how deep to render (relative to the shown post).
         #[arg(long)]
         depth: Option<usize>,
+        /// Don't clip long posts (each is cut at 1500 characters by default).
+        #[arg(long)]
+        full: bool,
     },
     /// List threads, newest first.
     List {
@@ -874,7 +969,7 @@ pub enum ForumCmd {
         /// Only threads whose root was posted by this author (substring).
         #[arg(long)]
         author: Option<String>,
-        /// Cap the number of threads shown.
+        /// Cap the number of threads shown [default: 25; 0 = no cap].
         #[arg(long)]
         limit: Option<usize>,
     },

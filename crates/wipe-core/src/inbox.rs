@@ -19,7 +19,8 @@ use crate::{forum, Store};
 pub struct InboxEvent {
     /// When it happened.
     pub ts: DateTime<Utc>,
-    /// Event kind: `comment`, `activity`, or `forum`.
+    /// What happened, in [`crate::events`] terms: `commented`, `moved`,
+    /// `edited`, `labeled`, `assigned`, `checked`, ... or `posted` (forum).
     pub kind: String,
     /// The object it happened on: a ticket `T-<n>` or a forum post id.
     pub object: String,
@@ -27,7 +28,7 @@ pub struct InboxEvent {
     pub title: String,
     /// Who did it.
     pub actor: String,
-    /// Human-readable detail (a comment/post snippet, or the activity detail).
+    /// Short detail: a comment/post snippet, `+bug`, the target list of a move...
     pub detail: String,
     /// Why it reached your inbox: `assigned`, `authored`, `subscribed`, or
     /// `board` (only with the board-wide view, `inbox --all`).
@@ -83,14 +84,7 @@ pub fn subscriptions_of(store: &Store, identity: &str) -> Result<Vec<String>> {
         .unwrap_or_default())
 }
 
-fn snippet(s: &str, n: usize) -> String {
-    let one = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one.chars().count() <= n {
-        one
-    } else {
-        format!("{}…", one.chars().take(n).collect::<String>())
-    }
-}
+use crate::events::snippet;
 
 /// Compute the inbox for `identity`: events strictly after `since` on objects it
 /// is assigned to, authored, or subscribed to - excluding the identity's own
@@ -158,25 +152,25 @@ pub fn inbox_with(
             if c.created > since && c.author != identity {
                 events.push(InboxEvent {
                     ts: c.created,
-                    kind: "comment".into(),
+                    kind: "commented".into(),
                     object: id.clone(),
                     title: t.title.clone(),
                     actor: c.author.clone(),
-                    detail: snippet(&c.body, 120),
+                    detail: snippet(&c.body, 160),
                     reason: reason.into(),
                 });
             }
         }
         for a in &t.activity {
             if a.ts > since && a.actor != identity {
-                let detail = format!("{} {}", a.kind, a.detail);
+                let (kind, detail) = crate::events::describe(&a.kind, &a.detail);
                 events.push(InboxEvent {
                     ts: a.ts,
-                    kind: "activity".into(),
+                    kind: kind.into(),
                     object: id.clone(),
                     title: t.title.clone(),
                     actor: a.actor.clone(),
-                    detail: detail.trim().to_string(),
+                    detail: snippet(&detail, 160),
                     reason: reason.into(),
                 });
             }
@@ -189,11 +183,11 @@ pub fn inbox_with(
         if relevant && p.created > since && p.author != identity {
             events.push(InboxEvent {
                 ts: p.created,
-                kind: "forum".into(),
+                kind: "posted".into(),
                 object: p.id.clone(),
                 title: p.thread_title.clone(),
                 actor: p.author.clone(),
-                detail: snippet(&p.body, 120),
+                detail: snippet(&p.body, 160),
                 reason: if sub_set.contains("board:*")
                     || sub_set.contains("forum:*")
                     || sub_set.contains(&format!("forum:{}", p.thread_id))

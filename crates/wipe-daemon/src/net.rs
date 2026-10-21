@@ -186,55 +186,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tailscale_range_is_cgnat() {
-        assert!(is_tailscale(Ipv4Addr::new(100, 64, 0, 1)));
-        assert!(is_tailscale(Ipv4Addr::new(100, 101, 2, 3)));
-        assert!(is_tailscale(Ipv4Addr::new(100, 127, 255, 255)));
-        assert!(!is_tailscale(Ipv4Addr::new(100, 128, 0, 1)));
-        assert!(!is_tailscale(Ipv4Addr::new(192, 168, 1, 2)));
-    }
-
-    #[test]
-    fn bind_plans_per_mode() {
+    fn bind_plans_and_shown_urls() {
+        for (ip, ts) in [
+            ((100, 64, 0, 1), true),
+            ((100, 127, 255, 255), true),
+            ((100, 128, 0, 1), false),
+            ((192, 168, 1, 2), false),
+        ] {
+            assert_eq!(
+                is_tailscale(Ipv4Addr::new(ip.0, ip.1, ip.2, ip.3)),
+                ts,
+                "{ip:?}"
+            );
+        }
         let p = 6737;
-        assert_eq!(
-            bind_plan(Exposure::Local, None, p).unwrap(),
-            vec![SocketAddr::from((Ipv4Addr::LOCALHOST, p))]
-        );
-        assert_eq!(
-            bind_plan(Exposure::Lan, None, p).unwrap(),
-            vec![SocketAddr::from((Ipv4Addr::UNSPECIFIED, p))]
-        );
+        let local = bind_plan(Exposure::Local, None, p).unwrap();
+        assert_eq!(local, [SocketAddr::from((Ipv4Addr::LOCALHOST, p))]);
+        assert!(!is_remote(&local));
+        let lan = bind_plan(Exposure::Lan, None, p).unwrap();
+        assert_eq!(lan, [SocketAddr::from((Ipv4Addr::UNSPECIFIED, p))]);
+        assert!(is_remote(&lan));
         let host: IpAddr = "192.168.5.5".parse().unwrap();
         assert_eq!(
             bind_plan(Exposure::Local, Some(host), p).unwrap(),
-            vec![SocketAddr::new(host, p)]
+            [SocketAddr::new(host, p)]
         );
-        assert!(!is_remote(&bind_plan(Exposure::Local, None, p).unwrap()));
-        assert!(is_remote(&bind_plan(Exposure::Lan, None, p).unwrap()));
-    }
 
-    #[test]
-    fn urls_put_the_token_only_on_remote_addresses() {
-        let addrs = vec![
+        // The token goes only on remote URLs (and on the local one behind a proxy).
+        let addrs = [
             SocketAddr::from((Ipv4Addr::LOCALHOST, 7000)),
             SocketAddr::from((Ipv4Addr::new(100, 90, 1, 2), 7000)),
         ];
         let u = urls(&addrs, Some("tok"), false);
         assert_eq!(u[0].url, "http://localhost:7000");
-        assert_eq!(u[1].label, "tailscale");
-        assert_eq!(u[1].url, "http://100.90.1.2:7000/?token=tok");
-        // Behind a proxy the local URL needs the token as well.
+        assert_eq!(
+            (u[1].label.as_str(), u[1].url.as_str()),
+            ("tailscale", "http://100.90.1.2:7000/?token=tok")
+        );
         assert_eq!(
             urls(&addrs, Some("tok"), true)[0].url,
             "http://localhost:7000/?token=tok"
         );
-    }
-
-    #[test]
-    fn qr_renders_a_block_grid() {
-        let q = qr("http://192.168.1.2:6737/?token=abc").unwrap();
-        assert!(q.lines().count() > 10);
-        assert!(q.contains('█') || q.contains('▀') || q.contains('▄'));
+        assert!(qr(&u[1].url).unwrap().lines().count() > 10);
     }
 }

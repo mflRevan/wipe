@@ -14,9 +14,12 @@ use wipe_core::{registry, vcs, GlobalConfig, Store};
 use crate::args::*;
 use crate::autostart;
 use crate::identity;
+use crate::ids;
 use crate::input;
 use crate::onboard;
 use crate::output::{dim, id_style, Out};
+use crate::safe;
+use crate::show;
 use crate::skills;
 use crate::view;
 
@@ -383,6 +386,7 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
     let done = done_list_id(&s, &board);
     let who = identity::resolve_opt(None);
     let unread = who.as_deref().map(|w| unread_count(&s, w));
+    let cap = if a.all { usize::MAX } else { STATUS_LIST_MAX };
 
     if out.json {
         if a.full {
@@ -396,55 +400,66 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
             return Ok(());
         }
         // Rows sit inside their list's object, so they don't repeat the list id.
-        let fields: Vec<String> = view::fields(&[])?
+        let fields: Vec<String> = view::fields(&a.fields)?
             .into_iter()
             .filter(|f| f != "list")
             .collect();
         let lists: Vec<Value> = view
             .iter()
             .map(|(list_id, tickets)| {
-                let name = board.list(list_id).map(|l| l.name.as_str()).unwrap_or(list_id);
+                let name = board
+                    .list(list_id)
+                    .map(|l| l.name.as_str())
+                    .unwrap_or(list_id);
+                let mut v = json!({ "id": list_id, "name": name, "count": tickets.len() });
                 if *list_id == done && !a.all {
-                    return json!({ "id": list_id, "name": name, "count": tickets.len(), "collapsed": true });
+                    v["collapsed"] = json!(true);
+                    return v;
                 }
-                let rows: Vec<Value> = tickets
+                v["tickets"] = json!(tickets
                     .iter()
+                    .take(cap)
                     .map(|t| view::row(t, list_id, &board, &done, &fields))
-                    .collect();
-                json!({ "id": list_id, "name": name, "count": tickets.len(), "tickets": rows })
+                    .collect::<Vec<_>>());
+                v
             })
             .collect();
-        out.json_value(&json!({
-            "board": board.name,
-            "identity": who,
-            "unread": unread,
-            "lists": lists,
-        }));
+        let mut v = json!({ "board": board.name, "lists": lists });
+        if let Some(w) = &who {
+            v["identity"] = json!(w);
+            v["unread"] = json!(unread.unwrap_or(0));
+        }
+        out.json_value(&v);
         return Ok(());
     }
-    println!(
-        "{}  {}",
-        board.name.as_str(),
-        dim(&format!("({} lists)", board.lists.len()))
-    );
+    println!("{}", safe::line(&board.name));
     for (list, tickets) in &view {
         let name = board.list(list).map(|l| l.name.as_str()).unwrap_or(list);
+        let head = format!(
+            "{} {}",
+            safe::line(name),
+            dim(&format!("[{}] {list}", tickets.len()))
+        );
         if *list == done && !a.all && !tickets.is_empty() {
-            println!(
-                "\n{} {}  {}",
-                name,
-                dim(&format!("[{}]", tickets.len())),
-                dim("(collapsed - `wipe status --all` lists them)")
-            );
+            println!("\n{head}  {}", dim("(collapsed: --all)"));
             continue;
         }
-        println!("\n{} {}", name, dim(&format!("[{}]", tickets.len())));
-        for t in tickets {
+        println!("\n{head}");
+        for t in tickets.iter().take(cap) {
             println!(
                 "  {}  {}{}",
                 id_style(&t.id),
-                t.title,
+                view::title(&t.title),
                 row_tags(t, &board, &done)
+            );
+        }
+        if tickets.len() > cap {
+            println!(
+                "  {}",
+                dim(&format!(
+                    "… {} more: wipe ticket list --list {list}",
+                    tickets.len() - cap
+                ))
             );
         }
     }
@@ -452,22 +467,25 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
     match (&who, unread) {
         (Some(w), Some(n)) if n > 0 => println!(
             "{}",
-            dim(&format!("{n} unread for {w} - `wipe inbox --unread`"))
+            dim(&format!("{n} unread for {w}: wipe inbox --unread"))
         ),
         (Some(_), _) => {}
         (None, _) => println!(
             "{}",
-            dim("no identity chosen - `wipe identity use <id>` before writing")
+            dim("no identity yet (needed to write): wipe identity use <id>")
         ),
     }
     println!(
         "{}",
-        dim(
-            "one list, compact: `wipe ticket list --list <id>` · a ticket: `wipe ticket show <id>`"
-        )
+        dim("next: wipe ticket show <id> · wipe search <words> · wipe watch")
     );
     Ok(())
 }
+
+/// Tickets `status` prints per list before pointing at `ticket list`.
+const STATUS_LIST_MAX: usize = 60;
+/// Rows `ticket list` prints by default.
+const LIST_LIMIT: usize = 100;
 
 /// The dim `[labels] @assignees ⏳T-3` suffix on a human ticket line.
 fn row_tags(t: &wipe_core::model::Ticket, board: &wipe_core::model::Board, done: &str) -> String {
@@ -519,9 +537,11 @@ pub fn board(out: &Out, cmd: BoardCmd) -> Result<()> {
         BoardCmd::TranslateIds { yes } => {
             let board = s.load_board()?;
             if board.ids == wipe_core::model::IdFormat::Hex {
+                // Already hex: finish anything the translation never reached.
+                let r = wipe_core::translate::repair(&s, Utc::now())?;
                 out.ok(
-                    "this board already uses hex ticket ids",
-                    json!({ "ok": true, "translated": 0 }),
+                    format!("this board already uses hex ticket ids - {}", ids::repair_summary(&r)),
+                    json!({ "ok": true, "translated": 0, "repaired": r.renamed.len(), "refs_fixed": r.refs_fixed, "ambiguous": r.ambiguous }),
                 );
                 return Ok(());
             }
@@ -709,6 +729,7 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                     );
                 }
             };
+            ensure_list(&s.load_board()?, &list)?;
             for b in &a.blocked_by {
                 s.load_ticket(b)?;
             }
@@ -737,13 +758,22 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
             );
         }
         TicketCmd::Show(a) => {
-            let mut t = s.load_ticket(&a.id)?;
-            let comments_total = t.comments.len();
-            if let Some(n) = a.comments {
-                t.comments.drain(..comments_total.saturating_sub(n));
-            }
-            let list_id = list_of(&s, &a.id);
-            let commits = if a.no_commits || a.comments_only || !wipe_core::git::is_repo(s.root()) {
+            let t = s.load_ticket(&a.id)?;
+            let opts = show::Opts {
+                comments: match a.comments.as_deref() {
+                    None if a.full => usize::MAX,
+                    None => show::COMMENTS_DEFAULT,
+                    Some("all") => usize::MAX,
+                    Some(n) => n
+                        .parse()
+                        .map_err(|_| anyhow!("--comments takes a number or `all`, got `{n}`"))?,
+                },
+                full: a.full,
+                activity: a.activity && !a.no_activity,
+                commits: !a.no_commits && !a.comments_only,
+            };
+            let list_id = list_of(&s, &t.id);
+            let commits = if !opts.commits || !wipe_core::git::is_repo(s.root()) {
                 Vec::new()
             } else {
                 // Commits from before an id translation name the old id.
@@ -762,48 +792,27 @@ pub fn ticket(out: &Out, cmd: TicketCmd) -> Result<()> {
                 }
                 c
             };
-            if out.json {
-                if a.comments_only {
+            if a.comments_only {
+                if out.json {
+                    let v = show::json(&t, None, &[], &opts);
                     out.json_value(&json!({
                         "id": t.id,
-                        "title": t.title,
-                        "comments": t.comments.iter().map(to_value).collect::<Vec<_>>(),
-                        "comments_total": comments_total,
+                        "comments": v.get("comments").cloned().unwrap_or(json!([])),
+                        "comments_total": t.comments.len(),
                     }));
-                    return Ok(());
+                } else {
+                    show::print_comments(&t, &opts);
                 }
-                let mut v = to_value(&t);
-                let m = v.as_object_mut().expect("ticket is an object");
-                m.insert("list".into(), json!(list_id));
-                if a.no_activity {
-                    m.remove("activity");
-                }
-                if a.comments.is_some() {
-                    m.insert("comments_total".into(), json!(comments_total));
-                }
-                if !commits.is_empty() {
-                    m.insert(
-                        "commits".into(),
-                        json!(commits
-                            .iter()
-                            .map(|c| json!({
-                                "hash": c.short,
-                                "subject": c.subject,
-                                "author": c.author_name,
-                                "date": c.date,
-                            }))
-                            .collect::<Vec<_>>()),
-                    );
-                }
-                out.json_value(&v);
-            } else if a.comments_only {
-                print_comments(&t);
+            } else if out.json {
+                out.json_value(&show::json(&t, list_id.as_deref(), &commits, &opts));
             } else {
-                print_ticket_human(&t, list_id.as_deref(), !a.no_activity, &commits);
+                show::print(&t, list_id.as_deref(), &commits, &opts);
             }
         }
         TicketCmd::Edit(a) => ticket_edit(out, &s, a)?,
-        TicketCmd::Move { id, to, pos } => {
+        TicketCmd::Move { id, list, to, pos } => {
+            let to = list.or(to).unwrap_or_default();
+            ensure_list(&s.load_board()?, &to)?;
             ops::move_ticket(&s, &id, &to, pos, &identity::resolve(None)?, Utc::now())?;
             out.write(
                 format!("moved {id} to {to}"),
@@ -1195,6 +1204,16 @@ fn ticket_list(out: &Out, s: &Store, a: TicketListArgs) -> Result<()> {
         Some("me") => Some(identity::resolve(None)?),
         other => other.map(str::to_string),
     };
+    // `--search` narrows to (and orders by) the search hits.
+    let hits: Option<Vec<String>> = match a.search.as_deref().map(str::trim) {
+        Some(q) if !q.is_empty() => Some(
+            wipe_core::search::tickets(s, &search_query(q)?, &done)?
+                .into_iter()
+                .map(|h| h.id)
+                .collect(),
+        ),
+        _ => None,
+    };
 
     let mut rows: Vec<(String, wipe_core::model::Ticket)> = Vec::new();
     for (list_id, tickets) in lists {
@@ -1204,6 +1223,9 @@ fn ticket_list(out: &Out, s: &Store, a: TicketListArgs) -> Result<()> {
             continue;
         }
         for t in tickets {
+            if hits.as_ref().is_some_and(|h| !h.contains(&t.id)) {
+                continue;
+            }
             if !a.labels.iter().all(|l| t.labels.contains(l)) {
                 continue;
             }
@@ -1225,9 +1247,16 @@ fn ticket_list(out: &Out, s: &Store, a: TicketListArgs) -> Result<()> {
             rows.push((list_id.clone(), t));
         }
     }
-    if let Some(n) = a.limit {
-        rows.truncate(n);
+    if let Some(h) = &hits {
+        rows.sort_by_key(|(_, t)| h.iter().position(|x| *x == t.id));
     }
+    let total = rows.len();
+    let limit = match a.limit {
+        Some(0) => usize::MAX,
+        Some(n) => n,
+        None => LIST_LIMIT,
+    };
+    rows.truncate(limit);
     if out.json {
         let arr: Vec<Value> = rows
             .iter()
@@ -1245,17 +1274,53 @@ fn ticket_list(out: &Out, s: &Store, a: TicketListArgs) -> Result<()> {
     } else if rows.is_empty() {
         out.line("no matching tickets");
     } else {
+        let one_list = a.lists.len() == 1;
         for (l, t) in &rows {
             println!(
-                "{}  {}  {}{}",
+                "{}  {}{}{}",
                 id_style(&t.id),
-                t.title,
-                dim(&format!("({l})")),
+                view::title(&t.title),
+                if one_list {
+                    String::new()
+                } else {
+                    format!("  {}", dim(&format!("({l})")))
+                },
                 row_tags(t, &board, &done)
+            );
+        }
+        if total > rows.len() {
+            println!(
+                "{}",
+                dim(&format!(
+                    "… {} more (--limit 0 for all, or narrow with --list/--label/--search)",
+                    total - rows.len()
+                ))
             );
         }
     }
     Ok(())
+}
+
+/// Parse a search query, resolving `@me` / `assignee:me` to your identity.
+pub(crate) fn search_query(raw: &str) -> Result<wipe_core::search::Query> {
+    let mut q = wipe_core::search::parse(raw);
+    if q.assignees.iter().any(|a| a == "me") {
+        let me = identity::resolve(None)?.to_lowercase();
+        for a in &mut q.assignees {
+            if a == "me" {
+                *a = me.clone();
+            }
+        }
+    }
+    for st in &q.states {
+        if !wipe_core::search::STATES.contains(&st.as_str()) {
+            bail!(
+                "unknown `is:{st}` - use one of: {}",
+                wipe_core::search::STATES.join(", ")
+            );
+        }
+    }
+    Ok(q)
 }
 
 /// `wipe comment ...`
@@ -1283,12 +1348,19 @@ pub fn comment(out: &Out, cmd: CommentCmd) -> Result<()> {
                 || ticket_full(&s, &ticket),
             );
         }
-        CommentCmd::List { ticket } => {
+        CommentCmd::List { ticket, full } => {
             let t = s.load_ticket(&ticket)?;
+            let opts = show::Opts {
+                comments: usize::MAX,
+                full,
+                activity: false,
+                commits: false,
+            };
             if out.json {
-                out.json_value(&json!({ "ticket": ticket, "comments": t.comments.iter().map(to_value).collect::<Vec<_>>() }));
+                let v = show::json(&t, None, &[], &opts);
+                out.json_value(&json!({ "ticket": t.id, "comments": v.get("comments").cloned().unwrap_or(json!([])) }));
             } else {
-                print_comments(&t);
+                show::print_comments(&t, &opts);
             }
         }
         CommentCmd::Remove { ticket, comment } => {
@@ -1377,21 +1449,45 @@ fn checks(out: &Out, kind: ops::Checks, cmd: ChecklistCmd) -> Result<()> {
             }
         }
         ChecklistCmd::Check { ticket, item } => {
-            ops::checks_set(&s, kind, &ticket, &item, Some(true), Utc::now())?;
+            ops::checks_set(
+                &s,
+                kind,
+                &ticket,
+                &item,
+                Some(true),
+                &identity::resolve(None)?,
+                Utc::now(),
+            )?;
             out.ok(
                 format!("checked {item}"),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": true }),
             );
         }
         ChecklistCmd::Uncheck { ticket, item } => {
-            ops::checks_set(&s, kind, &ticket, &item, Some(false), Utc::now())?;
+            ops::checks_set(
+                &s,
+                kind,
+                &ticket,
+                &item,
+                Some(false),
+                &identity::resolve(None)?,
+                Utc::now(),
+            )?;
             out.ok(
                 format!("unchecked {item}"),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": false }),
             );
         }
         ChecklistCmd::Toggle { ticket, item } => {
-            let done = ops::checks_set(&s, kind, &ticket, &item, None, Utc::now())?;
+            let done = ops::checks_set(
+                &s,
+                kind,
+                &ticket,
+                &item,
+                None,
+                &identity::resolve(None)?,
+                Utc::now(),
+            )?;
             out.ok(
                 format!("{} {item}", if done { "checked" } else { "unchecked" }),
                 json!({ "ok": true, "ticket": ticket, "item": item, "done": done }),
@@ -1995,12 +2091,22 @@ pub fn subscriptions(out: &Out, author: Option<String>) -> Result<()> {
 /// `wipe inbox` - return unread activity on things you care about, then exit.
 pub fn inbox(out: &Out, a: InboxArgs) -> Result<()> {
     let s = store()?;
-    let who = identity::resolve(a.author)?;
+    // The board-wide view needs no identity (it then can't skip your own).
+    let who = match identity::resolve_opt(a.author.as_deref()) {
+        Some(w) => w,
+        None if a.all => String::new(),
+        None => bail!(
+            "{}\n  (or `wipe inbox --all` for everything on the board)",
+            identity::missing_identity_message()
+        ),
+    };
 
     // Determine the lower bound: explicit --since wins; otherwise the stored
     // read-cursor; otherwise the epoch (everything).
     let since = if let Some(raw) = &a.since {
         view::parse_since(raw, Utc::now())?
+    } else if who.is_empty() {
+        chrono::DateTime::<Utc>::UNIX_EPOCH
     } else {
         wipe_core::inbox::read_cursor(&s, &who).unwrap_or(chrono::DateTime::<Utc>::UNIX_EPOCH)
     };
@@ -2013,45 +2119,204 @@ pub fn inbox(out: &Out, a: InboxArgs) -> Result<()> {
     }
 
     // --unread consumes: advance the cursor so the next call only shows newer.
-    if a.unread && a.since.is_none() {
+    if a.unread && a.since.is_none() && !who.is_empty() {
         wipe_core::inbox::write_cursor(&s, &who, now)?;
     }
 
-    if out.json {
-        out.json_value(&json!({
-            "identity": who,
-            "since": since.to_rfc3339(),
-            "count": events.len(),
-            "total": total,
-            "events": events,
-        }));
-    } else if events.is_empty() {
-        out.line(format!(
-            "inbox empty for {who} (since {})",
-            since.to_rfc3339()
-        ));
-    } else {
-        if total > events.len() {
-            out.line(format!(
-                "{} new for {who} (showing the newest {} - `--limit 0` for all):",
-                total,
-                events.len()
-            ));
-        } else {
-            out.line(format!("{} new for {who}:", events.len()));
-        }
-        for e in &events {
-            out.line(format!(
-                "  {}  {} {}  {} [{}]  {}",
-                e.ts.format("%Y-%m-%d %H:%M"),
-                e.kind,
-                e.object,
-                dim(&e.actor),
-                e.reason,
-                e.detail
-            ));
+    // Grouped by object (newest activity first), the title once per group.
+    let mut order: Vec<&str> = Vec::new();
+    for e in &events {
+        if !order.contains(&e.object.as_str()) {
+            order.push(&e.object);
         }
     }
+    let why = |r: &str| (r != "board").then(|| r.to_string());
+    if out.json {
+        let items: Vec<Value> = order
+            .iter()
+            .map(|obj| {
+                let group: Vec<_> = events.iter().filter(|e| e.object == *obj).collect();
+                let mut v = json!({ "id": obj, "title": view::title(&group[0].title) });
+                if let Some(w) = why(&group[0].reason) {
+                    v["why"] = json!(w);
+                }
+                v["events"] = json!(group
+                    .iter()
+                    .map(|e| {
+                        let mut x =
+                            json!({ "at": show::iso(e.ts), "event": e.kind, "by": e.actor });
+                        if !e.detail.is_empty() {
+                            x["detail"] = json!(inbox_detail(&e.detail));
+                        }
+                        x
+                    })
+                    .collect::<Vec<_>>());
+                v
+            })
+            .collect();
+        let mut v = json!({ "total": total, "items": items });
+        if !who.is_empty() {
+            v["identity"] = json!(who);
+        }
+        out.json_value(&v);
+    } else if events.is_empty() {
+        out.line(if who.is_empty() {
+            "nothing on the board yet".to_string()
+        } else if since == chrono::DateTime::<Utc>::UNIX_EPOCH {
+            format!("nothing for {who}")
+        } else {
+            format!("nothing new for {who} since {}", show::when(since))
+        });
+    } else {
+        for obj in order {
+            let group: Vec<_> = events.iter().filter(|e| e.object == obj).collect();
+            let why = why(&group[0].reason)
+                .map(|w| format!("  {}", dim(&format!("({w})"))))
+                .unwrap_or_default();
+            println!("{}  {}{why}", id_style(obj), view::title(&group[0].title));
+            // A burst by one actor (ten label edits, three attachments) is one line.
+            let mut i = 0;
+            while i < group.len() {
+                let e = group[i];
+                let mut details = vec![inbox_detail(&e.detail)];
+                let mergeable = !matches!(e.kind.as_str(), "commented" | "posted" | "moved");
+                let mut j = i + 1;
+                while mergeable
+                    && j < group.len()
+                    && group[j].kind == e.kind
+                    && group[j].actor == e.actor
+                    && (e.ts - group[j].ts).num_minutes().abs() <= 10
+                {
+                    details.push(inbox_detail(&group[j].detail));
+                    j += 1;
+                }
+                let mut joined: Vec<String> = Vec::new();
+                for d in &details {
+                    if !d.is_empty() && !joined.contains(d) {
+                        joined.push(d.clone());
+                    }
+                }
+                let detail = joined.join(" ");
+                let what = match e.kind.as_str() {
+                    "moved" => format!("moved → {detail}"),
+                    "commented" | "posted" => format!("{}: \"{detail}\"", e.kind),
+                    k if detail.is_empty() => k.to_string(),
+                    k => format!("{k} {detail}"),
+                };
+                let times = if j - i > 1 && joined.len() < j - i {
+                    format!(" ×{}", j - i)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  {}  {} {what}{times}",
+                    dim(&show::when(e.ts)),
+                    safe::line(&e.actor)
+                );
+                i = j;
+            }
+        }
+        if total > events.len() {
+            println!(
+                "{}",
+                dim(&format!(
+                    "… {} older (--limit 0, or --since 2d)",
+                    total - events.len()
+                ))
+            );
+        }
+    }
+    Ok(())
+}
+
+/// An inbox event's detail, clipped for a list of many (comment text is a
+/// teaser - `ticket show` has it whole).
+fn inbox_detail(d: &str) -> String {
+    wipe_core::events::snippet(&safe::line(d), 90)
+}
+
+/// `wipe search` - tickets and forum posts, ranked, one line each.
+pub fn search(out: &Out, a: SearchArgs) -> Result<()> {
+    let s = store()?;
+    let raw = a.query.join(" ");
+    let q = search_query(&raw)?;
+    if q.is_empty() {
+        bail!("an empty search - pass words, \"phrases\", or qualifiers like label:bug");
+    }
+    let board = s.load_board()?;
+    let done = done_list_id(&s, &board);
+    let tickets = if a.forum {
+        Vec::new()
+    } else {
+        wipe_core::search::tickets(&s, &q, &done)?
+    };
+    let posts = if a.tickets {
+        Vec::new()
+    } else {
+        wipe_core::search::posts(&s, &q)?
+    };
+    let limit = match a.limit {
+        Some(0) => usize::MAX,
+        Some(n) => n,
+        None => 10,
+    };
+    let (nt, np) = (tickets.len(), posts.len());
+    if out.json {
+        let clip = |h: &wipe_core::search::Hit| {
+            let mut v = serde_json::to_value(h).unwrap_or_default();
+            v["title"] = json!(view::title(&h.title));
+            if let Some(sn) = &h.snippet {
+                v["snippet"] = json!(safe::line(sn));
+            }
+            v.as_object_mut().map(|m| m.remove("score"));
+            v
+        };
+        out.json_value(&json!({
+            "tickets": tickets.iter().take(limit).map(clip).collect::<Vec<_>>(),
+            "posts": posts.iter().take(limit).map(clip).collect::<Vec<_>>(),
+            "total": { "tickets": nt, "posts": np },
+        }));
+        return Ok(());
+    }
+    if nt + np == 0 {
+        println!("no matches for {raw}");
+        return Ok(());
+    }
+    for h in tickets.iter().take(limit) {
+        let t = s.load_ticket(&h.id).ok();
+        println!(
+            "{}  {}  {}{}",
+            id_style(&h.id),
+            view::title(&h.title),
+            dim(&format!("({})", h.list.as_deref().unwrap_or("?"))),
+            t.as_ref()
+                .map(|t| row_tags(t, &board, &done))
+                .unwrap_or_default()
+        );
+        if let (Some(m), Some(sn)) = (&h.matched, &h.snippet) {
+            println!("    {}", dim(&format!("{m}: {}", safe::line(sn))));
+        }
+    }
+    for h in posts.iter().take(limit) {
+        println!("{}  {}", id_style(&h.id), view::title(&h.title));
+        if let (Some(m), Some(sn)) = (&h.matched, &h.snippet) {
+            println!("    {}", dim(&format!("{m}: {}", safe::line(sn))));
+        }
+    }
+    let more = nt.saturating_sub(limit) + np.saturating_sub(limit);
+    println!(
+        "{}",
+        dim(&format!(
+            "{nt} ticket{}, {np} post{}{} · open one: wipe ticket show <id> / wipe forum show <id>",
+            if nt == 1 { "" } else { "s" },
+            if np == 1 { "" } else { "s" },
+            if more > 0 {
+                format!(" ({more} not shown: --limit 0)")
+            } else {
+                String::new()
+            }
+        ))
+    );
     Ok(())
 }
 
@@ -2437,113 +2702,4 @@ pub(crate) fn detect_running(port: u16) -> Option<String> {
     let _ = stream.read_to_string(&mut buf);
     buf.contains("wipe-daemon")
         .then(|| format!("http://127.0.0.1:{port}"))
-}
-
-// ---------------------------------------------------------------------------
-
-fn print_ticket_human(
-    t: &wipe_core::model::Ticket,
-    list_id: Option<&str>,
-    activity: bool,
-    commits: &[wipe_core::git::CommitInfo],
-) {
-    println!("{}  {}", id_style(&t.id), t.title);
-    if let Some(l) = list_id {
-        println!("  {}", dim(&format!("list: {l}")));
-    }
-    if let Some(p) = &t.priority {
-        println!("  {}", dim(&format!("priority: {p}")));
-    }
-    if !t.labels.is_empty() {
-        println!("  {}", dim(&format!("labels: {}", t.labels.join(", "))));
-    }
-    if !t.assignees.is_empty() {
-        println!(
-            "  {}",
-            dim(&format!("assignees: {}", t.assignees.join(", ")))
-        );
-    }
-    let blockers: Vec<&str> = t.blocked_by().collect();
-    if !blockers.is_empty() {
-        println!("  {}", dim(&format!("blocked by: {}", blockers.join(", "))));
-    }
-    if !t.body.is_empty() {
-        println!("\n{}", t.body);
-    }
-    if let Some(o) = &t.original {
-        println!(
-            "\n{}",
-            dim(&format!(
-                "original note by {} (kept when {} first rewrote it):",
-                o.author, o.rewritten_by
-            ))
-        );
-        println!("  {}", o.title);
-        for line in o.body.lines() {
-            println!("  {line}");
-        }
-    }
-    for (name, items) in [
-        ("checklist", &t.checklist),
-        ("acceptance criteria", &t.acceptance),
-    ] {
-        if !items.is_empty() {
-            let done = items.iter().filter(|i| i.done).count();
-            println!("\n{}", dim(&format!("{name} ({done}/{}):", items.len())));
-            for i in items {
-                let box_ = if i.done { "[x]" } else { "[ ]" };
-                println!("  {box_} {} {}", id_style(&i.id), i.text);
-            }
-        }
-    }
-    if !t.comments.is_empty() {
-        println!();
-        print_comments(t);
-    }
-    if activity && !t.activity.is_empty() {
-        println!("\n{}", dim(&format!("{} activity:", t.activity.len())));
-        for a in &t.activity {
-            println!(
-                "  {}  {} {} {}",
-                dim(&a.ts.format("%Y-%m-%d %H:%M").to_string()),
-                a.actor,
-                a.kind,
-                a.detail
-            );
-        }
-    }
-    if !commits.is_empty() {
-        println!(
-            "\n{}",
-            dim(&format!("{} commit(s) mention {}:", commits.len(), t.id))
-        );
-        for c in commits {
-            println!(
-                "  {}  {}  {}",
-                id_style(&c.short),
-                c.subject,
-                dim(&c.author_name)
-            );
-        }
-    }
-}
-
-/// A ticket's comment thread, one block per comment with its full body.
-fn print_comments(t: &wipe_core::model::Ticket) {
-    if t.comments.is_empty() {
-        println!("{} has no comments", t.id);
-        return;
-    }
-    println!("{}", dim(&format!("{} comment(s):", t.comments.len())));
-    for c in &t.comments {
-        println!(
-            "  {} {} {}",
-            id_style(&c.id),
-            c.author,
-            dim(&c.created.format("%Y-%m-%d %H:%M").to_string())
-        );
-        for line in c.body.lines() {
-            println!("    {line}");
-        }
-    }
 }

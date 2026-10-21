@@ -39,20 +39,35 @@
   // the bin, shrink the dragged card to 0.7x (a release deletes it); else 1x.
   $effect(() => {
     if (!dragActive) return;
+    // The bin is fixed on screen: re-read its box at most every 100ms (it can
+    // grow when a drag starts) rather than forcing a layout on every move, and
+    // only restyle the dragged card when the over-bin state actually flips.
+    let binRect: DOMRect | null = null;
+    let readAt = 0;
+    let scaled: boolean | null = null;
     const onMove = (e: PointerEvent) => {
       const el = trashBinEl;
       if (!el) {
         overTrash = false;
         return;
       }
-      const r = el.getBoundingClientRect();
+      const now = performance.now();
+      if (!binRect || now - readAt > 100) {
+        binRect = el.getBoundingClientRect();
+        readAt = now;
+      }
+      const r = binRect;
       const pad = 36; // generous margin so the bin is easy to reach
-      overTrash =
+      const over =
         e.clientX >= r.left - pad &&
         e.clientX <= r.right + pad &&
         e.clientY >= r.top - pad &&
         e.clientY <= r.bottom + pad;
-      if (draggedEl) draggedEl.style.transform = overTrash ? 'scale(0.7)' : 'scale(1)';
+      if (over !== overTrash) overTrash = over;
+      if (draggedEl && scaled !== over) {
+        draggedEl.style.transform = over ? 'scale(0.7)' : 'scale(1)';
+        scaled = over;
+      }
     };
     window.addEventListener('pointermove', onMove);
     return () => {

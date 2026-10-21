@@ -125,6 +125,14 @@ export function activityPhrase(
       return `attached ${detail}`;
     case 'detached':
       return `removed attachment ${detail}`;
+    case 'checked':
+      return `checked off ${detail.replace(/^\S+\s/, '')}`;
+    case 'unchecked':
+      return `unchecked ${detail.replace(/^\S+\s/, '')}`;
+    case 'blocked-by':
+      return `marked this blocked by ${detail}`;
+    case 'unblocked':
+      return `removed the blocker ${detail}`;
     default:
       return kind;
   }

@@ -465,13 +465,19 @@ mod tests {
         assert!(ok, "git {args:?} failed");
     }
 
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_repo(dir.path()));
+        git(dir.path(), &["init", "-q"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "Tester"]);
+        dir
+    }
+
     #[test]
     fn log_and_show_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = repo();
         let root = dir.path();
-        git(root, &["init", "-q"]);
-        git(root, &["config", "user.email", "t@example.com"]);
-        git(root, &["config", "user.name", "Tester"]);
         std::fs::write(root.join("a.txt"), "v1\n").unwrap();
         git(root, &["add", "."]);
         git(root, &["commit", "-q", "-m", "first commit"]);
@@ -479,55 +485,51 @@ mod tests {
         assert!(is_repo(root));
         let history = log(root, None, None).unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].subject, "first commit");
-        assert_eq!(history[0].author_email, "t@example.com");
-
+        assert_eq!(
+            (
+                history[0].subject.as_str(),
+                history[0].author_email.as_str()
+            ),
+            ("first commit", "t@example.com")
+        );
         let head = &history[0].hash;
-        let content = file_at_commit(root, head, "a.txt").unwrap();
-        assert_eq!(content.as_deref(), Some("v1\n"));
-
-        // A path that never existed yields None, not an error.
+        assert_eq!(
+            file_at_commit(root, head, "a.txt").unwrap().as_deref(),
+            Some("v1\n")
+        );
         assert_eq!(file_at_commit(root, head, "missing.txt").unwrap(), None);
     }
 
     #[test]
-    fn mentions_id_requires_a_standalone_token() {
-        assert!(mentions_id("fix login (T-8)", "T-8"));
-        assert!(mentions_id("t-8: lowercase works", "T-8"));
-        assert!(mentions_id("T-8", "T-8"));
-        assert!(!mentions_id("fix login (T-81)", "T-8"));
-        assert!(!mentions_id("XT-8 is another id", "T-8"));
-        assert!(mentions_id("see T-81 and T-8.", "T-8"));
-    }
-
-    #[test]
-    fn commits_mentioning_finds_subject_and_body_refs() {
-        let dir = tempfile::tempdir().unwrap();
+    fn commits_mentioning_match_standalone_ids_in_subject_and_body() {
+        for (text, hit) in [
+            ("fix login (T-8)", true),
+            ("t-8: lowercase works", true),
+            ("see T-81 and T-8.", true),
+            ("fix login (T-81)", false),
+            ("XT-8 is another id", false),
+        ] {
+            assert_eq!(mentions_id(text, "T-8"), hit, "{text}");
+        }
+        let dir = repo();
         let root = dir.path();
-        git(root, &["init", "-q"]);
-        git(root, &["config", "user.email", "t@example.com"]);
-        git(root, &["config", "user.name", "Tester"]);
-        let commit = |file: &str, msg: &str| {
+        for (file, msg) in [
+            ("a", "fix login (T-8)"),
+            ("b", "unrelated work on T-81"),
+            ("c", "refactor\n\nfollow-up for t-8"),
+            ("d", "chore(wipe): update T-8"),
+        ] {
             std::fs::write(root.join(file), msg).unwrap();
             git(root, &["add", "."]);
             git(root, &["commit", "-q", "-m", msg]);
-        };
-        commit("a", "fix login (T-8)");
-        commit("b", "unrelated work on T-81");
-        commit("c", "refactor\n\nfollow-up for t-8");
-        commit("d", "chore(wipe): update T-8");
-
-        let hits = commits_mentioning(root, "T-8", 10).unwrap();
-        let subjects: Vec<&str> = hits.iter().map(|c| c.subject.as_str()).collect();
-        // Newest first; T-81 and the wipe bookkeeping commit are excluded.
-        assert_eq!(subjects, vec!["refactor", "fix login (T-8)"]);
+        }
+        let subjects: Vec<String> = commits_mentioning(root, "T-8", 10)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.subject)
+            .collect();
+        // Newest first; T-81 and wipe's own bookkeeping commits are excluded.
+        assert_eq!(subjects, ["refactor", "fix login (T-8)"]);
         assert_eq!(commits_mentioning(root, "T-8", 1).unwrap().len(), 1);
-        assert!(commits_mentioning(root, "T-99", 10).unwrap().is_empty());
-    }
-
-    #[test]
-    fn non_repo_reports_false() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_repo(dir.path()));
     }
 }

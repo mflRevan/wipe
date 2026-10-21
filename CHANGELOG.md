@@ -1,5 +1,146 @@
 # Changelog
 
+## 0.4.3 - 2026-10-21
+
+The agent release: every read view was rebuilt to cost an agent as little
+context as possible and to say how to go deeper, search and change
+notifications became first-class commands that work in any agent harness, and
+boards whose id translation was finished by hand are now repaired.
+
+### Agents: less context, discoverable depth
+
+Measured on three real boards (60-128 tickets) with a scripted agent session;
+see [docs/OUTPUT-AUDIT.md](docs/OUTPUT-AUDIT.md) for the full before/after table.
+
+- **`ticket show` is bounded.** Facts on one line, the body, checklists,
+  attachments by name and size, the newest 3 comments and the latest commits -
+  long bodies and comments are clipped with a count of what was left out, and
+  the view ends with the flags that reveal the rest (`--comments all` or `N`,
+  `--activity`, `--full`). The activity log is now opt-in. A 44-comment ticket
+  went from 43 KB to 2.5 KB (-94%); JSON follows the same selection and drops
+  internals (`version`, `next_*` counters, nanosecond timestamps).
+- **Leaner rows.** `status` / `ticket list` JSON rows default to id, title,
+  list, labels, assignees, priority and blockers (`--fields` adds progress,
+  timestamps, bodies): -25 to -41%. `status` caps a list at 60 rows and
+  `ticket list` at 100, each with a pointer to the rest; a single-list
+  `ticket list` no longer repeats the list on every row.
+- **Inbox, forum list, search** have default limits (20, 25, 10) with "N more"
+  hints; the inbox groups events by ticket (title once) and collapses bursts
+  (ten label edits by one person are one line). `inbox --all` no longer
+  requires an identity.
+- **Help is shorter.** Subcommand help no longer repeats the global plumbing
+  flags (`-C`, `--agentid`, `--echo`, `--pretty`; listed once in `wipe --help`),
+  and the root help lists everyday commands first (-30% per help page).
+- **The skill file is a bootstrap, not a manual** (9.2 KB -> 2.5 KB): the CLI's
+  own hints carry the rest.
+- `wipe ticket move T-02A review` - the target list can be positional
+  (`--to` still works).
+
+### Search
+
+- **`wipe search <query>`** searches tickets and forum posts together, ranked
+  (title hits first), and prints the one snippet that shows *why* something
+  matched (`body: …`, `comment c-3 by ada: …`, `checklist ck-2: …`). Query
+  syntax: words (all must match), `"phrases"`, `-exclude`, ticket ids in any
+  spelling, `label:`, `list:`, `@who` / `assignee:`, `author:`, `priority:`,
+  `is:open|done|blocked|ready|assigned|unassigned`. `--tickets` / `--forum`
+  narrow it; `--json` returns the same hits.
+- `wipe ticket list --search <query>` combines the same search with the list
+  filters.
+
+### Notifications for agents: `wipe watch`
+
+- **`wipe watch [targets]`** waits for changes and prints each as one line:
+  `T-02A moved review → todo · ada · Fix the foam`, `T-02A commented · ada ·
+  Fix the foam: "please re-check the edges"`. Targets are tickets, lists,
+  forum threads or `forum` (none = the whole board); `--on` picks events
+  (created, moved, commented, edited, labeled, assigned, blocked, attached,
+  checked, deleted, posted), `--from` / `--to` match moves out of / into a list
+  ("tell me when it leaves review"), `--by` filters by actor.
+- **Works in every harness through plain shell semantics**: streamed, each
+  stdout line is a notification (monitor tools); with `--until` it exits 0 on
+  the first match, so a background task's completion is the notification; with
+  `--timeout 30m` it is a safe blocking call (exit 124 when nothing happened).
+- **Never your own changes**, nothing for the current state, and changes that
+  arrive by `git pull` are reported too. `--json` streams NDJSON.
+- Checklist and acceptance-criteria ticks are now recorded in the activity log
+  (`checked` / `unchecked`), so they show up in watch, the inbox and the UI.
+
+### Guardrails
+
+- **Board text is sanitized before it is printed**: terminal escape sequences,
+  control characters and bidi overrides are removed; pasted `data:…;base64,…`
+  images and long encoded blobs become `[image/png base64, 34 KB omitted]`;
+  unbroken runs over 400 characters are cut. Applies to titles, bodies,
+  comments, checklists, forum posts, search snippets and events, in text and
+  JSON.
+- Forum post refs are stored in canonical form (`--ref t2a` -> `T-02A`, an old
+  `T-42` -> its hex id).
+
+### Ticket ids: repair and hardening
+
+- **Boards whose translation was finished by hand are repaired.** When 0.4.1
+  left a board half-converted and `board.json` was switched to hex manually,
+  the trash and the forum kept decimal ids (`T-1.json` in the trash, `refs:
+  ["T-30"]` and "see T-40" in threads). On the first command after upgrading,
+  wipe converts those leftovers once (trash entries and stray ticket files
+  renamed, forum refs and mentions, subscriptions and relations rewritten);
+  ids that could be either format are left alone and reported.
+  `wipe board translate-ids` on a hex board runs the same repair on demand.
+- Fixed the "translation interrupted" error messages, which contained a run of
+  spaces / a raw line break from a broken line continuation.
+
+### Board UI
+
+- **Large lists stay smooth** (measured on an 850-ticket board with a
+  451-card list): dragging within the list went from 19 long tasks (1.7 s
+  blocked) to none, and the worst frame from 272 to 88 ms; drags across lists
+  and onto the trash have no long tasks; search keystrokes are about twice as
+  fast. Card reorder animations are one batched pass over the visible cards
+  instead of a layout per card, off-screen cards in long lists skip layout and
+  paint, search only highlights matching cards and builds its index only while
+  open, and live updates no longer re-render every card when labels or
+  identities didn't change.
+- The activity log names checklist ticks and blockers instead of showing the
+  raw event kind.
+
+### Hardening
+
+- A ticket file that cannot be read - typically git merge-conflict markers
+  left in it - no longer silently disappears from `status` and lists: it is
+  skipped with a warning, and every error names the file and says what to do
+  ("has git merge-conflict markers - resolve the conflict in that file").
+- `wipe status | head -1` (a reader closing the pipe early) exits quietly
+  instead of panicking; any other internal error is one line with where to
+  report it, not a backtrace.
+- `ticket create --list <unknown>` names the board's lists, like `move` does.
+- A `wipe watch` takes its snapshot before announcing itself, so a change
+  right after the "watching ..." line is never missed.
+- Short pre-translation ids (`T-12`) resolve with one file read instead of
+  loading every ticket.
+- UI quick-jump: typing a hex id that doesn't exist (`T2AF`) no longer jumps to
+  the legacy ticket `T-2`.
+
+### Changed (JSON consumers)
+
+- `ticket show --json`, `comment list --json`: comments are
+  `{"id","by","at","body"}` (was `author` / `created`); the activity log is only
+  included with `--activity` / `--full`.
+- `inbox --json`: `{"total","items":[{"id","title","why"?,"events":[{"at",
+  "event","by","detail"?}]}]}`; event names are `commented`, `moved`, `labeled`,
+  `assigned`, `checked`, `posted`, ... (was `comment` / `activity` / `forum`).
+- Default JSON rows of `status` / `ticket list` drop `comments`, `checklist`,
+  `criteria`, `updated` and `last_by` (ask for them with `--fields`).
+
+### Tests
+
+- The suite was pruned from 129 to 68 tests and reorganized by area: duplicated
+  and trivia tests were merged or removed, every regression guard was kept, and
+  the new agent surface is covered end to end (search, bounded `show`, the
+  guardrail matrix across eight views in text and JSON, `watch --until` /
+  timeouts / self-filtering, the hex-board repair). Stress tests prove the same
+  properties with fewer processes; `cargo test --workspace` runs in about 5 s.
+
 ## 0.4.2 - 2026-10-01
 
 Hotfix for the ticket-id translation added in 0.4.1. If you translated a board
