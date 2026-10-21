@@ -4,6 +4,7 @@
 
 mod args;
 mod autostart;
+mod aware;
 mod commands;
 mod first_run;
 mod forum_cmd;
@@ -71,6 +72,10 @@ fn main() -> ExitCode {
     // eval'd by the shell and should stay fast and side-effect-free.
     if !matches!(cli.command, Command::Completions { .. }) {
         update_check::run(env!("CARGO_PKG_VERSION"));
+        // Migrate a login entry an older wipe left behind (once; stderr note).
+        if let Some(note) = autostart::repair() {
+            eprintln!("wipe: {note}");
+        }
     }
 
     // Record the global --agentid override before any command resolves an author.
@@ -125,17 +130,25 @@ fn main() -> ExitCode {
     }
 
     let is_commit = matches!(cli.command, Command::Commit(_));
+    let aware_mode = aware::mode(&cli.command);
+    let finish = aware::finish(&cli.command);
+    let actor = actor_override(&cli.command).map(str::to_string);
     let result = dispatch(&out, cli.command);
+    // What others changed on the board since this identity's last command
+    // (stderr; after the output, whether the command succeeded or not).
+    let report_updates = |finished| aware::after_command(aware_mode, finished, actor.as_deref());
 
     match result {
         Ok(()) => {
             if write && !is_commit {
                 after_write(&out);
             }
+            report_updates(finish);
             ExitCode::SUCCESS
         }
         Err(e) => {
             emit_error(cli.json, &format!("{e:#}"));
+            report_updates(aware::Finish::No);
             ExitCode::FAILURE
         }
     }

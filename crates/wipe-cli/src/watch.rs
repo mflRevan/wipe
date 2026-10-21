@@ -306,6 +306,7 @@ mod tests {
             list: list.map(Into::into),
             from: from.map(Into::into),
             detail: String::new(),
+            assignees: Vec::new(),
         }
     }
 

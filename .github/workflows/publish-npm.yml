@@ -42,7 +42,8 @@ jobs:
         # ahead of bsdtar, e.g. Git for Windows) rejects - pin Windows' bsdtar.
         # (2) Mark shim launches (WIPE_NPM_SHIM) for `wipe doctor`. (3) Place the
         # native wipe.exe beside npm's shims so `wipe` bypasses wipe.cmd/cmd.exe,
-        # which truncates multi-line arguments at the first line break.
+        # which truncates multi-line arguments at the first line break, and make
+        # npm's wipe.ps1 hand off to it (PowerShell prefers .ps1 over .exe).
         run: |
           f="$(find target/distrib -name binary-install.js -path '*npm-package*' | head -1)"
           test -n "$f" || { echo "binary-install.js not found"; exit 1; }

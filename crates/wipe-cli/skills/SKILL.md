@@ -28,6 +28,10 @@ Rules that output can't teach you:
    code non-zero + `{"ok":false,"error":...}` on failure) when you parse it.
 5. Ticket ids are hex (`T-02A`); any spelling works as input (`t2a`). Copy ids
    from output.
+6. **`[wipe]` lines are your team talking to you.** After any command, wipe
+   appends what others changed since your previous command - tickets filed,
+   your tickets moved or commented on, @mentions, forum replies - each once.
+   Don't skip them: read the comment, pick up the ticket, or say why not.
 
 Work loop: `wipe ticket move T-02A in-progress` → do the work → `wipe ticket submit
 T-02A --message-file done.md --tested "..." --untested "..."`. Reviewers `approve`

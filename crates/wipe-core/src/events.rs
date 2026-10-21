@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::model::Ticket;
@@ -43,6 +43,10 @@ pub struct Event {
     /// Short detail: a comment snippet, `+bug`, `title`, `ac-2 Runs on CI`...
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// The ticket's assignees after the change - before it, for `deleted` - so
+    /// readers can tell whose ticket it is. Not part of `watch`'s output.
+    #[serde(skip)]
+    pub assignees: Vec<String>,
 }
 
 /// The event kind and detail an activity entry reads as. Unknown kinds pass
@@ -98,12 +102,14 @@ pub fn snippet(s: &str, n: usize) -> String {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct TicketSnap {
     list: Option<String>,
     title: String,
     comments: HashSet<String>,
     activity: usize,
+    #[serde(default)]
+    assignees: Vec<String>,
 }
 
 impl TicketSnap {
@@ -113,18 +119,39 @@ impl TicketSnap {
             title: t.title.clone(),
             comments: t.comments.iter().map(|c| c.id.clone()).collect(),
             activity: t.activity.len(),
+            assignees: t.assignees.clone(),
         }
     }
 }
 
-type Stamp = HashMap<PathBuf, (SystemTime, u64)>;
+/// Each board file's (modified time in nanoseconds, size).
+type Stamp = HashMap<PathBuf, (u64, u64)>;
+
+/// What a [`Watcher`] remembers about the board: enough to diff the next look
+/// against. Serializable, so a snapshot can outlive the process (see
+/// [`crate::aware`]).
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct WatchState {
+    stamp: Stamp,
+    tickets: HashMap<String, TicketSnap>,
+    posts: HashSet<String>,
+}
 
 /// Polls a board for changes and reports them as [`Event`]s.
 pub struct Watcher {
     store: Store,
-    stamp: Stamp,
-    tickets: HashMap<String, TicketSnap>,
-    posts: HashSet<String>,
+    state: WatchState,
+    dirty: bool,
+}
+
+fn file_stamp(m: &std::fs::Metadata) -> (u64, u64) {
+    let nanos = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    (nanos, m.len())
 }
 
 fn stamp(store: &Store) -> Stamp {
@@ -133,18 +160,12 @@ fn stamp(store: &Store) -> Stamp {
     for dir in [store.tickets_dir(), store.forum_dir()] {
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             if let Ok(m) = e.metadata() {
-                out.insert(
-                    e.path(),
-                    (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()),
-                );
+                out.insert(e.path(), file_stamp(&m));
             }
         }
     }
     if let Ok(m) = std::fs::metadata(&board) {
-        out.insert(
-            board,
-            (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()),
-        );
+        out.insert(board, file_stamp(&m));
     }
     out
 }
@@ -174,10 +195,33 @@ impl Watcher {
         let posts = forum::index(&store)?.into_iter().map(|p| p.id).collect();
         Ok(Watcher {
             store,
-            stamp,
-            tickets,
-            posts,
+            state: WatchState {
+                stamp,
+                tickets,
+                posts,
+            },
+            dirty: true,
         })
+    }
+
+    /// Continue from a snapshot taken earlier (by [`Watcher::state`]): the next
+    /// poll reports everything that changed since then.
+    pub fn resume(store: Store, state: WatchState) -> Self {
+        Watcher {
+            store,
+            state,
+            dirty: false,
+        }
+    }
+
+    /// The current snapshot, to [`Watcher::resume`] from later.
+    pub fn state(&self) -> &WatchState {
+        &self.state
+    }
+
+    /// Whether the snapshot changed since it was taken or resumed.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     /// The board being watched.
@@ -189,15 +233,17 @@ impl Watcher {
     /// it only stats the board's files.
     pub fn poll(&mut self) -> Vec<Event> {
         let now_stamp = stamp(&self.store);
-        if now_stamp == self.stamp {
+        if now_stamp == self.state.stamp {
             return Vec::new();
         }
+        self.dirty = true;
+        let state = &mut self.state;
         let tickets_dir = self.store.tickets_dir();
         let forum_dir = self.store.forum_dir();
-        let changed = |p: &PathBuf| self.stamp.get(p) != now_stamp.get(p);
+        let changed = |p: &PathBuf| state.stamp.get(p) != now_stamp.get(p);
         let mut ticket_changed: HashSet<String> = HashSet::new();
         let mut forum_changed = false;
-        for p in now_stamp.keys().chain(self.stamp.keys()) {
+        for p in now_stamp.keys().chain(state.stamp.keys()) {
             if !changed(p) {
                 continue;
             }
@@ -218,7 +264,7 @@ impl Watcher {
         // A card that changed lists without its ticket file changing (a pulled
         // board.json): still a move.
         if board_changed {
-            for (id, snap) in &self.tickets {
+            for (id, snap) in &state.tickets {
                 if !ticket_changed.contains(id) && lists.get(id) != snap.list.as_ref() {
                     ticket_changed.insert(id.clone());
                 }
@@ -227,12 +273,12 @@ impl Watcher {
         let mut ids: Vec<String> = ticket_changed.into_iter().collect();
         ids.sort();
         for id in ids {
-            let prev = self.tickets.get(&id).cloned();
+            let prev = state.tickets.get(&id).cloned();
             match self.store.load_ticket(&id) {
                 Ok(t) if t.id == id => {
                     let list = lists.get(&id).cloned();
                     ticket_events(&t, prev.as_ref(), list.clone(), &mut events);
-                    self.tickets.insert(id, TicketSnap::of(&t, list));
+                    state.tickets.insert(id, TicketSnap::of(&t, list));
                 }
                 Ok(_) => {}
                 Err(_) => {
@@ -248,8 +294,9 @@ impl Watcher {
                                 list: None,
                                 from: p.list.clone(),
                                 detail: String::new(),
+                                assignees: p.assignees.clone(),
                             });
-                            self.tickets.remove(&id);
+                            state.tickets.remove(&id);
                         }
                     }
                 }
@@ -257,8 +304,10 @@ impl Watcher {
         }
         if forum_changed {
             if let Ok(all) = forum::index(&self.store) {
-                let mut fresh: Vec<_> =
-                    all.iter().filter(|p| !self.posts.contains(&p.id)).collect();
+                let mut fresh: Vec<_> = all
+                    .iter()
+                    .filter(|p| !state.posts.contains(&p.id))
+                    .collect();
                 fresh.sort_by_key(|p| p.created);
                 for p in fresh {
                     events.push(Event {
@@ -270,12 +319,13 @@ impl Watcher {
                         list: None,
                         from: None,
                         detail: snippet(&p.body, 160),
+                        assignees: Vec::new(),
                     });
                 }
-                self.posts = all.into_iter().map(|p| p.id).collect();
+                state.posts = all.into_iter().map(|p| p.id).collect();
             }
         }
-        self.stamp = now_stamp;
+        state.stamp = now_stamp;
         events.sort_by_key(|e| e.ts);
         events
     }
@@ -296,6 +346,7 @@ fn ticket_events(
         list: list.clone(),
         from: None,
         detail,
+        assignees: t.assignees.clone(),
     };
     let Some(prev) = prev else {
         let by = t.creator().unwrap_or_default();

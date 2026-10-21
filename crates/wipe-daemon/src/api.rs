@@ -1113,6 +1113,7 @@ pub struct LocalFileQuery {
 pub async fn local_file(
     State(state): State<AppState>,
     Query(q): Query<LocalFileQuery>,
+    req: axum::extract::Request,
 ) -> Result<Response, ApiError> {
     require_local(&state)?;
     let path = std::path::PathBuf::from(q.path.trim());
@@ -1145,8 +1146,10 @@ pub async fn local_file(
     {
         return Err(ApiError(anyhow::anyhow!("too large to preview")));
     }
-    let bytes = std::fs::read(&path)?;
-    Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+    let mime = mime
+        .parse()
+        .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
+    Ok(serve_file(&path, &mime, req).await)
 }
 
 /// `POST /api/tickets/{id}/attachments/path` - attach a file that already lives on
@@ -1224,6 +1227,7 @@ pub async fn serve_media(
     State(state): State<AppState>,
     Query(q): Query<ProjectQuery>,
     Path(path): Path<String>,
+    req: axum::extract::Request,
 ) -> Response {
     let store = match store_for(&state, q.project) {
         Ok(s) => s,
@@ -1243,11 +1247,24 @@ pub async fn serve_media(
     if !within {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
-    match std::fs::read(&full) {
-        Ok(bytes) => {
-            let mime = mime_guess::from_path(&full).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response()
-        }
+    let mime = mime_guess::from_path(&full).first_or_octet_stream();
+    serve_file(&full, &mime, req).await
+}
+
+/// Stream a file with HTTP Range support (206 partial content, `Accept-Ranges`,
+/// conditional requests): browsers only let video/audio seek when the server
+/// can answer byte ranges, and big files are streamed instead of read whole.
+async fn serve_file(
+    path: &std::path::Path,
+    mime: &mime_guess::Mime,
+    req: axum::extract::Request,
+) -> Response {
+    use tower::ServiceExt;
+    match tower_http::services::ServeFile::new_with_mime(path, mime)
+        .oneshot(req)
+        .await
+    {
+        Ok(res) => res.map(axum::body::Body::new),
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }

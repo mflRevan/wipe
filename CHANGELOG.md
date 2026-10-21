@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.4.4 - 2026-10-21
+
+### Board awareness for agents, without hooks
+
+Agents don't look at the board on their own, so tickets filed for them and
+comments on their work went unnoticed until someone told them. Now **every
+wipe command reports what others changed since that identity's previous
+command**, appended on stderr:
+
+```
+[wipe] 3 board updates since your last wipe command:
+  - ada commented on your ticket T-001 "Set up CI": "please also cache the cargo registry @bot"
+  - your ticket T-001 "Set up CI" moved Todo → In Progress by ada
+  - 2 new tickets in Todo by ada: T-003 "Login crashes on empty password", T-004 "Flaky test in CI"
+```
+
+- **What is reported**: tickets anyone else filed (grouped per list); on
+  tickets assigned to you or subscribed to: moves, comments, edits, deletion,
+  and being assigned or unassigned; @mentions in comments and forum posts;
+  replies in forum threads you started, replied in or subscribe to. Never your
+  own actions.
+- **Each change once**, whatever command runs next and in whatever shell: the
+  board snapshot is kept per identity (gitignored, under `.wipe/.cache`), so it
+  works in harnesses that start a fresh shell per command, and changes that
+  arrive by `git pull` are reported too. The first command on a board only
+  records the baseline. At most 8 lines, then a pointer to `wipe inbox`.
+- **What's next.** Closing, submitting or approving a ticket (or moving it to
+  the done / review list) ends with the open tickets still assigned to you:
+  `[wipe] still assigned to you: T-003 "Crash: add() fails on strings" (Todo)` -
+  the moment an agent decides what to do next.
+- **`wipe status`** shows the same under "Since your last wipe command" (and as
+  `updates` in `--json`); `inbox` and `watch` mark what they showed as seen.
+- Costs about 2 ms per command on a 600-ticket board when nothing changed.
+  `--json` stdout is unchanged (the lines go to stderr). `WIPE_NO_UPDATES=1`
+  turns it off.
+- `wipe ticket list` takes `-l` for `--list`, like `ticket create`.
+
+### Fixes
+
+- **Video and audio attachments can seek again.** The board server sent
+  attachments as one plain response and ignored HTTP `Range` requests, so
+  browsers could play and pause a video but not skip, rewind or drag the
+  timeline. Attachments and local-file previews are now served with byte-range
+  support (206 partial content, `Accept-Ranges`) and streamed from disk instead
+  of read into memory whole.
+- **Windows login autostart now really starts the tray.** Upgrades never
+  replaced a login entry written by an older wipe - the pre-0.3.7
+  `wipe-autoserve.cmd` (a console window running `wipe serve`) or a pre-0.4.1
+  `.vbs` (hidden `wipe serve`, no tray) - because wipe already counted it as
+  "autostart on" and left it alone. Any wipe command now rewrites a stale entry
+  once into the hidden tray launcher, keeping the install it pointed at (or
+  switching to the running one if that exe is gone).
+- **`wipe tray` drops a console window it was given.** Started from Explorer, a
+  shortcut or the Run key, the tray releases the console window Windows opened
+  for it instead of leaving it up next to the tray icon.
+- **`wipe` from PowerShell skips Node.** PowerShell picks npm's `wipe.ps1` shim
+  over the native `wipe.exe` that global npm installs place beside it, so every
+  call from PowerShell (including agent harnesses that use it as their shell,
+  like opencode) still started Node first. The installer now adds a short
+  preamble to `wipe.ps1` that hands off to `wipe.exe`; `npm uninstall` still
+  removes the shim as before. Reinstall with `npm i -g @mflrevan/wipe` to get it.
+
 ## 0.4.3 - 2026-10-21
 
 The agent release: every read view was rebuilt to cost an agent as little

@@ -387,6 +387,12 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
     let who = identity::resolve_opt(None);
     let unread = who.as_deref().map(|w| unread_count(&s, w));
     let cap = if a.all { usize::MAX } else { STATUS_LIST_MAX };
+    // What others changed since this identity's last command - shown here, in
+    // the board overview, rather than appended on stderr.
+    let updates = who
+        .as_deref()
+        .map(|w| crate::aware::catch_up_lines(&s, w))
+        .unwrap_or_default();
 
     if out.json {
         if a.full {
@@ -396,7 +402,11 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
                     json!({ "list": list_id, "tickets": tickets.iter().map(to_value).collect::<Vec<_>>() })
                 })
                 .collect();
-            out.json_value(&json!({ "board": board.name, "lists": lists }));
+            let mut v = json!({ "board": board.name, "lists": lists });
+            if !updates.is_empty() {
+                v["updates"] = json!(updates);
+            }
+            out.json_value(&v);
             return Ok(());
         }
         // Rows sit inside their list's object, so they don't repeat the list id.
@@ -428,6 +438,9 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
         if let Some(w) = &who {
             v["identity"] = json!(w);
             v["unread"] = json!(unread.unwrap_or(0));
+        }
+        if !updates.is_empty() {
+            v["updates"] = json!(updates);
         }
         out.json_value(&v);
         return Ok(());
@@ -464,6 +477,13 @@ pub fn status(out: &Out, a: StatusArgs) -> Result<()> {
         }
     }
     println!();
+    if !updates.is_empty() {
+        println!("Since your last wipe command:");
+        for u in &updates {
+            println!("  - {u}");
+        }
+        println!();
+    }
     match (&who, unread) {
         (Some(w), Some(n)) if n > 0 => println!(
             "{}",

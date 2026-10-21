@@ -981,3 +981,121 @@ fn hex_ids_any_spelling_translation_and_repair() {
         0
     );
 }
+
+// --- awareness between commands ---------------------------------------------------
+
+/// Run as `who`, returning (stdout, stderr).
+fn run_as(p: &Project, who: &str, args: &[&str]) -> (String, String) {
+    let mut c = p.cmd(args);
+    c.env("WIPE_AUTHOR", who);
+    let out = c.output().unwrap();
+    assert!(out.status.success(), "{args:?} as {who} failed");
+    (
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn any_command_reports_what_others_changed_once() {
+    let p = Project::with_board("Aware");
+    let mine = p.json_as(
+        "ada",
+        &[
+            "ticket",
+            "create",
+            "Mine",
+            "--list",
+            "todo",
+            "--assignee",
+            "bot",
+        ],
+    );
+    let mine = mine["id"].as_str().unwrap().to_string();
+    // The first command only records where bot's awareness starts.
+    let (_, err) = run_as(&p, "bot", &["ticket", "list"]);
+    assert!(!err.contains("[wipe]"), "{err}");
+
+    let bug = p.json_as(
+        "ada",
+        &["ticket", "create", "Login crash", "--list", "todo"],
+    );
+    p.json_as(
+        "ada",
+        &["comment", "add", &mine, "please also cover the edge case"],
+    );
+
+    // --json stdout stays one object; the updates go to stderr.
+    let (out, err) = run_as(&p, "bot", &["label", "list", "--json"]);
+    serde_json::from_str::<Value>(&out).expect("stdout is still one JSON object");
+    assert!(err.contains("[wipe] 2 board updates"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "new ticket in Todo by ada: {}",
+            bug["id"].as_str().unwrap()
+        )),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!("ada commented on your ticket {mine}")),
+        "{err}"
+    );
+
+    // Reported once, and bot's own changes are never news to it.
+    p.json_as("bot", &["ticket", "move", &mine, "in-progress"]);
+    let (_, err) = run_as(&p, "bot", &["ticket", "list"]);
+    assert!(!err.contains("[wipe]"), "{err}");
+
+    // `status` shows them inline instead.
+    p.json_as("ada", &["comment", "add", &mine, "@bot ping"]);
+    let (out, err) = run_as(&p, "bot", &["status"]);
+    assert!(out.contains("Since your last wipe command:"), "{out}");
+    assert!(out.contains("ada mentioned you on your ticket"), "{out}");
+    assert!(!err.contains("[wipe]"), "{err}");
+}
+
+#[test]
+fn finishing_a_ticket_names_the_work_still_assigned() {
+    let p = Project::with_board("Next");
+    let a = p.json_as(
+        "ada",
+        &[
+            "ticket",
+            "create",
+            "First",
+            "--list",
+            "todo",
+            "--assignee",
+            "bot",
+        ],
+    );
+    let b = p.json_as(
+        "ada",
+        &[
+            "ticket",
+            "create",
+            "Second",
+            "--list",
+            "backlog",
+            "--assignee",
+            "bot",
+        ],
+    );
+    p.json_as("ada", &["ticket", "create", "Not mine", "--list", "todo"]);
+    let (a, b) = (a["id"].as_str().unwrap(), b["id"].as_str().unwrap());
+
+    // A move that doesn't finish anything stays quiet.
+    let (_, err) = run_as(&p, "bot", &["ticket", "move", a, "in-progress"]);
+    assert!(!err.contains("still assigned"), "{err}");
+
+    let (_, err) = run_as(&p, "bot", &["ticket", "close", a]);
+    assert!(
+        err.contains(&format!("still assigned to you: {b} \"Second\" (Backlog)")),
+        "{err}"
+    );
+    assert!(!err.contains("Not mine"), "{err}");
+
+    // Nothing left: nothing said.
+    let (_, err) = run_as(&p, "bot", &["ticket", "close", b]);
+    assert!(!err.contains("still assigned"), "{err}");
+}

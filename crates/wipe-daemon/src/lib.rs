@@ -843,4 +843,59 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// Media answers byte ranges: without 206 responses browsers can play a
+    /// video but not seek, skip or scrub it.
+    #[tokio::test]
+    async fn media_serves_byte_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path(), "Media", chrono::Utc::now()).unwrap();
+        std::fs::write(store.root().join("clip.mp4"), b"0123456789").unwrap();
+        let app = router(test_state(store.root().to_path_buf()));
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/media/clip.mp4")
+                    .header("range", "bytes=2-5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(res.headers()["content-range"], "bytes 2-5/10");
+        assert_eq!(res.headers()["content-type"], "video/mp4");
+        let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"2345");
+
+        // A plain GET still returns the whole file and advertises ranges.
+        let full = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/media/clip.mp4")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(full.status(), StatusCode::OK);
+        assert_eq!(full.headers()["accept-ranges"], "bytes");
+
+        // A missing file is still a plain 404.
+        let out = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/media/missing.mp4")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.status(), StatusCode::NOT_FOUND);
+    }
 }

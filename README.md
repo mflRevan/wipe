@@ -279,6 +279,11 @@ context as possible and to teach itself:
 - **Search does the digging.** `wipe search` ranks tickets and forum posts and
   shows the one snippet that matched, with GitHub-style qualifiers (`label:`,
   `list:`, `@me`, `is:blocked`...).
+- **Awareness without hooks.** After any wipe command, a few `[wipe]` lines on
+  stderr say what others changed since your previous one - tickets filed, your
+  tickets moved or commented on, @mentions, replies in your forum threads -
+  each reported once, per identity, in any harness. `wipe status` shows the
+  same under "Since your last wipe command". `WIPE_NO_UPDATES=1` turns it off.
 - **Waiting is a plain command.** `wipe watch` prints one line per change by
   someone else - or, with `--until`, exits on the first - so it works in any
   harness: as a background task whose completion is the notification, as a

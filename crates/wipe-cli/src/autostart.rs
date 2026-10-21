@@ -42,6 +42,15 @@ pub fn disable() -> Result<String> {
     imp::disable()
 }
 
+/// Rewrite a login entry left in an outdated shape by an older wipe; `Some`
+/// describes what changed. Only Windows has had such shapes so far.
+pub fn repair() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    return imp::repair();
+    #[cfg(not(target_os = "windows"))]
+    None
+}
+
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
@@ -85,20 +94,61 @@ mod imp {
         }
     }
 
+    /// The .vbs launcher body that starts `exe` as the hidden tray app.
+    pub(super) fn launcher(exe: &str) -> String {
+        // VBScript string-escaping: "" inside a quoted string is a literal quote.
+        let exe = exe.replace('"', "\"\"");
+        format!(
+            "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" tray --foreground\", 0, False\r\n"
+        )
+    }
+
+    /// The quoted `...\wipe.exe` path an existing entry (.vbs or legacy .cmd)
+    /// launches, if it names one.
+    pub(super) fn entry_exe(body: &str) -> Option<String> {
+        let end = body.to_ascii_lowercase().find(".exe")? + ".exe".len();
+        let start = body[..end].rfind('"')? + 1;
+        Some(body[start..end].to_string())
+    }
+
     pub fn enable() -> Result<String> {
         let path = entry_path().context("cannot locate the Startup folder (%APPDATA%)")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        // VBScript string-escaping: "" inside a quoted string is a literal quote.
-        let exe = wipe_exe().replace('"', "\"\"");
-        let body = format!(
-            "CreateObject(\"WScript.Shell\").Run \"\"\"{exe}\"\" tray --foreground\", 0, False\r\n"
-        );
-        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, launcher(&wipe_exe()))
+            .with_context(|| format!("writing {}", path.display()))?;
         remove_legacy();
         Ok(format!(
             "added a background login entry at {}",
+            path.display()
+        ))
+    }
+
+    /// Self-heal a stale login entry left by an older wipe: the pre-0.3.7 .cmd
+    /// (a console window running `wipe serve`), a pre-0.4.1 .vbs (hidden `wipe
+    /// serve`, no tray), or one whose wipe.exe has since moved. Upgrades never
+    /// rewrite these otherwise, because `is_installed` already counts them as on.
+    /// Keeps the entry's own exe while it exists, so running a dev build doesn't
+    /// take over the login entry. Cheap (a stat or two) when nothing is stale.
+    pub fn repair() -> Option<String> {
+        let path = entry_path()?;
+        let legacy = legacy_entry_path().filter(|p| p.exists());
+        let source = legacy
+            .clone()
+            .or_else(|| Some(path.clone()).filter(|p| p.exists()))?;
+        let body = std::fs::read_to_string(&source).ok()?;
+        let exe = entry_exe(&body)
+            .filter(|e| std::path::Path::new(e).is_file())
+            .unwrap_or_else(wipe_exe);
+        let want = launcher(&exe);
+        if legacy.is_none() && body == want {
+            return None;
+        }
+        std::fs::write(&path, want).ok()?;
+        remove_legacy();
+        Some(format!(
+            "updated the wipe login entry to start the tray app ({})",
             path.display()
         ))
     }
@@ -221,5 +271,21 @@ mod imp {
             std::fs::remove_file(&path)?;
         }
         Ok("removed the wipe systemd user unit".to_string())
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::imp::*;
+
+    #[test]
+    fn entry_exe_reads_both_entry_shapes() {
+        let exe = r"C:\a b\wipe.exe";
+        let cmd = format!("@echo off\r\nstart \"wipe\" /min \"{exe}\" serve --idle 0\r\n");
+        assert_eq!(entry_exe(&cmd).as_deref(), Some(exe));
+        let vbs = launcher(exe);
+        assert_eq!(entry_exe(&vbs).as_deref(), Some(exe));
+        assert!(vbs.contains(" tray --foreground\", 0, False"));
+        assert_eq!(entry_exe("nothing here"), None);
     }
 }

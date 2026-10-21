@@ -17,7 +17,9 @@ anyhow.workspace = true
 chrono.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
 axum = { version = "0.8", features = ["ws", "multipart"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+# `fs`: ServeFile answers Range requests, so the UI's video/audio can seek.
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower = { version = "0.5", features = ["util"] }
 notify = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
@@ -29,4 +31,3 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 tempfile.workspace = true
-tower = { version = "0.5", features = ["util"] }

@@ -18,6 +18,10 @@
 //    global install we also place the native binary next to the shims as
 //    `wipe.exe`; PATHEXT resolves .EXE before .CMD, so `wipe` from cmd,
 //    PowerShell, or Python's subprocess runs the binary directly, no cmd.exe.
+//    PowerShell is the exception: it prefers npm's `wipe.ps1` over any .exe, which
+//    starts node first on every call. The shim gets a preamble that hands off to
+//    the wipe.exe beside it when present (the rest stays, so npm still recognizes
+//    and removes it on uninstall).
 //
 // Usage: node scripts/patch-npm-installer.mjs <path-to/binary-install.js>
 // (install.js is patched next to it).
@@ -95,7 +99,30 @@ function linkWindowsExe() {
   } catch (e) {
     console.error("wipe: could not place wipe.exe next to the npm shims (" + e.message + ");");
     console.error("wipe: multi-line arguments via wipe.cmd may be truncated - use --body-file.");
+    return;
   }
+  preferExeInPs1(path.join(prefix, "wipe.ps1"));
+}
+
+// PowerShell resolves wipe.ps1 before wipe.exe, so teach the shim to hand off.
+// \`@args\` (not \`$args\`) keeps npm's read-cmd-shim matching the original node
+// line below, which is how \`npm uninstall\` knows the shim is ours to remove.
+function preferExeInPs1(ps1) {
+  const fs = require("fs");
+  const marker = "# wipe: prefer the native binary";
+  try {
+    const shim = fs.readFileSync(ps1, "utf8");
+    if (shim.includes(marker)) return;
+    const head = /^(\\\$basedir=.*\\r?\\n)/m;
+    if (!head.test(shim)) return;
+    const preamble =
+      marker + "\\n" +
+      'if (Test-Path "$basedir/wipe.exe") {\\n' +
+      '  if ($MyInvocation.ExpectingInput) { $input | & "$basedir/wipe.exe" @args } else { & "$basedir/wipe.exe" @args }\\n' +
+      "  exit $LASTEXITCODE\\n" +
+      "}\\n";
+    fs.writeFileSync(ps1, shim.replace(head, (line) => line + preamble));
+  } catch (_) { /* best-effort: the node shim keeps working */ }
 }`
 );
 writeFileSync(installJs, inst);

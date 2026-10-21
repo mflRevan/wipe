@@ -715,7 +715,7 @@ pub struct TicketBlockArgs {
 #[derive(Debug, Args)]
 pub struct TicketListArgs {
     /// Only tickets on this list (repeatable).
-    #[arg(long = "list", value_name = "LIST")]
+    #[arg(short = 'l', long = "list", value_name = "LIST")]
     pub lists: Vec<String>,
     /// Skip tickets on this list (repeatable), e.g. `--exclude-list done`.
     #[arg(long = "exclude-list", value_name = "LIST")]

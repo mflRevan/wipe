@@ -196,6 +196,17 @@ mod imp {
                 ..args
             });
         }
+        // wipe.exe is a console program, so a launch from Explorer, the Run key or
+        // a shortcut gets a console window of its own. A tray app has no use for
+        // it: release it (only when no shell shares it) so it closes at once.
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+            let mut pids = [0u32; 2];
+            if GetConsoleProcessList(pids.as_mut_ptr(), 2) == 1 {
+                FreeConsole();
+            }
+        }
 
         // Serve like `wipe serve` from wherever the tray was started (usually
         // outside any board: a viewer over every registered board).
