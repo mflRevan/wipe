@@ -37,6 +37,7 @@ pub fn mode(command: &Command) -> Mode {
         | Command::Identity(_)
         | Command::Serve(_)
         | Command::Tray(_)
+        | Command::Update(_)
         | Command::Status(_)
         | Command::Completions { .. } => Mode::Skip,
         _ => Mode::Report,

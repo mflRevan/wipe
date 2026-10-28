@@ -120,6 +120,10 @@ cd wipe
 cargo build --workspace --release
 ```
 
+**Updating:** `wipe update` updates through whichever channel installed it (npm
+global or project, the release installer, or `cargo install`), and offers to
+close a running `wipe tray` / `wipe serve` from that install first.
+
 ## Quickstart
 
 Initialize a board in your project. `wipe init` runs a short guided wizard

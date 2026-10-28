@@ -125,6 +125,8 @@ pub enum Command {
     },
     /// Diagnose the environment and the current board.
     Doctor,
+    /// Update wipe through the channel it was installed with (npm, installer, cargo).
+    Update(UpdateArgs),
     /// Start the local web UI daemon.
     Serve(ServeArgs),
     /// Run the board server as a tray / menu-bar app (Windows, macOS).
@@ -143,6 +145,20 @@ pub enum Command {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+}
+
+/// `wipe update`
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Only show how wipe was installed, the update command, and what runs from it.
+    #[arg(long)]
+    pub check: bool,
+    /// Close other wipe processes running from this installation without asking.
+    #[arg(short, long)]
+    pub yes: bool,
+    /// Reinstall even when already on the latest version.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// `wipe status`

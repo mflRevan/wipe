@@ -62,17 +62,23 @@ fn save(state: &State) {
 /// whole request on a thread and give up after 2s regardless - the check must never
 /// noticeably delay a command.
 fn fetch_latest() -> Option<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(fetch_latest_inner());
-    });
-    rx.recv_timeout(Duration::from_secs(2)).ok().flatten()
+    latest_version(Duration::from_secs(2))
 }
 
-fn fetch_latest_inner() -> Option<String> {
+/// The latest published version, or `None` if the registry doesn't answer
+/// within `limit` (wall clock, DNS included).
+pub(crate) fn latest_version(limit: Duration) -> Option<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(fetch_latest_inner(limit));
+    });
+    rx.recv_timeout(limit).ok().flatten()
+}
+
+fn fetch_latest_inner(limit: Duration) -> Option<String> {
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(1500))
-        .timeout_read(Duration::from_millis(1500))
+        .timeout_connect(limit * 3 / 4)
+        .timeout_read(limit * 3 / 4)
         .build();
     let url = format!("https://registry.npmjs.org/{PKG}/latest");
     let body = agent.get(&url).call().ok()?.into_string().ok()?;
@@ -93,7 +99,7 @@ fn parse(v: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// Whether `latest` is a strictly newer version than `current`.
-fn is_newer(latest: &str, current: &str) -> bool {
+pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     match (parse(latest), parse(current)) {
         (Some(l), Some(c)) => l > c,
         _ => false,
@@ -122,7 +128,7 @@ pub fn run(current: &str) {
     if let Some(latest) = &state.latest {
         if is_newer(latest, current) {
             eprintln!("wipe: a newer version is available: {latest} (you have {current})");
-            eprintln!("      update: npm i -g {PKG}   ·   or: cargo install wipe-cli");
+            eprintln!("      update: wipe update");
         }
     }
 }

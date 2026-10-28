@@ -17,6 +17,7 @@ mod safe;
 mod show;
 mod skills;
 mod tray;
+mod update;
 mod update_check;
 mod view;
 mod watch;
@@ -71,7 +72,9 @@ fn main() -> ExitCode {
     // `--json` stdout stays clean). Skipped for `completions`, whose output is
     // eval'd by the shell and should stay fast and side-effect-free.
     if !matches!(cli.command, Command::Completions { .. }) {
-        update_check::run(env!("CARGO_PKG_VERSION"));
+        if !matches!(cli.command, Command::Update(_)) {
+            update_check::run(env!("CARGO_PKG_VERSION"));
+        }
         // Migrate a login entry an older wipe left behind (once; stderr note).
         if let Some(note) = autostart::repair() {
             eprintln!("wipe: {note}");
@@ -258,6 +261,7 @@ fn dispatch(out: &Out, command: Command) -> anyhow::Result<()> {
         Command::Trash { cmd } => commands::trash(out, cmd),
         Command::Commit(a) => commands::commit(out, a),
         Command::Doctor => commands::doctor(out),
+        Command::Update(a) => update::run(out, a),
         Command::Skill { cmd } => commands::skill(out, cmd),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "wipe", &mut std::io::stdout());

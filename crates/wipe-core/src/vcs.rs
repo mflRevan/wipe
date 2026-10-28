@@ -113,7 +113,7 @@ pub fn system_user() -> Option<String> {
 /// Strip Windows' `\\?\` verbatim prefix, which some CLIs (git `-C`) reject.
 /// Handles UNC verbatim paths (`\\?\UNC\server\share` → `\\server\share`) so repos
 /// on network shares still resolve.
-pub(crate) fn plain(root: &Path) -> PathBuf {
+pub fn plain(root: &Path) -> PathBuf {
     let s = root.to_string_lossy();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.6 - 2026-10-28
+
+### `wipe update`
+
+- **Updates wipe the way it was installed.** `wipe update` looks at where the
+  running binary lives and updates through the matching channel: `npm install
+  -g --prefix <that prefix>` for a global npm install (the right prefix even
+  with several Node versions), `npm install` in the project for a project
+  dependency, the release's shell / PowerShell installer when it left its
+  receipt, or `cargo install wipe-cli` for a crates.io install. Builds from
+  source get told how to rebuild instead.
+- **Closes what would keep the old version running.** Other wipe processes
+  started from the same installation - a `wipe tray`, a `wipe serve` - are
+  listed and closed after a confirmation (`--yes` skips it; without a terminal
+  it stops and says so). A closed tray is started again on the new version.
+- On Windows the running binary moves itself aside so the update can replace
+  it, and is put back if the update fails.
+- `--check` shows the channel, the exact command, the latest version and what
+  runs from the install, without changing anything; `--force` reinstalls the
+  current version; `--json` keeps stdout to one result object.
+- The daily "newer version available" notice now points at `wipe update`.
+
 ## 0.4.5 - 2026-10-28
 
 ### Fixes

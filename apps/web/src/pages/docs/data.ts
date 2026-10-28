@@ -512,6 +512,18 @@ export const CLI_GROUPS: CliGroup[] = [
     ],
   },
   {
+    name: "update",
+    summary: "Update wipe through the channel it was installed with.",
+    commands: [
+      {
+        command: "wipe update [--check] [--yes] [--force]",
+        description:
+          "Detect how wipe was installed (npm global or project, release installer, cargo install) and update it the same way. Wipe processes running from that install (a tray or serve) are closed first, after asking; --yes closes them without asking, --check only reports.",
+        example: "wipe update",
+      },
+    ],
+  },
+  {
     name: "skill",
     summary: "Print or install the agent guide.",
     commands: [
