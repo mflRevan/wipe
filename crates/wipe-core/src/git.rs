@@ -6,7 +6,6 @@
 //! a tracked file at a past commit (used for the board-rewind feature).
 
 use std::path::Path;
-use std::process::Command;
 
 use serde::Serialize;
 
@@ -433,7 +432,7 @@ fn plain(root: &Path) -> std::path::PathBuf {
 /// Run a git command in `root`, returning stdout on success or an
 /// [`Error::Message`] carrying stderr on failure.
 fn run(root: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    let out = crate::vcs::command("git")
         .arg("-C")
         .arg(plain(root))
         .args(args)

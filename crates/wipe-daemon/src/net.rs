@@ -67,7 +67,7 @@ pub fn tailscale_ipv4() -> Option<Ipv4Addr> {
 /// The MagicDNS name of this machine (e.g. `laptop.tail1234.ts.net`), when the
 /// `tailscale` CLI is available and reports one.
 pub fn tailscale_dns_name() -> Option<String> {
-    let out = std::process::Command::new("tailscale")
+    let out = wipe_core::vcs::command("tailscale")
         .args(["status", "--json"])
         .output()
         .ok()

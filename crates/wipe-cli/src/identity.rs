@@ -20,7 +20,6 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -473,7 +472,7 @@ pub fn ensure_registered(id: &str, name: Option<&str>, agent: bool) {
 
 /// Whether git is available on PATH (used by `wipe doctor`).
 pub fn git_available() -> bool {
-    Command::new("git")
+    wipe_core::vcs::command("git")
         .arg("--version")
         .output()
         .map(|o| o.status.success())

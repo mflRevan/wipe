@@ -512,7 +512,7 @@ async fn idle_watcher(
 /// Best-effort: open `url` in the user's default browser.
 fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
+    let _ = wipe_core::vcs::command("cmd")
         .args(["/C", "start", "", url])
         .spawn();
     #[cfg(target_os = "macos")]

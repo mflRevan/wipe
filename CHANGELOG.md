@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.5 - 2026-10-28
+
+### Fixes
+
+- **No more console windows flashing on Windows while the board is open**
+  ([#2](https://github.com/mflRevan/wipe/issues/2)). The tray and a detached
+  `wipe serve` run without a console, so every `git` (or `cm`, `hg`, `jj`,
+  `tailscale`, ...) they started got a console window of its own - several per
+  page load or ticket save, since identities and the commit graph are read from
+  the VCS. All external tools now start through one helper that sets
+  `CREATE_NO_WINDOW`; output is still captured, and nothing changes in a
+  terminal.
+
 ## 0.4.4 - 2026-10-21
 
 ### Board awareness for agents, without hooks

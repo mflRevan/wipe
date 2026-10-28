@@ -138,9 +138,24 @@ fn run_timed(mut cmd: Command) -> Option<String> {
     }
 }
 
+/// A `Command` that never opens a console window on Windows. The tray/daemon
+/// has no console, so each console child (git, cm, ...) would otherwise get a
+/// visible window of its own. Output is still captured through pipes.
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Run `program args...` in `dir` (via `-C`), returning trimmed stdout on success.
 fn output_in(dir: &Path, program: &str, args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new(program);
+    let mut cmd = command(program);
     cmd.arg("-C").arg(plain(dir)).args(args);
     run_timed(cmd)
 }
@@ -148,7 +163,7 @@ fn output_in(dir: &Path, program: &str, args: &[&str]) -> Option<String> {
 /// Run a command that takes its working directory via `current_dir` (tools
 /// without a `-C` flag), returning trimmed stdout on success.
 fn output_cwd(dir: &Path, program: &str, args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new(program);
+    let mut cmd = command(program);
     cmd.current_dir(plain(dir)).args(args);
     run_timed(cmd)
 }

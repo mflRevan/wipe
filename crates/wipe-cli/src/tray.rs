@@ -57,14 +57,9 @@ mod imp {
 
     fn open_url(url: &str) {
         #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", "start", "", url])
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn();
-        }
+        let _ = wipe_core::vcs::command("cmd")
+            .args(["/C", "start", "", url])
+            .spawn();
         #[cfg(target_os = "macos")]
         let _ = std::process::Command::new("open").arg(url).spawn();
     }
@@ -72,12 +67,7 @@ mod imp {
     fn copy_to_clipboard(text: &str) {
         use std::io::Write;
         #[cfg(windows)]
-        let cmd = {
-            use std::os::windows::process::CommandExt;
-            let mut c = std::process::Command::new("clip");
-            c.creation_flags(0x0800_0000);
-            c
-        };
+        let cmd = wipe_core::vcs::command("clip");
         #[cfg(target_os = "macos")]
         let cmd = std::process::Command::new("pbcopy");
         let mut cmd = cmd;
